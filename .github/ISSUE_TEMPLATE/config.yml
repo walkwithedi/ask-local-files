@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security problem
+    url: https://github.com/walkwithedi/ask-local-files/security/advisories/new
+    about: Report it privately, as SECURITY.md describes.

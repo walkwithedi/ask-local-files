@@ -1,0 +1,60 @@
+name: release
+# Publishes the version in VERSION:
+#   push to main       releases v<version> if that release does not exist yet, so merging a
+#                      version change is all a release takes (other pushes to main are skipped)
+#   workflow_dispatch  the same check, run by hand (Actions > release > Run workflow)
+# The release and its tag are created by this workflow through the API. Runs are queued one at
+# a time and every step is idempotent.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: release
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Decide
+        id: decide
+        run: |
+          tag="v$(tr -d '[:space:]' < VERSION)"
+          run=true
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "$tag is already released; nothing to do"
+            run=false
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-python@v7
+        if: steps.decide.outputs.run == 'true'
+        with:
+          python-version: "3.12"
+      - name: Check
+        if: steps.decide.outputs.run == 'true'
+        run: |
+          python -m unittest discover -s tests
+          python scripts/check_repo.py
+          python scripts/sensitive_scan.py
+      - name: Build
+        if: steps.decide.outputs.run == 'true'
+        env:
+          TAG: ${{ steps.decide.outputs.tag }}
+        run: |
+          mkdir -p dist
+          # the tool only: the server, the page, the converter copy, the desktop entry, docs and licence
+          git archive --format=zip --prefix=ask-local-files/ -o "dist/ask-local-files-${TAG}.zip" HEAD \
+            ask_local_files.py ask_local_files.html doc2kb_core.py 双击运行.desktop README.md README.zh-CN.md LICENSE CHANGELOG.md VERSION DOC2KB_VERSION
+      - name: Publish
+        if: steps.decide.outputs.run == 'true'
+        env:
+          TAG: ${{ steps.decide.outputs.tag }}
+        run: |
+          awk "/^## ${TAG#v}\$/{f=1;next} /^## /{f=0} f" CHANGELOG.md > notes.md
+          gh release create "$TAG" dist/*.zip --target "${GITHUB_SHA}" --title "$TAG" --notes-file notes.md

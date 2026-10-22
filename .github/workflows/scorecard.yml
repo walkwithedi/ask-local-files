@@ -1,0 +1,31 @@
+name: scorecard
+# OpenSSF Scorecard: checks supply-chain practices (branch protection, pinned actions,
+# token permissions, ...) and reports them under Security > Code scanning.
+# Needs a public repository.
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "41 4 * * 1"
+  workflow_dispatch:
+permissions: read-all
+jobs:
+  analysis:
+    # publishes results only for a public repository; runs once the repository is public
+    if: github.event.repository.private != true
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: ossf/scorecard-action@fa7117db83c52d787ae5a89f350999701505d78e # v2.5.0
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: true
+      - uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: results.sarif

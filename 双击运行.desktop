@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=找文件问 AI
+Comment=快速找出文件，交给 AI 提问、改写、总结
+Exec=sh -c "p=\\$(dirname \\"\\$(readlink -f \\"\\$1\\")\\")/ask_local_files.py; [ -f \\"\\$p\\" ] && exec python3 \\"\\$p\\"; m=\\"找不到 \\$p。请把工具目录里的「双击运行」以链接方式放到别处，不要复制。\\"; zenity --error --text=\\"\\$m\\" 2>/dev/null || notify-send \\"\\$m\\" 2>/dev/null || { mkdir -p \\"\\$HOME/.cache/ask-local-files\\" && echo \\"\\$m\\" >> \\"\\$HOME/.cache/ask-local-files/launcher.log\\"; }" sh %k
+Terminal=false
+Icon=utilities-terminal
+Categories=Utility;

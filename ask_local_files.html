@@ -1,0 +1,1021 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>找文件问 AI</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --text:#1f2328; --muted:#656d76; --line:#d0d7de; --accent:#0969da; --ok:#1a7f37; --warn:#9a6700; --bad:#cf222e; --pick:#ddf4ff; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0d1117; --card:#161b22; --text:#e6edf3; --muted:#8d96a0; --line:#30363d; --accent:#4493f8; --ok:#3fb950; --warn:#d29922; --bad:#f85149; --pick:#132a44; }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display:none !important; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.6 "Noto Sans CJK SC","WenQuanYi Micro Hei","PingFang SC","Microsoft YaHei",sans-serif; }
+  main { max-width:1000px; margin:0 auto; padding:20px 16px 40px; }
+  header { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+  h1 { font-size:22px; margin:0; }
+  h2 { font-size:17px; margin:0 0 10px; }
+  .sub, .hint { color:var(--muted); }
+  .sub { margin:4px 0 16px; }
+  .hint { font-size:13px; margin:6px 0 0; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px 14px; margin:12px 0; }
+  .row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+  input[type=text], input[type=password], input[type=number], select, textarea { padding:7px 10px; font:inherit; font-size:14px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--text); min-width:0; }
+  #q { flex:3 1 220px; font-size:15px; }
+  #ext { flex:1 1 110px; }
+  textarea { width:100%; min-height:5.5em; resize:vertical; }
+  select { max-width:100%; }
+  button { padding:6px 12px; font:inherit; font-size:14px; border:1px solid var(--line); border-radius:6px; background:var(--card); color:var(--text); cursor:pointer; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button.small { padding:1px 8px; font-size:13px; white-space:nowrap; flex-shrink:0; }
+  button:disabled { opacity:.5; cursor:default; }
+  :focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  .ok { color:var(--ok); } .warn { color:var(--warn); } .bad { color:var(--bad); } .info { color:var(--muted); }
+  .status { margin:8px 0 0; font-size:14px; }
+  .status:empty { margin:0; }
+  ul.list { list-style:none; margin:8px 0 0; padding:0; }
+  ul.list li { display:flex; gap:8px; align-items:flex-start; padding:5px 0; border-top:1px solid var(--line); }
+  ul.list li:first-child { border-top:none; }
+  ul.list li.picked { background:var(--pick); }
+  .grow { flex:1 1 auto; min-width:0; }
+  .name { font-weight:bold; word-break:break-all; }
+  .meta { color:var(--muted); font-size:13px; word-break:break-all; }
+  #results { max-height:420px; overflow-y:auto; }
+  .card-head { display:flex; align-items:center; gap:8px; margin:0 0 10px; }
+  .card-head h2 { margin:0; flex:1 1 auto; }
+  .status-row { display:flex; flex-wrap:wrap; gap:4px 10px; align-items:baseline; margin-top:8px; }
+  .status-row .status { margin:0; flex:1 1 200px; }
+  button.link { border:none; background:none; color:var(--accent); padding:2px 4px; font-size:13px; }
+  .panel { border:1px solid var(--line); border-radius:6px; padding:8px 10px; margin:8px 0; }
+  .panel h3 { font-size:15px; margin:4px 0 6px; }
+  #chatWrap { margin-bottom:8px; }
+  #chat { max-height:60vh; overflow-y:auto; }
+  #modelRow { margin-top:4px; }
+  #askNotice { margin-top:6px; }
+  #askNotice .status { margin:0; }
+  .layout { display:block; }
+  @media (min-width:900px) {
+    main { max-width:1280px; }
+    .layout { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:0 16px; align-items:start; }
+    .col-right { position:sticky; top:0; }
+    #chat { max-height:max(200px, calc(100vh - 430px)); }
+  }
+  pre, .msg-body { white-space:pre-wrap; word-break:break-word; }
+  pre { background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:8px 10px; margin:6px 0 0; max-height:320px; overflow:auto; font:13px/1.5 "Noto Sans Mono CJK SC","DejaVu Sans Mono",monospace; }
+  .preview { flex-basis:100%; min-width:0; }
+  .preview .hint { margin:4px 0 0; }
+  .num { color:var(--muted); min-width:1.6em; }
+  .acts { display:flex; gap:8px; flex-shrink:0; }
+  .msg { border-top:1px solid var(--line); padding:8px 0; }
+  .msg:first-child { border-top:none; }
+  .who { font-size:13px; color:var(--muted); display:flex; gap:8px; align-items:center; }
+  .msg.user .msg-body { color:var(--muted); }
+  .msg .partial { color:var(--warn); font-size:13px; }
+  .msg .cite { color:var(--warn); font-size:13px; white-space:pre-wrap; word-break:break-word; }
+  #chat:empty { display:none; }
+  #dest { font-size:13px; color:var(--muted); word-break:break-all; }
+  details summary { cursor:pointer; font-weight:bold; }
+  .grid { display:grid; grid-template-columns:7em minmax(0,1fr); gap:8px 10px; align-items:center; margin-top:8px; }
+  .grid input { width:100%; }
+  footer { color:var(--muted); font-size:13px; margin-top:24px; border-top:1px solid var(--line); padding-top:10px; }
+  .banner { background:var(--card); border:1px solid var(--warn); color:var(--warn); border-radius:8px; padding:8px 12px; margin:8px 0; font-size:14px; }
+  #closed { display:none; background:var(--card); border:1px solid var(--bad); color:var(--bad); border-radius:8px; padding:12px; margin-top:12px; }
+  @media (max-width:480px) { .grid { grid-template-columns:minmax(0,1fr); } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>找文件问 AI</h1>
+    <button id="quit" type="button">退出</button>
+  </header>
+  <p class="sub">在添加的文件夹里按文件名快速找出文件，选几个交给 AI 提问、改写、总结。</p>
+  <div id="closed">服务已退出，可关闭本页。需要再用时重新双击「双击运行」。</div>
+  <div id="banner" class="banner" role="status" hidden></div>
+
+  <div class="layout">
+  <div class="col-left">
+  <section class="card" id="findCard" aria-labelledby="h-find">
+    <h2 id="h-find">找文件</h2>
+    <div id="findCollapsed" class="row" hidden>
+      <span id="findSummary" class="grow"></span>
+      <button id="reselect" type="button">改选文件</button>
+    </div>
+    <div id="findBody">
+      <div class="row">
+        <input id="q" type="text" placeholder="文件名或路径里的字，空格分开多个关键字，回车加入第一个结果" autocomplete="off" aria-label="关键字" autofocus>
+        <input id="ext" type="text" placeholder="扩展名，如 docx pdf" autocomplete="off" aria-label="扩展名">
+      </div>
+      <div id="findStatusRow" class="status-row">
+        <div id="findStatus" class="status info" aria-live="polite"></div>
+        <button id="refresh" class="link" type="button">刷新</button>
+        <button id="manageFolders" class="link" type="button" aria-expanded="false" aria-controls="folderPanel">管理文件夹</button>
+      </div>
+      <div id="folderPanel" class="panel" hidden>
+        <h3>索引的文件夹</h3>
+        <ul id="folders" class="list"></ul>
+        <div class="row" style="margin-top:8px">
+          <input id="folder" type="text" placeholder="绝对路径或 ~/ 开头，如 ~/文档" autocomplete="off" aria-label="要添加的文件夹" list="folderList" style="flex:1 1 240px">
+          <datalist id="folderList"></datalist>
+          <button id="addFolder" type="button">添加</button>
+          <button id="rebuild" type="button">重建索引</button>
+        </div>
+        <div id="places" class="row hint" style="margin-top:6px"></div>
+        <div id="folderStatus" class="status" aria-live="polite"></div>
+      </div>
+      <div id="addAllRow" class="row" style="margin-top:6px" hidden>
+        <button id="addAll" class="small" type="button"></button>
+        <span id="addAllHint" class="hint" style="margin:0"></span>
+      </div>
+      <ul id="results" class="list"></ul>
+    </div>
+  </section>
+
+  <section class="card" id="pickedCard" aria-labelledby="h-picked">
+    <h2 id="h-picked">已选 <span id="pickCount" class="hint"></span></h2>
+    <ul id="picked" class="list"></ul>
+    <div class="row" style="margin-top:6px">
+      <button id="removeBad" type="button" hidden></button>
+      <button id="clearPicked" type="button" hidden>清空已选</button>
+    </div>
+    <div id="pickStatus" class="status info" aria-live="polite"></div>
+  </section>
+  </div>
+
+  <div class="col-right">
+  <section class="card" id="askCard" aria-labelledby="h-ask">
+    <div class="card-head">
+      <h2 id="h-ask">问 AI</h2>
+      <button id="save" class="small" type="button">保存对话</button>
+      <button id="clear" class="small" type="button">清空对话</button>
+    </div>
+    <div id="chatStatus" class="status" aria-live="polite"></div>
+    <div id="chatWrap"><div id="chat"></div></div>
+    <div id="modelRow" class="row">
+      <label for="model" class="hint" style="margin:0">模型</label>
+      <select id="model"></select>
+      <button id="modelSettings" class="link" type="button" aria-expanded="false" aria-controls="modelPanel">模型设置</button>
+    </div>
+    <div id="dest" class="hint"></div>
+    <div id="modelPanel" class="panel" hidden>
+      <h3>发送字数上限</h3>
+      <div class="row">
+        <input id="limit" type="number" min="1000" max="2000000" step="1000" aria-label="发送字数上限">
+        <button id="saveLimit" type="button" aria-label="保存字数上限">保存</button>
+      </div>
+      <p class="hint">范围 1,000 到 2,000,000，默认 100,000，回车即保存。选中文件和对话的文字合计超过上限时先不发送。按所用模型能接受的长度设置。</p>
+      <h3 style="margin-top:12px">自定义模型接口</h3>
+      <p class="hint">优先读 OpenCode 配置（~/.config/opencode/opencode.json）里的模型；没有或想另用一个时在这里填 OpenAI 兼容接口。AK 只存在本机设置文件里（权限 600），不会显示在页面上。</p>
+      <div class="grid">
+        <label for="cBase">接口地址</label><input id="cBase" type="text" placeholder="https://api.example.com/v1" autocomplete="off">
+        <label for="cModel">模型名</label><input id="cModel" type="text" autocomplete="off">
+        <label for="cKey">AK</label><input id="cKey" type="password" autocomplete="new-password">
+      </div>
+      <div class="row" style="margin-top:8px">
+        <button id="saveCustom" type="button" aria-label="保存自定义接口">保存</button>
+        <button id="clearKey" type="button">清除 AK</button>
+        <button id="testModel" type="button">测试连接</button>
+      </div>
+      <div id="settingsStatus" class="status" aria-live="polite"></div>
+    </div>
+    <textarea id="ask" aria-label="要问的内容" placeholder="写下要 AI 做什么，例如：总结这几份文件的要点；把第 2 份改写成一则通知；这几份材料的说法有什么不同"></textarea>
+    <div class="row" style="margin-top:8px">
+      <button id="send" class="primary" type="button">发送</button>
+      <button id="stop" type="button" hidden>停止</button>
+      <span id="sendHint" class="hint">Ctrl+Enter 发送</span>
+    </div>
+    <div id="askNotice" class="status-row">
+      <div id="askStatus" class="status" aria-live="polite"></div>
+      <button id="sendCut" type="button" hidden>仍然发送（按比例截断每个文件）</button>
+    </div>
+  </section>
+  </div>
+  </div>
+
+
+  <footer><span id="ver">找文件问 AI v1.5</span>　关闭本页后服务自动退出；点「退出」立即结束。有回答正在生成时，服务等它结束再退出。对话不自动保存，退出即清空。</footer>
+</main>
+<script>
+'use strict';
+const TOKEN = new URLSearchParams(location.search).get('t') || '';
+const PAGE = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+const $ = id => document.getElementById(id);
+let alive = true, state = null, maxFiles = 20, charLimit = 100000;
+let results = [], picked = [], chat = [], busy = false, controller = null, searchTimer = null, pollTimer = null;
+let savedLen = 0;      // 上次「保存对话」时的条数，用来判断有没有未保存的问答
+let resultsKey = '', indexNote = ['', 'info'], openPreviews = {}, overShown = false, searchTotal = 0, addedNote = '';
+
+function api(path, opts) {
+  opts = opts || {};
+  opts.headers = Object.assign({'X-Token': TOKEN}, opts.headers || {});
+  return fetch(path, opts).then(r => r.json().then(j => {
+    if (!r.ok) { const e = new Error(j.error || ('HTTP ' + r.status)); e.data = j; e.status = r.status; throw e; }
+    return j;
+  }));
+}
+function post(path, body) {
+  return api(path, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body || {})});
+}
+
+function serviceGone(msg) {
+  if (!alive) return;
+  alive = false;
+  if (typeof msg === 'string') $('closed').textContent = msg;
+  $('closed').style.display = 'block';
+  document.querySelectorAll('button, input, textarea, select').forEach(el => { el.disabled = true; });
+  if (pollTimer) clearInterval(pollTimer);
+}
+
+// 心跳连续失败 3 次才判定服务已退出，偶发一次失败不影响使用
+let pingFails = 0;
+function ping() {
+  post('/api/ping', {page: PAGE}).then(() => { pingFails = 0; }).catch(() => { if (++pingFails >= 3) serviceGone(); });
+}
+ping();
+setInterval(() => { if (alive) ping(); }, 10000);
+document.addEventListener('visibilitychange', () => { if (alive && !document.hidden) ping(); });
+window.addEventListener('pageshow', ev => { if (alive && ev.persisted) ping(); });
+// 关页或刷新时通知服务；sendBeacon 不能带请求头，令牌放在请求体里
+window.addEventListener('pagehide', () => {
+  if (!alive || !navigator.sendBeacon) return;
+  navigator.sendBeacon('/api/bye', new Blob([JSON.stringify({t: TOKEN, page: PAGE})], {type: 'text/plain'}));
+});
+
+// 失败提示：「<动作>失败：<原因>。<下一步>」；原因里已写了下一步（含「请」）时不再追加
+function failText(action, reason, next) {
+  reason = String(reason || '').replace(/[。.]+$/, '');
+  return action + '失败：' + reason + '。' + (/请/.test(reason) ? '' : next);
+}
+const RETRY = '请确认服务仍在运行后重试。';
+
+function say(id, msg, kind) {
+  const el = $(id);
+  el.textContent = msg || '';
+  el.className = 'status ' + (kind || 'info');
+}
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+function btn(text, cls, onClick) {
+  const b = el('button', cls, text);
+  b.type = 'button';
+  b.addEventListener('click', onClick);
+  return b;
+}
+function fmtSize(n) {
+  if (n >= 1073741824) return (n / 1073741824).toFixed(2) + ' GB';
+  if (n >= 1048576) return (n / 1048576).toFixed(1) + ' MB';
+  if (n >= 1024) return (n / 1024).toFixed(1) + ' KB';
+  return n + ' B';
+}
+function fmtNum(n) { return Number(n).toLocaleString('zh-CN'); }
+
+// ---------------- 找文件
+
+function indexText(ix) {
+  if (!state || !state.folders.length) return '还没有添加文件夹：先点「管理文件夹」添加要索引的文件夹。';
+  let s = '已索引 ' + fmtNum(ix.files) + ' 个文件';
+  if (ix.scanning) s += '，正在扫描文件夹变化……';
+  else if (ix.scanned_at) s += '（' + ix.scanned_at + ' 更新）';
+  if (ix.error) {
+    s += '。' + ix.error;
+    if (ix.unreadable && ix.unreadable.length) s += '：' + ix.unreadable.join('、') + '。请检查这些文件夹的权限，或在「管理文件夹」里移除';
+  }
+  return s;
+}
+
+function search() {
+  const q = $('q').value.trim(), ext = $('ext').value.trim();
+  return api('/api/search?q=' + encodeURIComponent(q) + '&ext=' + encodeURIComponent(ext)).then(r => {
+    results = r.results;
+    searchTotal = q || ext ? r.total : 0;
+    renderResults();
+    let s = indexText(r.status);
+    if (state && state.folders.length) {
+      s += q || ext ? '。找到 ' + fmtNum(r.total) + ' 个' : '。下面是最近修改的文件';
+      if (r.total > r.results.length) s += '，显示最近修改的 ' + r.results.length + ' 个';
+    }
+    indexNote = [s, r.status.error ? 'warn' : 'info'];
+    showFindStatus();
+    watchScan(r.status.scanning);
+  }).catch(e => { if (alive) say('findStatus', '搜索失败：' + e.message + '。请点「刷新」重试。', 'bad'); });
+}
+
+function full() { return picked.length >= maxFiles; }
+
+function showFindStatus() {
+  let [s, kind] = indexNote;
+  if (full()) {
+    s += '。已选满 ' + maxFiles + ' 个，请先在「已选」里移除几个再加入';
+    if (kind === 'info') kind = 'warn';
+  }
+  say('findStatus', s, kind);
+}
+
+function watchScan(scanning) {
+  $('refresh').disabled = scanning || !alive;
+  $('rebuild').disabled = scanning || !alive;
+  if (scanning && !pollTimer) {
+    pollTimer = setInterval(() => { search(); }, 1500);
+  } else if (!scanning && pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+}
+
+function folderOf(rel) { const i = rel.lastIndexOf('/'); return i < 0 ? rel : rel.slice(0, i); }
+
+function isPicked(path) { return picked.some(p => p.path === path); }
+
+// 列表重绘前记下焦点所在的行与按钮，重绘后放回同一行；那一行没了就落到同位置的下一行
+function focusedRow(ul) {
+  const a = document.activeElement;
+  if (!a || !ul.contains(a)) return null;
+  const li = a.closest('li');
+  return {path: li.dataset.path, idx: [...ul.children].indexOf(li), act: a.dataset.act || ''};
+}
+function restoreFocus(ul, f) {
+  if (!f) return;
+  const rows = [...ul.children].filter(li => li.dataset.path);
+  const li = rows.find(x => x.dataset.path === f.path) || rows[Math.min(f.idx, rows.length - 1)];
+  const b = li && (li.querySelector('button[data-act="' + f.act + '"]:not(:disabled)') || li.querySelector('button:not(:disabled)'));
+  (b || $('q')).focus();
+}
+
+// 填了关键字或扩展名、找到的少于选取上限时，给「全部加入」；只算读得了且还没加入的
+function addable() { return results.filter(r => r.supported && !isPicked(r.path)); }
+function renderAddAll() {
+  const n = addable().length, room = maxFiles - picked.length;
+  const show = searchTotal > 0 && searchTotal < maxFiles && n > 0;
+  $('addAllRow').hidden = !show;
+  if (!show) return;
+  $('addAll').textContent = '全部加入（' + n + ' 个）';
+  $('addAll').disabled = n > room || !alive;
+  $('addAllHint').textContent = n > room ? '已选还能加 ' + room + ' 个，请先在「已选」里移除几个。' : '';
+}
+$('addAll').addEventListener('click', () => {
+  const todo = addable(), skipped = results.filter(r => !r.supported).length;
+  if (!todo.length || todo.length > maxFiles - picked.length) return;
+  if (!confirmNewChat()) return;
+  todo.forEach(r => pick(r, true));
+  // 记下结果，取文字期间和取完后重绘「已选」时仍显示，直到下一次改动已选
+  addedNote = '已加入 ' + todo.length + ' 个' + (skipped ? '，' + skipped + ' 个读不了的已跳过' : '') + '。';
+  renderPicked();
+});
+
+function renderResults() {
+  renderAddAll();
+  const key = JSON.stringify([results.map(r => r.path), picked.map(p => p.path), full()]);
+  if (key === resultsKey) return;      // 没变就不重绘，扫描轮询时不打断滚动与焦点
+  resultsKey = key;
+  const ul = $('results'), top = ul.scrollTop, focus = focusedRow(ul);
+  ul.textContent = '';
+  results.forEach(r => {
+    const on = isPicked(r.path);
+    const li = el('li', on ? 'picked' : '');
+    li.dataset.path = r.path;
+    const box = el('div', 'grow');
+    box.appendChild(el('div', 'name', r.name));
+    const meta = el('div', 'meta', folderOf(r.rel) + '　' + fmtSize(r.size) + '　' + r.mtime);
+    if (!r.supported) meta.appendChild(el('span', 'bad', '　' + r.reason));
+    box.appendChild(meta);
+    li.appendChild(box);
+    const b = btn(on ? '移除' : '加入', 'small', () => { on ? unpick(r.path) : pick(r); });
+    b.dataset.act = 'toggle';
+    b.setAttribute('aria-label', (on ? '移除 ' : '加入 ') + r.name);
+    b.disabled = !on && (!r.supported || full());
+    li.appendChild(b);
+    ul.appendChild(li);
+  });
+  ul.scrollTop = top;
+  restoreFocus(ul, focus);
+}
+
+$('q').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(search, 120); });
+$('ext').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(search, 120); });
+$('q').addEventListener('keydown', ev => {
+  if (ev.key === 'ArrowDown') {
+    const b = $('results').querySelector('button:not(:disabled)');
+    if (b) { ev.preventDefault(); b.focus(); }
+    return;
+  }
+  if (ev.key !== 'Enter' || !results.length) return;
+  const r = results[0];
+  if (isPicked(r.path)) say('findStatus', '第一个结果「' + r.name + '」已在已选里。', 'info');
+  else if (!r.supported) say('findStatus', '第一个结果「' + r.name + '」读不了：' + r.reason + '。', 'warn');
+  else pick(r);
+});
+// 方向键在结果的按钮之间移动，最上面再往上回到搜索框
+$('results').addEventListener('keydown', ev => {
+  if (ev.key !== 'ArrowDown' && ev.key !== 'ArrowUp') return;
+  const bs = [...$('results').querySelectorAll('button:not(:disabled)')], i = bs.indexOf(document.activeElement);
+  if (i < 0) return;
+  ev.preventDefault();
+  const j = i + (ev.key === 'ArrowDown' ? 1 : -1);
+  if (j < 0) $('q').focus(); else if (j < bs.length) bs[j].focus();
+});
+$('refresh').addEventListener('click', () => {
+  $('refresh').disabled = true;
+  post('/api/refresh', {}).then(r => {
+    if (r.started) return search();
+    say('findStatus', '正在扫描中，扫完会自动更新。', 'info');
+    watchScan(true);
+  }).catch(e => { $('refresh').disabled = !alive; say('findStatus', failText('刷新', e.message, RETRY), 'bad'); });
+});
+
+// ---------------- 已选
+
+function confirmNewChat() {
+  if (!chat.length) return true;
+  if (busy) { say('pickStatus', '回答生成中，等它结束或点「停止」后再改动文件清单。', 'warn'); return false; }
+  const rounds = chat.filter(m => m.role === 'user').length;
+  if (!confirm('改动文件清单会开始新对话，清空当前 ' + rounds + ' 轮问答（未保存的会丢失）。\n\n确定继续？')) return false;
+  chat = [];
+  renderChat();
+  layoutFind();
+  return true;
+}
+
+// confirmed：调用方已确认过开始新对话（全部加入时只确认一次）
+function pick(r, confirmed) {
+  if (isPicked(r.path)) return;
+  if (r.supported === false) { say('pickStatus', '加入失败：' + r.reason + '。', 'warn'); return; }
+  if (picked.length >= maxFiles) { say('pickStatus', '一次最多选 ' + maxFiles + ' 个文件，请先移除几个。', 'warn'); return; }
+  if (!confirmed && !confirmNewChat()) return;
+  if (!confirmed) addedNote = '';
+  const item = {path: r.path, name: r.name, rel: r.rel, chars: null, error: '', note: '', loading: true};
+  picked.push(item);
+  renderPicked();
+  renderResults();
+  api('/api/text?path=' + encodeURIComponent(r.path)).then(t => {
+    item.loading = false;
+    if (t.error) item.error = t.error; else { item.chars = t.chars; item.note = t.note || ''; }
+    renderPicked();
+  }).catch(e => { item.loading = false; item.error = e.message; renderPicked(); });
+}
+
+$('clearPicked').addEventListener('click', () => {
+  if (!picked.length) { say('pickStatus', '已选里没有文件。', 'info'); return; }
+  if (busy) { say('pickStatus', '回答生成中，等它结束或点「停止」后再改动文件清单。', 'warn'); return; }
+  picked = [];
+  openPreviews = {};
+  renderPicked();
+  $('q').focus();
+  if (chat.length) say('pickStatus', '已清空已选文件，对话保留。继续追问前请先加入文件。', 'ok');
+});
+
+function unpick(path) {
+  addedNote = '';
+  if (!confirmNewChat()) return;
+  picked = picked.filter(p => p.path !== path);
+  delete openPreviews[path];
+  renderPicked();
+  renderResults();
+}
+
+function totalChars() { return picked.reduce((n, p) => n + (p.chars || 0), 0); }
+function historyChars() { return chat.reduce((n, m) => n + m.content.length, 0); }
+
+function renderPicked() {
+  const ul = $('picked'), focus = focusedRow(ul);
+  ul.textContent = '';
+  $('pickCount').textContent = picked.length + ' / ' + maxFiles + (picked.length ? '，共 ' + fmtNum(totalChars()) + ' 字' : '');
+  if (!picked.length) ul.appendChild(el('li', 'meta', '还没有选文件：在上面的搜索结果里点「加入」，可以换关键字多次搜索累加。'));
+  picked.forEach((p, i) => {
+    const li = el('li');
+    li.dataset.path = p.path;
+    li.appendChild(el('span', 'num', (i + 1) + '.'));
+    const box = el('div', 'grow');
+    box.appendChild(el('div', 'name', p.name));
+    let meta = p.rel + '　';
+    let cls = 'meta';
+    if (p.loading) meta += '取文字中……';
+    else if (p.error) { meta += '取不出文字：' + p.error; cls = 'meta bad'; }
+    else meta += fmtNum(p.chars) + ' 字' + (p.note ? '（' + p.note + '）' : '');
+    box.appendChild(el('div', cls, meta));
+    li.appendChild(box);
+    const open = !!openPreviews[p.path];
+    const pv = btn(open ? '收起' : '预览', 'small', () => togglePreview(p, li, pv));
+    pv.dataset.act = 'preview';
+    pv.disabled = p.loading || !!p.error;
+    pv.setAttribute('aria-expanded', String(open));
+    pv.setAttribute('aria-label', (open ? '收起预览 ' : '预览 ') + p.name);
+    const rm = btn('移除', 'small', () => unpick(p.path));
+    rm.dataset.act = 'remove';
+    rm.setAttribute('aria-label', '移除 ' + p.name);
+    const acts = el('span', 'acts');
+    acts.appendChild(pv);
+    acts.appendChild(rm);
+    li.appendChild(acts);
+    if (open) li.appendChild(previewNode(openPreviews[p.path]));
+    li.style.flexWrap = 'wrap';
+    ul.appendChild(li);
+  });
+  restoreFocus(ul, focus);
+  const bad = picked.filter(p => p.error).length, loading = picked.some(p => p.loading);
+  $('removeBad').hidden = !bad;
+  $('removeBad').textContent = '移除取不出文字的文件（' + bad + ' 个）';
+  $('clearPicked').hidden = !picked.length;
+  if (!picked.length) say('pickStatus', '');
+  else if (bad) say('pickStatus', '有 ' + bad + ' 个文件取不出文字：请点「移除取不出文字的文件」后再发送。', 'bad');
+  else if (loading) say('pickStatus', addedNote + '正在取文字……', 'info');
+  else say('pickStatus', addedNote, addedNote ? 'ok' : 'info');
+  noticeLimit();
+  renderDest();
+  renderResults();
+  showFindStatus();
+  layoutFind();
+}
+
+// 文件与对话合计超过上限时，在发送区写明办法并给出「仍然发送」；不再超限时收回
+function noticeLimit() {
+  if (busy) return;
+  const total = totalChars() + historyChars();
+  const ready = picked.length && !picked.some(p => p.loading || p.error);
+  if (historyChars() >= charLimit) {
+    say('askStatus', '对话已有 ' + fmtNum(historyChars()) + ' 字，达到上限 ' + fmtNum(charLimit) +
+        ' 字：请先「保存对话」，再点「清空对话」开始新对话，或在「模型设置」里调高上限。', 'warn');
+    $('sendCut').hidden = true;
+    overShown = true;
+  } else if (ready && total > charLimit) {
+    say('askStatus', '合计 ' + fmtNum(total) + ' 字，超过上限 ' + fmtNum(charLimit) + ' 字 ' + fmtNum(total - charLimit) +
+        ' 字：可以移除几个文件、在「模型设置」里调高上限，或点「仍然发送」按比例截断每个文件。', 'warn');
+    $('sendCut').hidden = false;
+    overShown = true;
+  } else if (overShown) {
+    say('askStatus', '');
+    $('sendCut').hidden = true;
+    overShown = false;
+  }
+}
+
+$('removeBad').addEventListener('click', () => {
+  if (!confirmNewChat()) return;
+  addedNote = '';
+  picked = picked.filter(p => !p.error);
+  renderPicked();
+});
+
+function previewNode(t) {
+  const box = el('div', 'preview');
+  const total = t.text.length + t.more;
+  box.appendChild(el('div', 'hint', t.more
+    ? '显示前 ' + fmtNum(t.text.length) + ' 字，共 ' + fmtNum(total) + ' 字，发送时用全文'
+    : '共 ' + fmtNum(total) + ' 字，已全部显示'));
+  box.appendChild(el('pre', '', t.text + (t.more ? '\n……（还有 ' + fmtNum(t.more) + ' 字未显示）' : '')));
+  return box;
+}
+
+function togglePreview(p, li, b) {
+  if (openPreviews[p.path]) {
+    delete openPreviews[p.path];
+    const old = li.querySelector('.preview');
+    if (old) old.remove();
+    b.textContent = '预览';
+    b.setAttribute('aria-expanded', 'false');
+    b.setAttribute('aria-label', '预览 ' + p.name);
+    return;
+  }
+  b.disabled = true;
+  b.textContent = '读取中……';
+  api('/api/text?preview=1&path=' + encodeURIComponent(p.path)).then(t => {
+    b.disabled = false;
+    b.textContent = '预览';
+    if (t.error) { say('pickStatus', failText('预览', t.error, '请移除这个文件后重新加入。'), 'bad'); return; }
+    openPreviews[p.path] = {text: t.text, more: t.more};
+    li.appendChild(previewNode(openPreviews[p.path]));
+    b.textContent = '收起';
+    b.setAttribute('aria-expanded', 'true');
+    b.setAttribute('aria-label', '收起预览 ' + p.name);
+  }).catch(e => { b.disabled = false; b.textContent = '预览'; say('pickStatus', failText('预览', e.message, RETRY), 'bad'); });
+}
+
+// ---------------- 问 AI
+
+function currentModel() {
+  return state && state.models.find(m => m.id === $('model').value);
+}
+
+function renderModels() {
+  const sel = $('model');
+  const keep = sel.value;
+  sel.textContent = '';
+  if (!state.models.length) {
+    const o = el('option', '', '没有可用的模型，请在「模型设置」里填写');
+    o.value = '';
+    sel.appendChild(o);
+  }
+  state.models.forEach(m => { const o = el('option', '', m.label); o.value = m.id; sel.appendChild(o); });
+  const want = state.models.some(m => m.id === keep) ? keep : state.default;
+  if (want) sel.value = want;
+  renderDest();
+}
+
+function renderDest() {
+  const m = currentModel();
+  $('dest').className = m ? 'hint' : 'hint warn';
+  $('dest').textContent = m
+    ? '将发送到：' + m.host + '，模型 ' + m.label + '，' + picked.length + ' 个文件；文件 ' + fmtNum(totalChars()) + ' 字 + 对话 ' + fmtNum(historyChars()) + ' 字'
+    : '没有可用的模型：OpenCode 配置里找不到带接口地址和 AK 的模型，请在「模型设置」里填写自定义接口。';
+}
+
+$('model').addEventListener('change', () => {
+  renderDest();
+  post('/api/settings', {model: $('model').value}).catch(() => {});
+});
+
+function renderChat() {
+  const box = $('chat');
+  box.textContent = '';
+  chat.forEach((m, i) => {
+    const d = el('div', 'msg ' + m.role);
+    const who = el('div', 'who', m.role === 'user' ? '我' : 'AI' + (m.model ? '（' + m.model + '）' : ''));
+    if (m.role === 'assistant' && m.content && !m.streaming) {
+      const c = btn('复制', 'small', () => copyText(m.content, c));
+      who.appendChild(c);
+    }
+    d.appendChild(who);
+    const body = el('div', 'msg-body', m.content || (m.streaming ? '……' : ''));
+    d.appendChild(body);
+    if (m.partial) d.appendChild(el('div', 'partial', '（回答不完整）'));
+    citeNotes(m).forEach(t => d.appendChild(el('div', 'cite', t)));
+    m.node = body;
+    box.appendChild(d);
+  });
+  box.scrollTop = box.scrollHeight;
+  renderDest();
+  layoutFind();
+}
+
+function setBusy(on) {
+  busy = on;
+  $('send').hidden = on;
+  $('stop').hidden = !on;
+  $('send').disabled = on || !alive;
+  $('sendCut').disabled = on || !alive;
+  $('stop').disabled = !on || !alive;
+  $('clear').disabled = on || !alive;
+  $('save').disabled = on || !alive;
+}
+
+// ---------------- 原文佐证
+
+// 服务端核对后的提示：没有附原文摘句，或摘句在所选文件的原文中找不到
+function citeNotes(m) {
+  const out = [];
+  if (m.uncited) out.push('这条回答没有附原文摘句，请对照原文核实后再用。');
+  if (m.missing && m.missing.length) {
+    out.push('以下摘句在所选文件的原文中未找到，可能被改写或编造，请核实：\n' +
+      m.missing.map(x => '文件 ' + x.file + '：「' + x.quote + '」').join('\n'));
+  }
+  return out;
+}
+
+
+
+// ---------------- 布局：窄屏开始对话后收起找文件
+
+const narrow = window.matchMedia('(max-width: 899px)');
+let findOpen = false;
+function layoutFind() {
+  const fold = narrow.matches && chat.length > 0 && !findOpen;
+  $('findBody').hidden = fold;
+  $('findCollapsed').hidden = !fold;
+  $('findSummary').textContent = '已选 ' + picked.length + ' 个文件，共 ' + fmtNum(totalChars()) + ' 字';
+}
+narrow.addEventListener('change', layoutFind);
+$('reselect').addEventListener('click', () => { findOpen = true; layoutFind(); $('q').focus(); });
+
+function togglePanel(b, panel, open) {
+  open = open === undefined ? panel.hidden : open;
+  panel.hidden = !open;
+  b.setAttribute('aria-expanded', String(open));
+}
+$('manageFolders').addEventListener('click', () => togglePanel($('manageFolders'), $('folderPanel')));
+$('modelSettings').addEventListener('click', () => togglePanel($('modelSettings'), $('modelPanel')));
+
+function send(truncate) {
+  const q = $('ask').value.trim();
+  $('sendCut').hidden = true;
+  overShown = false;
+  if (!picked.length) { say('askStatus', '还没有选文件：先在「找文件」里加入要用的文件。', 'warn'); return; }
+  if (picked.some(p => p.loading)) { say('askStatus', '还在取文字，请稍等。', 'warn'); return; }
+  if (picked.some(p => p.error)) { say('askStatus', '有文件取不出文字：请先在「已选」里点「移除取不出文字的文件」。', 'bad'); return; }
+  if (!q) { say('askStatus', '请先写下要 AI 做什么。', 'warn'); $('ask').focus(); return; }
+  if (!currentModel()) { say('askStatus', '发送失败：没有可用的模型。请在「模型设置」里填写自定义接口。', 'bad'); return; }
+  const history = chat.map(m => ({role: m.role, content: m.content})).concat([{role: 'user', content: q}]);
+  const answer = {role: 'assistant', content: '', streaming: true, model: currentModel().label};
+  setBusy(true);
+  // 等待期间每秒更新已等待时间；phase 为当前阶段的文字
+  const t0 = Date.now();
+  let phase = ['正在发送……', 'info'];
+  const tick = () => {
+    const sec = Math.round((Date.now() - t0) / 1000);
+    say('askStatus', phase[0] + '已等待 ' + sec + ' 秒' + (sec >= 30 ? '，模型仍在处理，不想等可点「停止」' : '') + '。', phase[1]);
+  };
+  answer.onStart = cut => { phase = cut ? ['生成中（已按比例截断每个文件）……', 'warn'] : ['生成中……', 'info']; tick(); };
+  tick();
+  const timer = setInterval(tick, 1000);
+  answer.stopTimer = () => clearInterval(timer);
+  controller = new AbortController();
+  fetch('/api/chat', {
+    method: 'POST', signal: controller.signal,
+    headers: {'X-Token': TOKEN, 'Content-Type': 'application/json'},
+    body: JSON.stringify({files: picked.map(p => p.path), messages: history, model: $('model').value, truncate: !!truncate})
+  }).then(r => {
+    if (!r.ok) {
+      answer.stopTimer();
+      return r.json().then(j => {
+        if (r.status === 413 && j.error === 'too_long') {
+          say('askStatus', '先不发送：合计 ' + fmtNum(j.total) + ' 字（文件 ' + fmtNum(j.files) + ' 字 + 对话 ' + fmtNum(j.history) +
+              ' 字），超过上限 ' + fmtNum(j.limit) + ' 字 ' + fmtNum(j.total - j.limit) +
+              ' 字：可以移除几个文件、在「模型设置」里调高上限，或点「仍然发送」按比例截断每个文件。', 'warn');
+          $('sendCut').hidden = false;
+          overShown = true;
+        } else if (r.status === 413 && j.error === 'history_too_long') {
+          say('askStatus', '先不发送：对话已有 ' + fmtNum(j.history) + ' 字，达到上限 ' + fmtNum(j.limit) +
+              ' 字：请先「保存对话」，再点「清空对话」开始新对话，或在「模型设置」里调高上限。', 'warn');
+        } else {
+          say('askStatus', failText('发送', j.error || ('HTTP ' + r.status), '请检查后重试。'), 'bad');
+        }
+      });
+    }
+    chat.push({role: 'user', content: q});
+    chat.push(answer);
+    $('ask').value = '';
+    renderChat();
+    return readStream(r, answer);
+  }).catch(e => {
+    if (e.name === 'AbortError') { say('askStatus', '已停止。', 'warn'); return; }
+    say('askStatus', failText('发送', e.message, RETRY), 'bad');
+  }).then(() => {
+    answer.stopTimer();
+    answer.streaming = false;
+    if (chat.includes(answer) && !answer.content) {
+      chat.splice(chat.indexOf(answer) - 1, 2);   // 没有拿到回答：撤回这一轮，问题放回输入框
+      $('ask').value = q;
+    } else if (chat.includes(answer) && !answer.done) {
+      answer.partial = true;      // 停止、出错或连接中断：留下已收到的部分并标明不完整
+    }
+    renderChat();
+    setBusy(false);
+    controller = null;
+    noticeLimit();
+    if (alive) $('ask').focus();
+  });
+}
+
+function readStream(r, answer) {
+  const reader = r.body.getReader(), dec = new TextDecoder();
+  let buf = '', cut = false;
+  const handle = line => {
+    if (!line.trim()) return;
+    let m;
+    try { m = JSON.parse(line); } catch (e) { return; }
+    if (m.start) { cut = m.truncated; answer.onStart(cut); }
+    if (m.t) {
+      answer.content += m.t;
+      if (answer.node) { answer.node.textContent = answer.content; $('chat').scrollTop = $('chat').scrollHeight; }
+    }
+    if (m.error) {
+      answer.stopTimer();
+      say('askStatus', failText('回答', m.error, '请检查「模型设置」里的接口或换个模型后重试。'), 'bad');
+    }
+    if (m.done) {
+      answer.done = true;
+      answer.missing = m.missing || [];
+      answer.uncited = !!m.uncited;
+      answer.stopTimer();
+      say('askStatus', cut ? '回答完成（发送时已按比例截断每个文件）。' : '回答完成。', cut ? 'warn' : 'ok');
+    }
+  };
+  const step = () => reader.read().then(({done, value}) => {
+    if (done) { handle(buf); return; }
+    buf += dec.decode(value, {stream: true});
+    const lines = buf.split('\n');
+    buf = lines.pop();
+    lines.forEach(handle);
+    return step();
+  });
+  return step();
+}
+
+$('send').addEventListener('click', () => send(false));
+$('sendCut').addEventListener('click', () => send(true));
+$('ask').addEventListener('keydown', ev => { if (ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey) && !busy) send(false); });
+$('stop').addEventListener('click', () => { if (controller) controller.abort(); });
+
+// 清空即开始新对话：服务端不存对话，下一次提问只带清空之后的问答。点了直接清，不弹确认
+$('clear').addEventListener('click', () => {
+  if (!chat.length) return;
+  chat = [];
+  savedLen = 0;
+  findOpen = false;
+  renderChat();
+  say('askStatus', '');
+  say('chatStatus', '');
+  overShown = false;
+  noticeLimit();
+});
+
+function copyText(text, b) {
+  const label = b.textContent;
+  const flash = (msg, cls) => { b.textContent = msg; setTimeout(() => { b.textContent = label; }, cls === 'ok' ? 1200 : 3000); };
+  const fallback = () => {
+    const t = document.createElement('textarea');
+    t.value = text; document.body.appendChild(t); t.select();
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch (e) { /* 视为复制失败 */ }
+    t.remove();
+    if (ok) done(); else { flash('复制失败', 'bad'); say('chatStatus', '复制失败：浏览器不允许写剪贴板。请手动选中回答复制。', 'bad'); }
+  };
+  const done = () => { flash('已复制', 'ok'); say('chatStatus', '已复制。', 'ok'); };
+  if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(done, fallback);
+  else fallback();
+}
+
+$('save').addEventListener('click', () => {
+  if (!chat.length) { say('chatStatus', '还没有对话可保存。', 'warn'); return; }
+  const now = new Date(), pad = n => String(n).padStart(2, '0');
+  const stamp = now.getFullYear() + pad(now.getMonth() + 1) + pad(now.getDate()) + '-' + pad(now.getHours()) + pad(now.getMinutes());
+  const lines = ['# 找文件问 AI 对话 ' + stamp, '', '## 文件', ''];
+  picked.forEach((p, i) => lines.push((i + 1) + '. ' + p.path));
+  chat.forEach(m => {
+    lines.push('', m.role === 'user' ? '## 问' : '## 答' + (m.model ? '（' + m.model + '）' : ''), '', m.content);
+    if (m.partial) lines.push('', '（回答不完整）');
+    citeNotes(m).forEach(t => lines.push('', t));
+  });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([lines.join('\n') + '\n'], {type: 'text/markdown;charset=utf-8'}));
+  a.download = '找文件问AI-' + stamp + '.md';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  savedLen = chat.length;
+  say('chatStatus', '已保存为 ' + a.download + '（在浏览器的下载文件夹里）。', 'ok');
+});
+
+// ---------------- 设置
+
+function renderFolders() {
+  const ul = $('folders');
+  ul.textContent = '';
+  if (!state.folders.length) ul.appendChild(el('li', 'meta', '还没有添加文件夹。'));
+  state.folders.forEach(f => {
+    const li = el('li');
+    li.appendChild(el('div', 'grow name', f));
+    li.appendChild(btn('移除', 'small', () => {
+      const inside = p => p.path === f || p.path.startsWith(f.replace(/\/$/, '') + '/');
+      const n = picked.filter(inside).length;
+      let msg = '从索引中移除文件夹？\n\n' + f + '\n\n只是不再搜索这里，不会删除任何文件。';
+      if (n) msg += '\n已选的 ' + n + ' 个文件在这个文件夹里，会一并移出已选' + (chat.length ? '，当前问答也会清空' : '') + '。';
+      if (!confirm(msg)) return;
+      post('/api/folders', {remove: f}).then(r => {
+        state.folders = r.folders;
+        if (n) {
+          picked = picked.filter(p => !inside(p));
+          if (chat.length) { chat = []; renderChat(); }
+          renderPicked();
+        }
+        renderFolders(); search(); say('folderStatus', '已移除。', 'ok');
+      }).catch(e => say('folderStatus', failText('移除', e.message, RETRY), 'bad'));
+    }));
+    ul.appendChild(li);
+  });
+}
+
+$('addFolder').addEventListener('click', () => {
+  const v = $('folder').value.trim();
+  if (!v) { say('folderStatus', '请先填写文件夹路径。', 'warn'); return; }
+  $('addFolder').disabled = true;
+  post('/api/folders', {add: v}).then(r => {
+    state.folders = r.folders; $('folder').value = '';
+    renderFolders(); search();
+    const m = r.merged || [];
+    say('folderStatus', '已添加' + (m.length ? '，原有的 ' + m.length + ' 个子文件夹已合并进来：' + m.join('、') : '') +
+        '。正在后台扫描，扫描期间也能搜索。', 'ok');
+  }).catch(e => say('folderStatus', '添加失败：' + e.message + '。请检查路径后重试。', 'bad'))
+    .then(() => { $('addFolder').disabled = !alive; });
+});
+$('folder').addEventListener('keydown', ev => { if (ev.key === 'Enter') $('addFolder').click(); });
+
+// 路径补全与常用位置
+let dirsTimer = null;
+function loadDirs() {
+  return api('/api/dirs?prefix=' + encodeURIComponent($('folder').value)).then(r => {
+    const dl = $('folderList');
+    dl.textContent = '';
+    r.dirs.forEach(d => { const o = document.createElement('option'); o.value = d; dl.appendChild(o); });
+    return r;
+  });
+}
+$('folder').addEventListener('input', () => { clearTimeout(dirsTimer); dirsTimer = setTimeout(() => loadDirs().catch(() => {}), 150); });
+function renderPlaces(places) {
+  const box = $('places');
+  box.textContent = '';
+  if (!places.length) return;
+  box.appendChild(el('span', '', '常用位置：'));
+  places.forEach(p => box.appendChild(btn(p.label, 'small', () => {
+    $('folder').value = p.path;
+    $('folder').focus();
+    loadDirs().catch(() => {});
+  })));
+}
+
+$('rebuild').addEventListener('click', () => {
+  if (!confirm('丢弃现有索引，重新扫描全部 ' + state.folders.length + ' 个文件夹？\n\n不会改动任何文件；文件多时要等一会儿。')) return;
+  post('/api/refresh', {full: true}).then(() => { say('folderStatus', '正在重建索引……', 'info'); search(); })
+    .catch(e => say('folderStatus', failText('重建', e.message, RETRY), 'bad'));
+});
+
+$('limit').addEventListener('keydown', ev => { if (ev.key === 'Enter') $('saveLimit').click(); });
+$('saveLimit').addEventListener('click', () => {
+  post('/api/settings', {char_limit: $('limit').value}).then(r => {
+    charLimit = r.char_limit; renderPicked(); say('settingsStatus', '字数上限已保存。', 'ok');
+  }).catch(e => say('settingsStatus', failText('保存', e.message, '请检查输入后重试；仍失败时' + RETRY), 'bad'));
+});
+
+function saveCustom(clearKey) {
+  const body = {custom: {base: $('cBase').value, model: $('cModel').value, key: $('cKey').value, clear_key: !!clearKey}};
+  post('/api/settings', body).then(r => {
+    applyState(r);
+    $('cKey').value = '';
+    const usable = r.models.some(m => m.id === 'custom');
+    if (usable && !clearKey) {
+      $('model').value = 'custom';
+      renderDest();
+      post('/api/settings', {model: 'custom'}).catch(() => {});
+    }
+    if (clearKey) say('settingsStatus', '已清除 AK，自定义接口暂不可用。', 'ok');
+    else if (usable) say('settingsStatus', '已保存，已选用自定义接口。', 'ok');
+    else say('settingsStatus', '已保存。自定义接口暂不可用：填齐接口地址、模型名和 AK 后才可选用。', 'warn');
+  }).catch(e => say('settingsStatus', failText('保存', e.message, '请检查输入后重试；仍失败时' + RETRY), 'bad'));
+}
+$('saveCustom').addEventListener('click', () => saveCustom(false));
+$('testModel').addEventListener('click', () => {
+  $('testModel').disabled = true;
+  say('settingsStatus', '正在测试连接……', 'info');
+  post('/api/test-model', {model: $('model').value}).then(r => {
+    if (r.ok) say('settingsStatus', '连接正常：' + r.model + ' 已回复。', 'ok');
+    else say('settingsStatus', failText('测试连接', r.error, '请检查接口地址、模型名和 AK 后重试。'), 'bad');
+  }).catch(e => say('settingsStatus', '测试连接失败：' + e.message + '。请确认服务仍在运行后重试。', 'bad'))
+    .then(() => { $('testModel').disabled = !alive; });
+});
+$('clearKey').addEventListener('click', () => {
+  if (confirm('清除本工具设置里保存的 AK？清除后自定义接口不可用，OpenCode 的配置不受影响。')) saveCustom(true);
+});
+
+
+function applyState(s) {
+  state = Object.assign(state || {}, s);
+  charLimit = state.char_limit;
+  $('limit').value = charLimit;
+  $('cBase').value = state.custom.base;
+  $('cModel').value = state.custom.model;
+  $('cKey').placeholder = state.custom.has_key ? '已保存，留空则不改' : '';
+  renderModels();
+  renderPicked();
+}
+
+function unsaved() { return chat.length > 0 && chat.length !== savedLen; }
+function rounds() { return chat.filter(m => m.role === 'user').length; }
+
+window.addEventListener('beforeunload', ev => {
+  if (alive && unsaved()) { ev.preventDefault(); ev.returnValue = ''; }
+});
+
+$('quit').addEventListener('click', () => {
+  const parts = [];
+  if (busy) parts.push('回答正在生成，服务会等它结束后再退出。');
+  if (unsaved()) parts.push('当前 ' + rounds() + ' 轮问答未保存，退出后会清空，可先点「保存对话」。');
+  if (parts.length && !confirm(parts.join('\n') + '\n\n确定退出？')) return;
+  post('/api/quit').then(r => serviceGone(r.waiting ? '服务将在回答生成结束后退出，可关闭本页。需要再用时重新双击「双击运行」。' : undefined))
+    .catch(() => serviceGone());
+});
+
+api('/api/state').then(s => {
+  maxFiles = s.max_files;
+  $('ver').textContent = '找文件问 AI v' + s.version;
+  applyState(s);
+  renderFolders();
+  renderChat();
+  if (!s.models.length) togglePanel($('modelSettings'), $('modelPanel'), true);
+  if (!s.folders.length) {
+    togglePanel($('manageFolders'), $('folderPanel'), true);
+    $('folder').scrollIntoView({block: 'center'});
+    $('folder').focus();
+  }
+  const miss = [];
+  if (!s.doc2kb) miss.push('缺少同目录的 doc2kb_core.py，读不了 docx、xlsx、pptx、pdf，请重新解压完整的工具目录');
+  else if (!s.pdftotext) miss.push('本机没有 pdftotext，读不了 pdf；需要时请安装 poppler-utils');
+  if (miss.length) { $('banner').textContent = miss.join('；') + '。'; $('banner').hidden = false; }
+  loadDirs().then(r => renderPlaces(r.places)).catch(() => {});
+  return search();
+}).catch(e => say('findStatus', failText('读取状态', e.message, '请关闭本页，重新双击「双击运行」。'), 'bad'));
+
+</script>
+</body>
+</html>

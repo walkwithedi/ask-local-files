@@ -1,0 +1,85 @@
+name: checks
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        # the oldest Python the scripts support, and a current one
+        python: ["3.8", "3.12"]
+    runs-on: ubuntu-22.04
+    env:
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Optional tools (PDF)
+        run: sudo apt-get install -y --no-install-recommends poppler-utils
+      - name: Unit tests
+        run: python -m unittest discover -s tests -v
+      - name: Repository checks
+        run: python scripts/check_repo.py
+      - name: shellcheck
+        run: shellcheck -S warning .githooks/* .claude/hooks/session-start.sh
+  doc2kb:
+    # doc2kb_core.py must be the release named in DOC2KB_VERSION, unchanged
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Read DOC2KB_VERSION
+        id: pin
+        run: echo "tag=v$(tr -d '[:space:]' < DOC2KB_VERSION)" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v7
+        with:
+          repository: walkwithedi/doc2kb
+          ref: ${{ steps.pin.outputs.tag }}
+          path: _doc2kb
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Compare the copy
+        run: python scripts/check_doc2kb.py _doc2kb
+  scan:
+    # Logs of this public repository are public: the scanner prints only file:line and the rule
+    # under GitHub Actions, and gitleaks runs with --redact.
+    runs-on: ubuntu-latest
+    env:
+      # Private terms from the repository secret; empty on pull requests from forks, which then
+      # get every check except this one.
+      SENSITIVE_TERMS: ${{ secrets.SENSITIVE_TERMS }}
+      GITLEAKS_VERSION: v8.30.1
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Sensitive data (whole tree, file names and metadata)
+        run: python scripts/sensitive_scan.py
+      - name: Sensitive data (new commits - lines, messages, identities, images)
+        if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000')
+        env:
+          RANGE: ${{ github.event_name == 'pull_request' && format('{0}..{1}', github.event.pull_request.base.sha, github.event.pull_request.head.sha) || format('{0}..{1}', github.event.before, github.event.after) }}
+        run: |
+          if ! git merge-base "${RANGE%%..*}" "${RANGE##*..}" >/dev/null 2>&1; then
+            echo "no common ancestor in $RANGE (history rewritten): range scan skipped"; exit 0
+          fi
+          python scripts/sensitive_scan.py --range "$RANGE"
+      - name: Credentials (gitleaks, all of history)
+        # Installed through the Go module proxy: the version is pinned and its checksum is
+        # verified against sum.golang.org.
+        run: |
+          go install "github.com/zricethezav/gitleaks/v8@$GITLEAKS_VERSION"
+          "$(go env GOPATH)/bin/gitleaks" git --redact --no-banner --log-opts=--all .

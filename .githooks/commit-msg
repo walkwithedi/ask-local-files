@@ -1,0 +1,6 @@
+#!/bin/sh
+# Scans the commit message for personal data; a finding stops the commit.
+# Enabled together with pre-commit by:  git config core.hooksPath .githooks
+cd "$(git rev-parse --show-toplevel)" || exit 1
+if command -v python3 >/dev/null 2>&1; then PY=python3; else PY=python; fi
+exec "$PY" scripts/sensitive_scan.py --message "$1"

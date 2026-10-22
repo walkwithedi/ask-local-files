@@ -1,0 +1,46 @@
+name: sensitive-text
+# Issues, pull requests, discussions and their comments are as public as the code. Each one
+# written or edited is scanned with scripts/sensitive_scan.py; a finding fails this run (the
+# log shows the rule, never the text) so the writer is told to edit it. Nothing is posted back,
+# so a finding is never repeated in public.
+on:
+  issues:
+    types: [opened, edited]
+  issue_comment:
+    types: [created, edited]
+  pull_request:
+    types: [opened, edited]
+  pull_request_review:
+    types: [submitted, edited]
+  pull_request_review_comment:
+    types: [created, edited]
+  discussion:
+    types: [created, edited]
+  discussion_comment:
+    types: [created, edited]
+permissions:
+  contents: read
+jobs:
+  text:
+    runs-on: ubuntu-latest
+    env:
+      SENSITIVE_TERMS: ${{ secrets.SENSITIVE_TERMS }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/sensitive_scan.py
+          sparse-checkout-cone-mode: false
+      - name: Sensitive data (title and text)
+        # The text is read from the event file, never through expressions or environment
+        # variables: those would be echoed in the public log and could inject commands.
+        run: |
+          python3 - "$GITHUB_EVENT_PATH" "$RUNNER_TEMP/text.txt" <<'PY'
+          import json, sys
+          e = json.load(open(sys.argv[1], encoding="utf-8"))
+          item = e.get("comment") or e.get("review") or e.get("issue") or e.get("pull_request") or e.get("discussion") or {}
+          parent = e.get("issue") or e.get("pull_request") or e.get("discussion") or {}
+          with open(sys.argv[2], "w", encoding="utf-8") as f:
+              f.write((parent.get("title") or "") + "\n" + (item.get("body") or "") + "\n")
+          PY
+          python3 scripts/sensitive_scan.py --text "$RUNNER_TEMP/text.txt" --label "${{ github.event_name }}"

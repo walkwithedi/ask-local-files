@@ -1,0 +1,36 @@
+name: codeql
+# GitHub code scanning for bugs and security problems in the Python scripts and the
+# workflows themselves. Findings appear under Security > Code scanning and on pull requests.
+# Free for public repositories; a private repository needs GitHub Code Security.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  analyze:
+    # needs GitHub Code Security on a private repository; runs once the repository is public
+    if: github.event.repository.private != true
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [python, actions]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-and-quality
+      - uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:${{ matrix.language }}

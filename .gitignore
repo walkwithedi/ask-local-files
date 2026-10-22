@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+dist/
+.DS_Store
+# a private-terms list belongs in ~/.config/ask-local-files/, never here
+sensitive_terms.txt
+*.zip
+ask_local_files.log
+_doc2kb/

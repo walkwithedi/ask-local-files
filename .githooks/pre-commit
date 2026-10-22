@@ -1,0 +1,7 @@
+#!/bin/sh
+# Runs scripts/run_checks.py before every commit; a failing check stops the commit.
+# Enable once per clone:  git config core.hooksPath .githooks
+# Skip in an emergency:   git commit --no-verify  (CI still runs the same checks)
+cd "$(git rev-parse --show-toplevel)" || exit 1
+if command -v python3 >/dev/null 2>&1; then PY=python3; else PY=python; fi
+exec "$PY" scripts/run_checks.py
