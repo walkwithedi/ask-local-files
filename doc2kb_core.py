@@ -19,14 +19,17 @@ Labels written into the output follow --lang (en or zh); the zh labels and file 
 fixed between versions, so existing output folders keep working.
 
 docx, xlsx and pptx are zip packages of OOXML parts; this module reads the XML directly.
+doc, xls and ppt (Office 97 and later) are OLE2 compound files; their binary streams are read
+directly too (text and tables, no pictures).
 Heading levels come from the styles.xml mapping plus heuristics, so documents with
 irregular styles lose some structure but never their text.
 
 Used by doc2kb.sh (desktop and cron use); other tools can import it as a library
-(process_one(), convert()).
+(process_one(), convert(), doc_authors()).
 """
 
 import argparse
+import bisect
 import datetime
 import hashlib
 import io
@@ -339,9 +342,9 @@ LABELS.update({
                           '共 %d 份。带 ※ 的时间取自文件系统（文档未记录该属性），\n'
                           '拷贝会刷新此时间，如有误伤请核对原文件。\n\n'),
     'rep_filtered_item': ('  • %s\n      modified: %s%s\n', '  • %s\n      修改时间：%s%s\n'),
-    'rep_legacy': ('Need a new format first (legacy binary .doc/.xls/.ppt)', '需先转格式（旧版二进制 .doc/.xls/.ppt）'),
-    'rep_legacy_hint': ('\nOpen them in an office application, save as .docx / .xlsx / .pptx and run again.\n\n',
-                        '\n请用 WPS 打开后另存为 .docx / .xlsx / .pptx，再重新运行。\n\n'),
+    'rep_legacy': ('Need a new format first (.msg)', '需先转格式（.msg）'),
+    'rep_legacy_hint': ('\nSave these mails as .eml in the mail program and run again.\n\n',
+                        '\n请在邮件程序里把这些邮件另存为 .eml，再重新运行。\n\n'),
     'rep_logs': ('Log per document', '各文档处理日志'),
     'rep_warnings': ('\n%d warnings:\n', '\n警告 %d 条：\n'),
     'kept_note': ('kept from an earlier run', '本轮跳过，沿用已有结果'),
@@ -385,6 +388,15 @@ LABELS.update({
                   '压缩包内文档合计超过 %s，本文件及之后的未打开'),
     'arc_deep': ('archives nested more than %d deep are not opened', '压缩包嵌套超过 %d 层，未再展开'),
     'arc_missing': ('member not found in the archive', '压缩包内找不到该文件'),
+    # legacy binary Office
+    'legacy_bad': ('not a readable %s file: %s', '不是可读取的 %s 文件：%s'),
+    'legacy_encrypted': ('password protected, cannot be read', '文件有密码保护，无法读取'),
+    'legacy_old': ('%s files from before Office 97 are not supported; save them in a new format first',
+                   '不支持 Office 97 之前的 %s 文件，请先另存为新格式'),
+    'xls_count': ('xls: %d sheets', 'xls: %d 个工作表'),
+    'xls_sst_failed': ('%s: shared strings could not be read, text cells stay empty: %s',
+                       '%s: 共享字符串读取失败，文字单元格为空: %s'),
+    'doc_log': ('doc: %d paragraphs, %d tables', 'doc: %d 段，%d 个表格'),
 })
 
 # Marks that later steps look for in converted text; both languages are recognised.
@@ -1378,6 +1390,851 @@ def parse_xlsx_file(path, outdir, report, imgdir=None, img_ref='images',
     return '\n'.join(md), []
 
 
+# ================================================================ legacy binary Office (OLE2)
+
+OLE_MAGIC = b'\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1'
+OLE_MAXREG = 0xFFFFFFFA     # sector numbers from here on are markers (end of chain, free, ...)
+
+
+class OleFile:
+    """The streams of an OLE2 compound file (.doc, .xls, .ppt), read from memory.
+    Raises ValueError when the structure is damaged."""
+
+    def __init__(self, data):
+        if data[:8] != OLE_MAGIC or len(data) < 512:
+            raise ValueError('not an OLE2 compound file')
+        self.data = data
+        shift, mini_shift = struct.unpack_from('<HH', data, 30)
+        if shift not in (9, 12) or mini_shift != 6:
+            raise ValueError('unexpected sector size')
+        self.ss = 1 << shift
+        n_fat, dir_start = struct.unpack_from('<II', data, 44)
+        self.mini_cutoff, mini_start, n_mini, difat_start, n_difat = struct.unpack_from('<IIIII', data, 56)
+        difat = list(struct.unpack_from('<109I', data, 76))
+        sid, seen = difat_start, set()
+        for _ in range(n_difat):
+            if sid >= OLE_MAXREG or sid in seen:
+                break
+            seen.add(sid)
+            vals = struct.unpack('<%dI' % (self.ss // 4), self._sector(sid))
+            difat.extend(vals[:-1])
+            sid = vals[-1]
+        self.fat = []
+        for s in difat[:n_fat]:
+            if s < OLE_MAXREG:
+                self.fat.extend(struct.unpack('<%dI' % (self.ss // 4), self._sector(s)))
+        self.minifat = []
+        if n_mini:
+            raw = self._chain(mini_start)
+            self.minifat = list(struct.unpack('<%dI' % (len(raw) // 4), raw[:len(raw) // 4 * 4]))
+        raw = self._chain(dir_start)
+        self.entries = []
+        for off in range(0, len(raw) - 127, 128):
+            e = raw[off:off + 128]
+            nlen = struct.unpack_from('<H', e, 64)[0]
+            name = e[:max(0, min(nlen, 64) - 2)].decode('utf-16-le', 'replace')
+            etype = e[66]
+            left, right, child = struct.unpack_from('<III', e, 68)
+            start, size = struct.unpack_from('<II', e, 116)
+            self.entries.append({'name': name, 'type': etype, 'left': left, 'right': right,
+                                 'child': child, 'start': start, 'size': size})
+        if not self.entries or self.entries[0]['type'] != 5:
+            raise ValueError('no root entry')
+        root = self.entries[0]
+        self.ministream = self._chain(root['start'])[:root['size']] if root['size'] else b''
+        self.paths = {}
+        self._walk(root['child'], '')
+
+    def _sector(self, sid):
+        off = (sid + 1) * self.ss
+        if off >= len(self.data):
+            raise ValueError('sector %d past the end of the file' % sid)
+        return self.data[off:off + self.ss].ljust(self.ss, b'\0')
+
+    def _chain(self, start, fat=None, read=None):
+        fat = self.fat if fat is None else fat
+        read = read or self._sector
+        out, sid, seen = [], start, set()
+        while sid < OLE_MAXREG:
+            if sid in seen or sid >= len(fat):
+                raise ValueError('broken sector chain')
+            seen.add(sid)
+            out.append(read(sid))
+            sid = fat[sid]
+        return b''.join(out)
+
+    def _mini_sector(self, sid):
+        off = sid * 64
+        if off >= len(self.ministream):
+            raise ValueError('mini sector %d past the end of the mini stream' % sid)
+        return self.ministream[off:off + 64]
+
+    def _walk(self, top, prefix):
+        stack, seen = [top], set()
+        while stack:
+            i = stack.pop()
+            if i >= len(self.entries) or i in seen:
+                continue
+            seen.add(i)
+            e = self.entries[i]
+            stack.extend((e['left'], e['right']))
+            path = prefix + e['name']
+            if e['type'] == 2:
+                self.paths.setdefault(path.lower(), i)
+            elif e['type'] == 1:
+                self._walk(e['child'], path + '/')
+
+    def exists(self, name):
+        return name.lower() in self.paths
+
+    def stream(self, name):
+        """The content of a stream ("WordDocument", "ObjectPool/x/y"); KeyError when missing."""
+        e = self.entries[self.paths[name.lower()]]
+        if e['size'] < self.mini_cutoff:
+            data = self._chain(e['start'], self.minifat, self._mini_sector)
+        else:
+            data = self._chain(e['start'])
+        return data[:e['size']]
+
+
+def ole_summary(ole):
+    """Author (PID 4), last saved by (PID 8), created (PID 12) and last saved (PID 13) from the
+    SummaryInformation property set; strings and datetime objects, missing ones left out."""
+    out = {}
+    try:
+        data = ole.stream('\x05SummaryInformation')
+    except (KeyError, ValueError):
+        return out
+    try:
+        if len(data) < 48 or struct.unpack_from('<H', data, 0)[0] != 0xFFFE:
+            return out
+        base = struct.unpack_from('<I', data, 44)[0]
+        n = struct.unpack_from('<I', data, base + 4)[0]
+        props = {}
+        for i in range(min(n, 1000)):
+            pid, off = struct.unpack_from('<II', data, base + 8 + i * 8)
+            props[pid] = base + off
+        codepage = 1252
+        if 1 in props and struct.unpack_from('<I', data, props[1])[0] == 2:
+            codepage = struct.unpack_from('<H', data, props[1] + 4)[0]
+        enc = {1200: 'utf-16-le', 65001: 'utf-8'}.get(codepage, 'cp%d' % codepage)
+        for pid, key in ((4, 'author'), (8, 'last_author'), (12, 'created'), (13, 'saved')):
+            if pid not in props:
+                continue
+            p = props[pid]
+            vt = struct.unpack_from('<I', data, p)[0]
+            if (vt == 0x40) != (pid >= 12):     # times must be times, names must be text
+                continue
+            if vt == 0x1E:      # VT_LPSTR: byte count with the terminator, text in the code page
+                size = struct.unpack_from('<I', data, p + 4)[0]
+                raw = data[p + 8:p + 8 + size]
+                try:
+                    val = raw.decode(enc)
+                except (LookupError, UnicodeDecodeError):
+                    val = raw.decode('latin-1')
+                val = val.split('\0', 1)[0].strip()
+            elif vt == 0x1F:    # VT_LPWSTR: character count
+                size = struct.unpack_from('<I', data, p + 4)[0]
+                val = data[p + 8:p + 8 + size * 2].decode('utf-16-le', 'replace').split('\0', 1)[0].strip()
+            elif vt == 0x40:    # VT_FILETIME: 100 ns steps since 1601, UTC
+                ft = struct.unpack_from('<Q', data, p + 4)[0]
+                if not ft:
+                    continue
+                val = (datetime.datetime(1601, 1, 1, tzinfo=datetime.timezone.utc) +
+                       datetime.timedelta(microseconds=ft // 10)).astimezone()
+            else:
+                continue
+            if val:
+                out[key] = val
+    except (struct.error, OverflowError, ValueError):
+        pass  # a damaged property set; whatever was read stays
+    return out
+
+
+def _read_ole(path, label):
+    with open(path, 'rb') as f:
+        data = f.read()
+    try:
+        return OleFile(data)
+    except (ValueError, struct.error) as e:
+        raise ValueError(T('legacy_bad', label, e))
+
+
+# ---------------------------------------------------------------- XLS (BIFF8)
+
+def _biff_records(data, start=0):
+    """(type, body) of the BIFF records from start on."""
+    pos, n = start, len(data)
+    while pos + 4 <= n:
+        rt, size = struct.unpack_from('<HH', data, pos)
+        yield rt, data[pos + 4:pos + 4 + size]
+        pos += 4 + size
+
+
+def _biff_string(b, pos, len_bytes=2):
+    """An XLUnicodeString at pos (character count of len_bytes, flags, characters); returns (text, end)."""
+    cch = b[pos] if len_bytes == 1 else struct.unpack_from('<H', b, pos)[0]
+    pos += len_bytes
+    flags = b[pos]
+    pos += 1
+    runs = ext = 0
+    if flags & 0x8:
+        runs = struct.unpack_from('<H', b, pos)[0]
+        pos += 2
+    if flags & 0x4:
+        ext = struct.unpack_from('<I', b, pos)[0]
+        pos += 4
+    width = 2 if flags & 0x1 else 1
+    raw = b[pos:pos + cch * width]
+    text = raw.decode('utf-16-le' if width == 2 else 'latin-1', 'replace')
+    return text, pos + cch * width + runs * 4 + ext
+
+
+class _SstReader:
+    """Reads the shared strings of an SST record and its CONTINUE records. A string cut by a
+    record boundary carries on after one flag byte that says whether the rest is 1 or 2 bytes wide."""
+
+    def __init__(self, segs):
+        self.segs, self.i, self.pos = segs, 0, 0
+
+    def take(self, n):
+        out = bytearray()
+        while n > 0:
+            if self.i >= len(self.segs):
+                raise ValueError('SST ends early')
+            seg = self.segs[self.i]
+            k = min(n, len(seg) - self.pos)
+            if k <= 0:
+                self.i, self.pos = self.i + 1, 0
+                continue
+            out += seg[self.pos:self.pos + k]
+            self.pos += k
+            n -= k
+        return bytes(out)
+
+    def chars(self, cch, wide):
+        parts = []
+        while cch > 0:
+            if self.i >= len(self.segs):
+                raise ValueError('SST ends early')
+            seg = self.segs[self.i]
+            if self.pos >= len(seg):
+                self.i, self.pos = self.i + 1, 1
+                if self.i >= len(self.segs):
+                    raise ValueError('SST ends early')
+                wide = self.segs[self.i][0] & 1
+                continue
+            width = 2 if wide else 1
+            k = min(cch, (len(seg) - self.pos) // width)
+            if k <= 0:
+                raise ValueError('SST character split across records')
+            parts.append(seg[self.pos:self.pos + k * width].decode('utf-16-le' if wide else 'latin-1', 'replace'))
+            self.pos += k * width
+            cch -= k
+        return ''.join(parts)
+
+    def strings(self, count):
+        out = []
+        for _ in range(count):
+            cch, flags = struct.unpack('<HB', self.take(3))
+            runs = struct.unpack('<H', self.take(2))[0] if flags & 0x8 else 0
+            ext = struct.unpack('<I', self.take(4))[0] if flags & 0x4 else 0
+            out.append(self.chars(cch, flags & 0x1))
+            self.take(runs * 4 + ext)
+        return out
+
+
+def _rk_value(rk):
+    if rk & 2:
+        v = rk - (1 << 32) if rk & 0x80000000 else rk
+        x = float(v >> 2)
+    else:
+        x = struct.unpack('<d', struct.pack('<Q', (rk & 0xFFFFFFFC) << 32))[0]
+    return x / 100 if rk & 1 else x
+
+
+def _num_text(x):
+    if x != x or x in (float('inf'), float('-inf')):
+        return ''
+    if x.is_integer() and abs(x) < 1e15:
+        return str(int(x))
+    return repr(x)
+
+
+BIFF_ERRORS = {0x00: '#NULL!', 0x07: '#DIV/0!', 0x0F: '#VALUE!', 0x17: '#REF!', 0x1D: '#NAME?',
+               0x24: '#NUM!', 0x2A: '#N/A'}
+
+
+def parse_xls(data, report, source_name='', max_rows=2000):
+    """Parse a legacy xls (BIFF8, Excel 97 and later) from bytes or a path; returns
+    {sheet name: [[cell, ...], ...]} like parse_xlsx. Raises ValueError when it cannot be read."""
+    if not isinstance(data, bytes):
+        with open(data, 'rb') as f:
+            data = f.read()
+    try:
+        ole = OleFile(data)
+    except (ValueError, struct.error) as e:
+        raise ValueError(T('legacy_bad', 'xls', e))
+    if ole.exists('Workbook'):
+        wb = ole.stream('Workbook')
+    elif ole.exists('Book'):
+        raise ValueError(T('legacy_old', 'xls'))
+    else:
+        raise ValueError(T('legacy_bad', 'xls', 'no Workbook stream'))
+
+    sheets, formats, xf_fmt, sst_segs = [], {}, [], []
+    date1904, in_sst = False, False
+    for rt, b in _biff_records(wb):
+        if rt == 0x003C and in_sst:
+            sst_segs.append(b)
+            continue
+        in_sst = False
+        if rt == 0x002F:
+            raise ValueError(T('legacy_encrypted'))
+        if rt == 0x0809 and len(b) >= 4 and struct.unpack_from('<H', b, 0)[0] < 0x0600:
+            raise ValueError(T('legacy_old', 'xls'))
+        if rt == 0x0022 and len(b) >= 2:
+            date1904 = struct.unpack_from('<H', b, 0)[0] == 1
+        elif rt == 0x041E and len(b) >= 5:
+            formats[struct.unpack_from('<H', b, 0)[0]] = _biff_string(b, 2)[0]
+        elif rt == 0x00E0 and len(b) >= 4:
+            xf_fmt.append(struct.unpack_from('<H', b, 2)[0])
+        elif rt == 0x0085 and len(b) >= 8:
+            pos, kind = struct.unpack_from('<I', b, 0)[0], b[5]
+            if kind == 0:   # worksheets only; charts and macro sheets hold no cells
+                sheets.append((_biff_string(b, 6, 1)[0], pos))
+        elif rt == 0x00FC:
+            sst_segs, in_sst = [b], True
+        elif rt == 0x000A:
+            break
+    shared = []
+    if sst_segs and len(sst_segs[0]) >= 8:
+        count = struct.unpack_from('<I', sst_segs[0], 4)[0]
+        reader = _SstReader([sst_segs[0][8:]] + sst_segs[1:])
+        try:
+            shared = reader.strings(count)
+        except (ValueError, struct.error) as e:
+            report.warn(T('xls_sst_failed', source_name, e))
+            shared = []     # cells that refer to shared strings stay empty
+
+    def kind_of(xf):
+        fid = xf_fmt[xf] if xf < len(xf_fmt) else 0
+        return classify_numfmt(formats[fid]) if fid in formats else XLSX_BUILTIN_DATE_KIND.get(fid)
+
+    def number(x, xf):
+        kind = kind_of(xf)
+        text = excel_serial_to_text(x, kind, date1904) if kind else None
+        return text if isinstance(text, str) else _num_text(x)
+
+    result = {}
+    for sname, start in sheets:
+        cells, pending = {}, None
+        truncated = False
+        for rt, b in _biff_records(wb, start):
+            try:
+                if rt == 0x000A:
+                    break
+                if rt in (0x00FD, 0x0203, 0x027E, 0x0204, 0x00D6, 0x0205, 0x0006, 0x00BD):
+                    row, col = struct.unpack_from('<HH', b, 0)
+                    if row >= max_rows:
+                        truncated = True
+                        continue
+                if rt == 0x00FD:
+                    xf, idx = struct.unpack_from('<HI', b, 4)
+                    cells[(row, col)] = shared[idx] if idx < len(shared) else ''
+                elif rt == 0x0203:
+                    xf, x = struct.unpack_from('<Hd', b, 4)
+                    cells[(row, col)] = number(x, xf)
+                elif rt == 0x027E:
+                    xf, rk = struct.unpack_from('<HI', b, 4)
+                    cells[(row, col)] = number(_rk_value(rk), xf)
+                elif rt == 0x00BD:
+                    last = struct.unpack_from('<H', b, len(b) - 2)[0]
+                    for i in range(last - col + 1):
+                        xf, rk = struct.unpack_from('<HI', b, 4 + i * 6)
+                        cells[(row, col + i)] = number(_rk_value(rk), xf)
+                elif rt in (0x0204, 0x00D6):
+                    cells[(row, col)] = _biff_string(b, 6)[0]
+                elif rt == 0x0205:
+                    val, is_err = b[6], b[7]
+                    cells[(row, col)] = BIFF_ERRORS.get(val, '#ERR') if is_err else ('TRUE' if val else 'FALSE')
+                elif rt == 0x0006:
+                    xf = struct.unpack_from('<H', b, 4)[0]
+                    res = b[6:14]
+                    if res[6:8] == b'\xff\xff':
+                        if res[0] == 0:
+                            pending = (row, col)    # the text follows in a STRING record
+                        elif res[0] == 1:
+                            cells[(row, col)] = 'TRUE' if res[2] else 'FALSE'
+                        elif res[0] == 2:
+                            cells[(row, col)] = BIFF_ERRORS.get(res[2], '#ERR')
+                    else:
+                        cells[(row, col)] = number(struct.unpack('<d', res)[0], xf)
+                elif rt == 0x0207 and pending:
+                    cells[pending] = _biff_string(b, 0)[0]
+                    pending = None
+            except (struct.error, IndexError):
+                continue    # a short or damaged record; the cell stays empty
+        if truncated:
+            report.warn(T('xlsx_truncated', source_name, sname, max_rows))
+        by_row = {}
+        for (r, c), text in cells.items():
+            text = text.strip()
+            if text:
+                by_row.setdefault(r, {})[c] = text
+        rows = []
+        for r in sorted(by_row):
+            width = max(by_row[r]) + 1
+            rows.append([by_row[r].get(i, '') for i in range(width)])
+        if truncated:
+            rows.append([T('xlsx_truncated_row', max_rows)])
+        if rows:
+            result[sname] = rows
+    return result
+
+
+def parse_xls_file(path, outdir, report, imgdir=None, img_ref='images',
+                   save_images=True, display_name=None):
+    try:
+        sheets = parse_xls(path, report, source_name=os.path.basename(path))
+    except (struct.error, IndexError) as e:
+        raise ValueError(T('legacy_bad', 'xls', e))
+    if not sheets:
+        return '', []
+    md = ['# ' + (display_name or os.path.splitext(os.path.basename(path))[0]) + '\n']
+    for sname, rows in sheets.items():
+        md.append(T('sheet_heading', sname))
+        md.append(T('sheet_rows', len(rows)))
+        md.append(rows_to_markdown(rows))
+    report.log(T('xls_count', len(sheets)))
+    return '\n'.join(md), []
+
+
+# ---------------------------------------------------------------- DOC (Word 97 and later)
+
+def _doc_streams(ole):
+    """(WordDocument stream, table stream, file information block fields) of a Word file."""
+    try:
+        wd = ole.stream('WordDocument')
+    except KeyError:
+        raise ValueError(T('legacy_bad', 'doc', 'no WordDocument stream'))
+    if len(wd) < 0x1AA or struct.unpack_from('<H', wd, 0)[0] != 0xA5EC:
+        raise ValueError(T('legacy_bad', 'doc', 'no Word file information block'))
+    nfib, flags = struct.unpack_from('<H', wd, 2)[0], struct.unpack_from('<H', wd, 0x0A)[0]
+    if nfib < 0x00C1:
+        raise ValueError(T('legacy_old', 'doc'))
+    if flags & 0x0100:
+        raise ValueError(T('legacy_encrypted'))
+    table_name = '1Table' if flags & 0x0200 else '0Table'
+    try:
+        table = ole.stream(table_name)
+    except KeyError:
+        raise ValueError(T('legacy_bad', 'doc', 'no %s stream' % table_name))
+    pos = 32
+    csw = struct.unpack_from('<H', wd, pos)[0]
+    pos += 2 + csw * 2
+    cslw = struct.unpack_from('<H', wd, pos)[0]
+    rglw = pos + 2
+    fc_lcb = rglw + cslw * 4 + 2
+
+    def pair(i):
+        return struct.unpack_from('<II', wd, fc_lcb + i * 8)
+
+    return wd, table, {'ccp_text': struct.unpack_from('<i', wd, rglw + 3 * 4)[0],
+                       'clx': pair(33), 'bte_papx': pair(13)}
+
+
+def _doc_pieces(wd, table, fc, lcb):
+    """The piece table: [(first character position, character count, stream offset, 1 or 2 bytes)]."""
+    clx = table[fc:fc + lcb]
+    i = 0
+    while i < len(clx) and clx[i] == 0x01:      # Prc: formatting, skipped
+        i += 3 + struct.unpack_from('<h', clx, i + 1)[0]
+    if i >= len(clx) or clx[i] != 0x02:
+        raise ValueError(T('legacy_bad', 'doc', 'no piece table'))
+    lcb = struct.unpack_from('<I', clx, i + 1)[0]
+    plc = clx[i + 5:i + 5 + lcb]
+    n = (len(plc) - 4) // 12
+    cps = struct.unpack_from('<%dI' % (n + 1), plc, 0)
+    out = []
+    for k in range(n):
+        fc = struct.unpack_from('<I', plc, (n + 1) * 4 + k * 8 + 2)[0]
+        if cps[k + 1] <= cps[k]:
+            continue
+        if fc & 0x40000000:
+            out.append((cps[k], cps[k + 1] - cps[k], (fc & 0x3FFFFFFF) // 2, 1))
+        else:
+            out.append((cps[k], cps[k + 1] - cps[k], fc, 2))
+    return out
+
+
+def _sprm_size(b, pos, sprm):
+    """Operand size of a property modifier at pos (just after its two-byte code)."""
+    spra = sprm >> 13
+    if spra in (0, 1):
+        return 1
+    if spra in (2, 4, 5):
+        return 2
+    if spra == 3:
+        return 4
+    if spra == 7:
+        return 3
+    if sprm in (0xD608, 0xD606):    # table definitions: two-byte length that counts itself less one
+        return struct.unpack_from('<H', b, pos)[0] + 1
+    if sprm == 0xC615 and b[pos] == 255:    # tab changes with a long form
+        return b[pos] + 1 + b[pos + 1] * 4 + 1 + b[pos + 2 + b[pos + 1] * 4] * 3
+    return b[pos] + 1
+
+
+def _doc_table_runs(wd, table, fc, lcb):
+    """[(first stream offset, last + 1, in a table, ends a table row)] from the paragraph
+    property pages; empty when they cannot be read."""
+    runs = []
+    if lcb < 8:
+        return runs
+    plc = table[fc:fc + lcb]
+    n = (len(plc) - 4) // 8
+    for k in range(n):
+        pn = struct.unpack_from('<I', plc, (n + 1) * 4 + k * 4)[0] & 0x3FFFFF
+        page = wd[pn * 512:pn * 512 + 512]
+        if len(page) < 512:
+            continue
+        crun = page[511]
+        if (crun + 1) * 4 + crun * 13 > 511:
+            continue
+        fcs = struct.unpack_from('<%dI' % (crun + 1), page, 0)
+        for r in range(crun):
+            off = page[(crun + 1) * 4 + r * 13] * 2
+            in_table = ttp = False
+            if off:
+                cb = page[off]
+                if cb:
+                    start, size = off + 1, cb * 2 - 1
+                else:
+                    start, size = off + 2, page[off + 1] * 2
+                grp = page[start:start + size]
+                pos = 2     # after the style index
+                while pos + 2 <= len(grp):
+                    sprm = struct.unpack_from('<H', grp, pos)[0]
+                    pos += 2
+                    if pos >= len(grp):
+                        break
+                    if sprm == 0x2416:
+                        in_table = bool(grp[pos])
+                    elif sprm == 0x2417:
+                        ttp = bool(grp[pos])
+                    elif sprm == 0x6649:     # table depth
+                        in_table = in_table or struct.unpack_from('<I', grp, pos)[0] > 0
+                    try:
+                        pos += _sprm_size(grp, pos, sprm)
+                    except (IndexError, struct.error):
+                        break
+            runs.append((fcs[r], fcs[r + 1], in_table, ttp))
+    runs.sort()
+    return runs
+
+
+DOC_DROP = dict.fromkeys(map(ord, '\x00\x01\x02\x03\x04\x05\x06\x08\x1f'), None)
+DOC_DROP.update({0x0b: '\n', 0x0c: '\n', 0x0e: '\n', 0x1e: '-', 0xa0: ' '})
+
+
+def doc_paragraphs(ole):
+    """The paragraphs of the main text: (text, mark, in a table, ends a table row); mark is
+    '\\r' or the cell mark '\\x07'. Field codes are dropped, their results kept."""
+    try:
+        wd, table, fib = _doc_streams(ole)
+        pieces = _doc_pieces(wd, table, *fib['clx'])
+    except (struct.error, IndexError) as e:
+        raise ValueError(T('legacy_bad', 'doc', e))
+    try:
+        runs = _doc_table_runs(wd, table, *fib['bte_papx'])
+    except (struct.error, IndexError):
+        runs = []   # no paragraph properties: tables are rebuilt from the cell marks alone
+    starts = [r[0] for r in runs]
+
+    def flags(fc):
+        i = bisect.bisect_right(starts, fc) - 1
+        if i >= 0 and runs[i][0] <= fc < runs[i][1]:
+            return runs[i][2], runs[i][3]
+        return None
+
+    paras, buf, stack, left = [], [], [], max(fib['ccp_text'], 0)
+    for cp, count, fc, width in pieces:
+        if left <= 0:
+            break
+        count = min(count, left)
+        left -= count
+        raw = wd[fc:fc + count * width]
+        text = raw.decode('cp1252' if width == 1 else 'utf-16-le', 'replace')
+        for k, ch in enumerate(text):
+            if ch == '\x13':
+                stack.append(False)
+            elif ch == '\x14':
+                if stack:
+                    stack[-1] = True
+            elif ch == '\x15':
+                if stack:
+                    stack.pop()
+            elif ch in '\r\x07':
+                f = flags(fc + k * width) if runs else None
+                in_table, ttp = f if f else (ch == '\x07', False)
+                paras.append((''.join(buf).translate(DOC_DROP).strip(), ch, in_table, ttp))
+                buf.clear()
+            elif all(stack):
+                buf.append(ch)
+    if ''.join(buf).strip():
+        paras.append((''.join(buf).translate(DOC_DROP).strip(), '\r', False, False))
+    if not runs:    # no paragraph properties: a row ends with an empty cell mark right after another
+        paras = [(t, m, it, m == '\x07' and not t and i > 0 and paras[i - 1][1] == '\x07')
+                 for i, (t, m, it, _) in enumerate(paras)]
+    return paras
+
+
+def doc_blocks(paras):
+    """Paragraphs (str) and tables (list of rows) from doc_paragraphs()."""
+    blocks, rows, row, cell = [], [], [], []
+
+    def end_table():
+        if row:
+            rows.append(list(row))
+            row.clear()
+        if rows:
+            blocks.append(list(rows))
+            rows.clear()
+
+    for text, mark, in_table, ttp in paras:
+        if not in_table:
+            end_table()
+            if text:
+                blocks.append(text)
+        elif ttp:
+            rows.append(list(row))
+            row.clear()
+        elif mark == '\x07':
+            row.append('\n'.join(cell + [text]).strip())
+            cell.clear()
+        else:
+            cell.append(text)
+    end_table()
+    return blocks
+
+
+def parse_doc(path, outdir, report, imgdir=None, img_ref='images', save_images=True, **_):
+    """Parse a legacy Word document (Word 97 and later): paragraphs and tables, no pictures."""
+    try:
+        blocks = doc_blocks(doc_paragraphs(_read_ole(path, 'doc')))
+    except (struct.error, IndexError) as e:
+        raise ValueError(T('legacy_bad', 'doc', e))
+    md, tables = [], 0
+    for b in blocks:
+        if isinstance(b, list):
+            tables += 1
+            md.append(rows_to_markdown([[c.replace('\n', ' ') for c in r] for r in b if r]))
+        else:
+            md.append(b + '\n')
+    report.log(T('doc_log', len(blocks) - tables, tables))
+    return '\n'.join(md), []
+
+
+# ---------------------------------------------------------------- PPT (PowerPoint 97 and later)
+
+PPT_TEXT_CHARS, PPT_TEXT_BYTES = 0x0FA0, 0x0FA8
+PPT_SLIDE, PPT_SLWT, PPT_SLIDE_PERSIST, PPT_OUTLINE_REF = 0x03EE, 0x0FF0, 0x03F3, 0x0F9E
+
+
+def _ppt_records(data, start, end):
+    """(type, instance, body start, body end, is container) of the records between start and end."""
+    pos = start
+    while pos + 8 <= end:
+        vi, rt, size = struct.unpack_from('<HHI', data, pos)
+        body = pos + 8
+        stop = min(body + size, end)
+        yield rt, vi >> 4, body, stop, (vi & 0xF) == 0xF
+        pos = body + size
+
+
+def _ppt_text(data, rt, a, b):
+    raw = data[a:b]
+    text = raw.decode('utf-16-le', 'replace') if rt == PPT_TEXT_CHARS else raw.decode('latin-1')
+    return text.replace('\x0b', '\n').replace('\r', '\n')
+
+
+def _ppt_slide_items(data, a, b, out, depth=0):
+    """Text atoms and outline text references inside a slide container, in order."""
+    if depth > 30:
+        return
+    for rt, _, s, e, cont in _ppt_records(data, a, b):
+        if cont:
+            _ppt_slide_items(data, s, e, out, depth + 1)
+        elif rt in (PPT_TEXT_CHARS, PPT_TEXT_BYTES):
+            out.append(_ppt_text(data, rt, s, e))
+        elif rt == PPT_OUTLINE_REF and e - s >= 4:
+            out.append(struct.unpack_from('<i', data, s)[0])
+
+
+def _ppt_persist(data, cur):
+    """{persist id: stream offset} from the user edit chain that starts at cur (newest first)."""
+    persist, doc_ref, seen = {}, None, set()
+    while cur and cur not in seen and cur + 32 <= len(data):
+        seen.add(cur)
+        rt = struct.unpack_from('<H', data, cur + 2)[0]
+        if rt != 0x0FF5:
+            raise ValueError('no user edit record')
+        last_edit, pd_off, ref = struct.unpack_from('<III', data, cur + 16)
+        if doc_ref is None:
+            doc_ref = ref
+        size = struct.unpack_from('<I', data, pd_off + 4)[0]
+        pos, end = pd_off + 8, pd_off + 8 + size
+        while pos + 4 <= end:
+            head = struct.unpack_from('<I', data, pos)[0]
+            pid, cnt = head & 0xFFFFF, head >> 20
+            pos += 4
+            for k in range(cnt):
+                persist.setdefault(pid + k, struct.unpack_from('<I', data, pos + k * 4)[0])
+            pos += cnt * 4
+        cur = last_edit
+    return persist, doc_ref
+
+
+def ppt_slides(ole):
+    """The text of every slide in order: [[text, ...], ...]."""
+    try:
+        data = ole.stream('PowerPoint Document')
+    except KeyError:
+        raise ValueError(T('legacy_bad', 'ppt', 'no PowerPoint Document stream'))
+    if ole.exists('EncryptedSummary'):
+        raise ValueError(T('legacy_encrypted'))
+    try:
+        cu = ole.stream('Current User')
+        token, cur = struct.unpack_from('<II', cu, 12)
+    except (KeyError, struct.error):
+        token, cur = None, None
+    if token == 0xF3D1C4DF:
+        raise ValueError(T('legacy_encrypted'))
+    slides = None
+    if cur is not None:
+        try:
+            slides = _ppt_slides_by_persist(data, cur)
+        except (ValueError, struct.error, KeyError):
+            slides = None
+    if slides is None:      # no usable edit chain: slide containers in stream order
+        slides = []
+        for rt, _, s, e, cont in _ppt_records(data, 0, len(data)):
+            if rt == PPT_SLIDE and cont:
+                items = []
+                _ppt_slide_items(data, s, e, items)
+                slides.append([x for x in items if isinstance(x, str)])
+    return [[t.strip() for t in s if t.strip()] for s in slides]
+
+
+def _ppt_slides_by_persist(data, cur):
+    persist, doc_ref = _ppt_persist(data, cur)
+    doc = persist[doc_ref]
+    _, rt, size = struct.unpack_from('<HHI', data, doc)
+    if rt != 0x03E8:
+        raise ValueError('no document container')
+    order, outline = [], {}
+    for rt, inst, s, e, cont in _ppt_records(data, doc + 8, doc + 8 + size):
+        if rt != PPT_SLWT or inst != 0:
+            continue
+        ref = None
+        for art, _, a, b, _c in _ppt_records(data, s, e):
+            if art == PPT_SLIDE_PERSIST and b - a >= 4:
+                ref = struct.unpack_from('<I', data, a)[0]
+                order.append(ref)
+                outline[ref] = []
+            elif art in (PPT_TEXT_CHARS, PPT_TEXT_BYTES) and ref is not None:
+                outline[ref].append(_ppt_text(data, art, a, b))
+    slides = []
+    for ref in order:
+        texts, used = [], set()
+        off = persist.get(ref)
+        if off is not None and off + 8 <= len(data):
+            _, rt, size = struct.unpack_from('<HHI', data, off)
+            if rt == PPT_SLIDE:
+                items = []
+                _ppt_slide_items(data, off + 8, off + 8 + size, items)
+                for x in items:
+                    if isinstance(x, int):
+                        if 0 <= x < len(outline[ref]) and x not in used:
+                            used.add(x)
+                            texts.append(outline[ref][x])
+                    else:
+                        texts.append(x)
+        texts += [t for i, t in enumerate(outline[ref]) if i not in used]
+        slides.append(texts)
+    return slides
+
+
+def parse_ppt(path, outdir, report, imgdir=None, img_ref='images', save_images=True, **_):
+    """Parse a legacy PowerPoint file (PowerPoint 97 and later): the text of every slide."""
+    try:
+        slides = ppt_slides(_read_ole(path, 'ppt'))
+    except (struct.error, IndexError) as e:
+        raise ValueError(T('legacy_bad', 'ppt', e))
+    if not slides:
+        report.warn(T('pptx_no_slides'))
+        return '', []
+    report.log(T('pptx_count', len(slides)))
+    md = []
+    for n, texts in enumerate(slides, 1):
+        md.append(T('slide_heading', n))
+        lines = [ln.strip() for t in texts for ln in t.split('\n') if ln.strip()]
+        if lines:
+            md.extend('- ' + ln for ln in lines)
+        else:
+            md.append(T('slide_no_text'))
+    return '\n'.join(md), []
+
+
+# ---------------------------------------------------------------- authors
+
+CORE_CREATOR = '{http://purl.org/dc/elements/1.1/}creator'
+CORE_LAST_BY = '{http://schemas.openxmlformats.org/package/2006/metadata/core-properties}lastModifiedBy'
+
+
+def doc_authors(path):
+    """(author, last modified by) recorded in a document; '' where there is none.
+    docx / xlsx / pptx: the core properties; legacy Office (and anything else in an OLE2 file):
+    the summary information; pdf: the Author entry (needs pdfinfo); eml: the sender."""
+    try:
+        with open(path, 'rb') as f:
+            head = f.read(8)
+    except OSError:
+        return '', ''
+    ext = os.path.splitext(path)[1].lower()
+    try:
+        if head == OLE_MAGIC:
+            with open(path, 'rb') as f:
+                info = ole_summary(OleFile(f.read()))
+            return info.get('author', ''), info.get('last_author', '')
+        if head[:2] == b'PK':
+            with zipfile.ZipFile(path) as zf:
+                if 'docProps/core.xml' not in zf.namelist():
+                    return '', ''
+                root = ET.fromstring(zf.read('docProps/core.xml'))
+            vals = []
+            for tag in (CORE_CREATOR, CORE_LAST_BY):
+                el = root.find(tag)
+                vals.append((el.text or '').strip() if el is not None else '')
+            return vals[0], vals[1]
+        if ext == '.pdf' and have('pdfinfo'):
+            out = subprocess.run(['pdfinfo', path], capture_output=True,
+                                 timeout=30).stdout.decode('utf-8', 'replace')
+            for ln in out.split('\n'):
+                if ln.startswith('Author:'):
+                    return ln.split(':', 1)[1].strip(), ''
+            return '', ''
+        if ext == '.eml':
+            import email
+            with open(path, 'rb') as f:
+                m = email.message_from_binary_file(f)
+            return _decode_mime_header(m.get('From', '')).strip(), ''
+    except Exception:   # damaged files: no author rather than an error
+        log.debug('authors of %s not read', fs_text(path), exc_info=True)
+    return '', ''
+
+
 # ================================================================ PDF
 
 def have(cmd):
@@ -1999,6 +2856,14 @@ def read_doc_modified(path):
                                 break
         except (zipfile.BadZipFile, OSError, ET.ParseError):
             val = ''
+    elif ext in ('.doc', '.xls', '.ppt'):
+        try:
+            with open(path, 'rb') as f:
+                info = ole_summary(OleFile(f.read()))
+            dt = info.get('saved') or info.get('created')
+            val = dt.strftime('%Y-%m-%d %H:%M') if dt else ''
+        except (OSError, ValueError, struct.error):
+            val = ''
     elif ext == '.eml':
         try:
             import email
@@ -2068,8 +2933,8 @@ def detect_modified(path):
 
 # ================================================================ scanning
 
-SUPPORTED_EXT = ('.docx', '.pptx', '.xlsx', '.xlsm', '.pdf', '.eml')
-LEGACY_EXT = ('.doc', '.xls', '.ppt', '.msg')
+SUPPORTED_EXT = ('.docx', '.pptx', '.xlsx', '.xlsm', '.pdf', '.eml', '.doc', '.xls', '.ppt')
+LEGACY_EXT = ('.msg',)
 
 
 def _date_filter(items, since, time_basis, cache):
@@ -2569,6 +3434,12 @@ def convert(src, ext, md_dir, report, inline_excel=True, imgdir=None, img_ref='i
     if ext == '.eml':
         return parse_eml(src, md_dir, report, inline_excel=inline_excel,
                          imgdir=imgdir, img_ref=img_ref, save_images=save_images)
+    if ext == '.xls':
+        return parse_xls_file(src, md_dir, report)
+    if ext == '.doc':
+        return parse_doc(src, md_dir, report)
+    if ext == '.ppt':
+        return parse_ppt(src, md_dir, report)
     if ext == '.pdf':
         md, manifest = parse_pdf(src, md_dir, report, imgdir=imgdir, img_ref=img_ref,
                                  save_images=save_images)

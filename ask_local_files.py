@@ -9,30 +9,40 @@ ask_local_files  --  找文件问 AI
 
 功能:
     - 找文件：只索引使用者添加的文件夹，按文件名和路径匹配，多个关键字空格分开、全部命中，
-      可按扩展名筛选。全部路径拼成一个字符串在内存里查找；索引缓存在
+      可按扩展名筛选，也可按文件夹逐层浏览。全部路径拼成一个字符串在内存里查找；索引缓存在
       ~/.cache/ask-local-files/index.json，启动即可搜索，后台只重扫修改时间变了的文件夹。
-    - 取文字：txt、md、csv 等纯文本直接读取；docx、xlsx、pptx、eml、pdf 用同目录的
-      doc2kb_core.py 转换（pdf 需要 pdftotext）。取出的文字只留在内存里。
+    - 取文字：txt、md、csv 等纯文本直接读取；docx、xlsx、pptx、eml、pdf 和旧版 doc、xls、ppt
+      （wps、et、dps 按同类格式试读）用同目录的 doc2kb_core.py 转换（pdf 需要 pdftotext）。
+      文字开头加上文件的路径、文件名、修改时间和作者。取出的文字只留在内存里。
+    - 读不了的文件（压缩包等）在列表里给「打开文件夹」，用 xdg-open 或 gio 打开所在文件夹。
     - 问 AI：把选中文件的文字和对话发给 OpenAI 兼容的 /chat/completions 接口，流式返回。
       指令要求每个结论附原文摘句、文件里没有的写明未找到；回答结束后核对摘句是否真在原文里。
       接口地址、模型和 AK 先读 OpenCode 配置（~/.config/opencode/opencode.json[c]），
       没有时用本工具设置里填的（~/.config/ask-local-files/config.json，权限 600）。AK 不发给页面，
       不写日志。
+    - skill：可选一个 OpenCode 格式的 skill（工具目录 skills/ 里预装的，或 ~/.config/opencode/skills/
+      里自建的），正文并进系统消息；模型可用函数调用读 skill 目录里的文件、运行其中的 .py/.sh 脚本
+      （自动运行，单次 60 秒，每问最多 5 次），脚本写进临时输出目录的文件可在页面上保存。
+    - 文件夹输入框接受 file:/// 地址；可由本机服务弹出系统的目录选择框（zenity、kdialog 或 tkinter）。
+    - 按文件名去重：同名（不区分大小写，去掉一个副本标记后相同也算）只列修改时间最新的一个。
 
 用法:
-    python3 ask_local_files.py [--no-browser] [--log-level LEVEL]
+    python3 ask_local_files.py [--no-browser] [--no-app] [--log-level LEVEL]
 """
 
 import argparse
 import bisect
 import hmac
+import importlib.util
 import json
 import logging
 import os
 import re
 import secrets
+import select
 import shlex
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -49,7 +59,7 @@ from urllib.parse import parse_qs, urlsplit
 LOG_FORMAT = '%(asctime)s [%(levelname)s] %(name)s.%(funcName)s:%(lineno)d - %(message)s'
 log = logging.getLogger('ask_local_files')
 
-VERSION = '1.5'
+VERSION = '1.15'
 HERE = os.path.dirname(os.path.abspath(__file__))
 PAGE_FILE = os.path.join(HERE, 'ask_local_files.html')
 LOG_NAME = 'ask_local_files.log'
@@ -59,6 +69,10 @@ XDG_CACHE = os.environ.get('XDG_CACHE_HOME') or os.path.join(HOME, '.cache')
 CONFIG_FILE = os.path.join(XDG_CONFIG, 'ask-local-files', 'config.json')
 CACHE_FILE = os.path.join(XDG_CACHE, 'ask-local-files', 'index.json')
 OPENCODE_DIR = os.path.join(XDG_CONFIG, 'opencode')
+USER_SKILLS = os.path.join(OPENCODE_DIR, 'skills')
+BUNDLED_SKILLS = os.path.join(HERE, 'skills')
+DOCX_SCRIPT = os.path.join(HERE, 'skills', 'office-gen', 'scripts', 'make_docx.py')   # 「保存为 Word」借用
+DOCX_TYPE = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
 
 PING_TIMEOUT = 600      # 页面停止心跳多少秒后视为已关闭（浏览器未发出关页通知时兜底）
 OPEN_TIMEOUT = 120      # 页面始终未打开时多少秒退出
@@ -67,7 +81,8 @@ MAX_BODY = 8 * 1024 * 1024
 CHECK_EVERY = 30        # 搜索时至多每多少秒校验一次文件夹变化
 PUBLISH_EVERY = 2.0     # 首次扫描时每多少秒放出一次部分结果
 RESULT_LIMIT = 300
-MAX_FILES = 20          # 一次最多选几个文件
+MAX_FILES = 50          # 一次最多选几个文件
+TREE_SHOWN = MAX_FILES * 2 + 1      # 浏览时交给页面的「全部加入」候选最多几个
 DEFAULT_CHAR_LIMIT = 100000
 PREVIEW_CHARS = 20000
 UNREADABLE_SHOWN = 5    # 状态里最多列出几个读不了的文件夹
@@ -77,15 +92,44 @@ PLACES = (('家目录', ('',)), ('文档', ('文档', 'Documents')), ('桌面', 
 MAX_TEXT_BYTES = 20 * 1024 * 1024   # 纯文本文件最多读这么多字节
 TIMEOUT = 120           # 模型接口最多静默多少秒
 TEST_TIMEOUT = 30       # 测试连接最多等多少秒
+SKILL_MAX_CHARS = 50000     # SKILL.md 超过这么多字不可选
+SKILL_LIST_MAX = 100        # 每个 skill 最多列出几个脚本、几个参考文件
+SCRIPT_TIMEOUT = 60         # skill 脚本单次最多运行多少秒
+MAX_TOOL_CALLS = 5          # 每个问题最多调用几次工具
+TOOL_OUTPUT_CHARS = 20000   # 工具结果最多交给模型多少字
+MAX_OUTPUT_FILES = 20       # 每次运行最多列出几个输出文件
+MAX_WRITE_CALLS = 10        # 每个问题最多写几次工作目录文件，不计入 MAX_TOOL_CALLS
+MAX_WORK_CHARS = 500000     # 工作目录里单个文件最多多少字
+WRITE_TOOL = 'write_work_file'
+SCRIPT_EXT = {'.py', '.sh'}
+# 预装 skill 在页面上显示的中文名；SKILL.md 的 name 不变，自建 skill 显示原名
+BUNDLED_LABELS = {'doc-compare': '文档对比', 'summarize-meeting': '会议纪要', 'office-gen': '生成 Word 与 Excel',
+                  'prompt-optimize': '提示词优化', 'clarify-needs': '需求澄清'}
+EMPTY_ASK = '请按所选 skill 的说明处理已选文件。'   # 选了 skill、没写问题时代为提问
+SKILL_META_FILES = {'skill.md', 'upstream.md'}   # 不算参考文件；另有 LICENSE*
 SKIP_DIRS = {'node_modules', '__pycache__', '$RECYCLE.BIN', 'System Volume Information', 'lost+found'}
 TEXT_EXT = {'.txt', '.md', '.markdown', '.csv', '.tsv', '.log', '.json', '.xml', '.yaml', '.yml', '.ini',
             '.conf', '.cfg', '.toml', '.sql', '.py', '.sh', '.js', '.ts', '.java', '.c', '.h', '.cpp',
             '.go', '.rs', '.css', '.srt', '.rst', '.tex'}
 HTML_EXT = {'.html', '.htm'}
 DOC2KB_EXT = {'.docx', '.pptx', '.xlsx', '.xlsm', '.eml', '.pdf'}
-OLD_OFFICE = {'.doc', '.xls', '.ppt', '.wps', '.et', '.dps'}
+OLD_OFFICE = {'.doc', '.xls', '.ppt', '.wps', '.et', '.dps'}     # 旧版 Office 与 WPS 格式
+# 旧版 Office 与 WPS 格式按哪种格式交给 doc2kb_core 解析
+OLD_OFFICE_AS = {'.doc': '.doc', '.xls': '.xls', '.ppt': '.ppt', '.wps': '.doc', '.et': '.xls', '.dps': '.ppt'}
+ARCHIVE_EXT = {'.zip', '.rar', '.7z', '.tar', '.gz', '.tgz', '.bz2', '.tbz2', '.xz', '.txz', '.zst', '.lz', '.cab'}
+ARCHIVE_REASON = '压缩包请先解压，再加入解压出的文件'
+OPENERS = (('xdg-open',), ('gio', 'open'))     # 打开文件夹用的命令，按顺序取第一个找得到的
+FILE_URL_ERROR = '只支持本机 file:/// 地址。请改用以 / 开头的路径'
+# 副本标记：扩展名前的「 (2)」「（2）」「 - 副本」「_副本」「 copy」「 (copy)」等，标记后可再带序号；
+# 页面上的 sameNameKey 用同一个正则，两边须一致（tests/same_name_cases.json）
+COPY_NUM = r' ?(?:\([0-9]+\)|（[0-9]+）)'
+COPY_MARK_RE = re.compile(r'^(.+?)(?:' + COPY_NUM + r'|(?: - 副本|-副本|_副本| \(副本\)|副本| - copy| \(copy\)| copy)(?:'
+                          + COPY_NUM + r')?)$')
 NO_MODEL = '没有可用的模型：OpenCode 配置里找不到带接口地址和 AK 的模型，请在「模型设置」里填写自定义接口'
 MISSING_FILE = '文件已不存在或不在已添加的文件夹里，请点「刷新」后重新搜索'
+# 能以应用窗口模式（--app=网址，不显示地址栏）打开的 Chromium 系浏览器，按顺序取第一个找得到的
+APP_BROWSERS = ('chromium', 'chromium-browser', 'google-chrome', 'google-chrome-stable',
+                'microsoft-edge', 'microsoft-edge-stable', 'brave-browser')
 
 try:
     import doc2kb_core
@@ -129,13 +173,17 @@ class Config:
         custom = data.get('custom') if isinstance(data.get('custom'), dict) else {}
         self.custom = {k: str(custom.get(k) or '') for k in ('base', 'model', 'key')}
         self.model = str(data.get('model') or '')
+        self.dedup = data.get('dedup') is not False     # 按文件名去重，默认开
+        self.regex = data.get('regex') is True          # 搜索框按正则表达式，默认关
 
     def save(self):
-        write_private(self.path, {'folders': self.folders, 'char_limit': self.char_limit,
+        write_private(self.path, {'folders': self.folders, 'char_limit': self.char_limit, 'dedup': self.dedup,
+                                  'regex': self.regex,
                                   'custom': self.custom, 'model': self.model})
 
     def public(self):
-        return {'folders': list(self.folders), 'char_limit': self.char_limit, 'model': self.model,
+        return {'folders': list(self.folders), 'char_limit': self.char_limit, 'model': self.model, 'dedup': self.dedup,
+                'regex': self.regex,
                 'custom': {'base': self.custom['base'], 'model': self.custom['model'],
                            'has_key': bool(self.custom['key'])},
                 }
@@ -143,9 +191,29 @@ class Config:
 
 
 
-def norm_folder(value):
-    """文件夹须为绝对路径或 ~/ 开头且存在；返回规范化的绝对路径，不合法时抛 ValueError。"""
+def local_path(value, strip_slash=True):
+    """去掉首尾空白与成对引号，把 file:/// 地址转成普通路径（还原 %XX 转义，按 UTF-8），其他写法原样返回。
+    file:// 后带主机名（含 localhost）或转义不合法时抛 ValueError。"""
     value = (value or '').strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in '"\'':
+        value = value[1:-1].strip()
+    if not value[:5].lower() == 'file:':
+        return value
+    rest = value[7:] if value[:8].lower() == 'file:///' else ''
+    if not rest or re.search(r'%(?![0-9A-Fa-f]{2})', rest):
+        raise ValueError(FILE_URL_ERROR)
+    try:
+        path = urllib.parse.unquote(rest, errors='strict')
+    except UnicodeDecodeError:
+        raise ValueError(FILE_URL_ERROR)
+    if '\0' in path:
+        raise ValueError(FILE_URL_ERROR)
+    return (path.rstrip('/') or '/') if strip_slash else path
+
+
+def norm_folder(value):
+    """文件夹须为绝对路径、~/ 开头或 file:/// 地址且存在；返回规范化的绝对路径，不合法时抛 ValueError。"""
+    value = local_path(value)
     if value.startswith('~'):
         value = os.path.expanduser(value)
     if not value or not os.path.isabs(value):
@@ -158,8 +226,11 @@ def norm_folder(value):
 
 def list_dirs(prefix):
     """路径补全：列出 prefix 所在文件夹里以其末段开头的子文件夹（跳过以 . 开头的）。
-    prefix 以 ~ 开头时结果也写成 ~ 开头。"""
-    prefix = (prefix or '').strip()
+    prefix 以 ~ 开头时结果也写成 ~ 开头；file:/// 地址的结果写成普通绝对路径。"""
+    try:
+        prefix = local_path(prefix, strip_slash=False)
+    except ValueError:
+        return []
     tilde = prefix.startswith('~')
     full = os.path.expanduser(prefix) if tilde else prefix
     if not full or not os.path.isabs(full):
@@ -177,6 +248,15 @@ def list_dirs(prefix):
     out = [os.path.join(parent, n) for n in names[:DIRS_SHOWN]]
     home = HOME.rstrip(os.sep) + os.sep
     return ['~/' + p[len(home):] if tilde and p.startswith(home) else p for p in out]
+
+
+def start_dir(value):
+    """目录选择框的初始位置：输入框里是存在的文件夹（含 ~/ 与 file:/// 写法）时用它，否则用家目录。"""
+    try:
+        path = os.path.expanduser(local_path(value))
+    except ValueError:
+        return HOME
+    return os.path.normpath(path) if os.path.isabs(path) and os.path.isdir(path) else HOME
 
 
 def common_places():
@@ -205,10 +285,13 @@ class Snapshot:
             self.starts.append(pos)
             pos += len(line) + 1
 
-    def search(self, words, exts, limit=RESULT_LIMIT):
-        """(命中条目, 命中总数)。没有关键字时按扩展名列出最近修改的文件。"""
+    def search(self, words, exts, limit=RESULT_LIMIT, regex=None):
+        """(命中条目, 命中总数)。没有关键字时按扩展名列出最近修改的文件。
+        给了 regex（已编译的正则）时不用 words，逐行对显示路径 re.search。"""
         words = [w.lower() for w in words if w]
-        if words:
+        if regex is not None:
+            pool = (e for e in self.entries if regex.search(e[1]))
+        elif words:
             anchor = max(words, key=len)
             others = [w for w in words if w is not anchor]
             hits, pos, blob = [], 0, self.blob
@@ -233,6 +316,23 @@ class Snapshot:
             if len(out) < limit:
                 out.append(e)
         return out, total
+
+    def browse(self, folder):
+        """folder 这一层：(子文件夹 {名称: 含各层文件数}, 本层全部文件, 含子文件夹的全部条目)。
+        条目沿用按修改时间倒序。"""
+        prefix = folder.rstrip(os.sep) + os.sep
+        subs, files, tree = {}, [], []
+        for e in self.entries:
+            if not e[0].startswith(prefix):
+                continue
+            tree.append(e)
+            rest = e[0][len(prefix):]
+            if os.sep in rest:
+                name = rest.split(os.sep, 1)[0]
+                subs[name] = subs.get(name, 0) + 1
+            else:
+                files.append(e)
+        return subs, files, tree
 
 
 class FileIndex:
@@ -376,21 +476,53 @@ class FileIndex:
             return None
         return [mtime, files, subs]
 
-    def search(self, query, exts):
+    def search(self, query, exts, regex=False):
+        """regex 时整个 query 作为一个不区分大小写的正则，写错时抛 re.error。"""
         self.maybe_refresh()
         words = query.split()
+        pattern = re.compile(query.strip(), re.IGNORECASE) if regex and query.strip() else None
         exts = {x.lower().lstrip('.') for x in re.split(r'[\s,，、;；]+', exts or '') if x.strip('. ')}
-        found, total = self.snap.search(words, exts)
+        found, total = self.snap.search(words, exts, regex=pattern)
         reasons = {}
-        out = []
-        for e in found:
-            ext = os.path.splitext(e[0])[1].lower()
-            if ext not in reasons:
-                reasons[ext] = unsupported_reason(ext)
-            out.append({'path': e[0], 'name': os.path.basename(e[0]), 'rel': e[1], 'size': e[2],
-                        'mtime': time.strftime('%Y-%m-%d %H:%M', time.localtime(e[3])),
-                        'supported': not reasons[ext], 'reason': reasons[ext]})
-        return {'results': out, 'total': total, 'status': self.status()}
+        return {'results': [entry_public(e, reasons) for e in found], 'total': total, 'status': self.status()}
+
+    def browse(self, folder, dedup=False):
+        """按文件夹逐层浏览。folder 为空时列出已添加的文件夹；否则须是已添加的文件夹或其中的子文件夹。
+        dedup 时本层文件与含子文件夹的清单各自按文件名去重（含子文件夹时跨层），每个文件带其余同名文件 dups。
+        tree 为「全部加入」用的可读文件，最多 TREE_SHOWN 个：已选最多 MAX_FILES 个，扣掉已选的同名后
+        仍能判断能否全部加入、算出个数。"""
+        self.maybe_refresh()
+        snap, roots = self.snap, list(self.config.folders)
+        folder = os.path.normpath(folder) if folder else ''
+        if not folder:
+            dirs = [{'path': r, 'name': r, 'files': len(snap.browse(r)[2])} for r in roots]
+            return {'dir': '', 'crumbs': [], 'dirs': dirs, 'files': [], 'here': 0, 'here_dedup': 0, 'tree': [],
+                    'tree_total': 0, 'dedup': dedup, 'status': self.status()}
+        root = next((r for r in roots if folder == r or folder.startswith(r.rstrip(os.sep) + os.sep)), None)
+        if not root:
+            return {'error': '这个文件夹不在已添加的文件夹里，请回到「全部」重新选择', 'status': self.status()}
+        crumbs = [{'path': root, 'name': os.path.basename(root.rstrip(os.sep)) or root}]
+        cur = root
+        for part in os.path.relpath(folder, root).split(os.sep):
+            if part != '.':
+                cur = os.path.join(cur, part)
+                crumbs.append({'path': cur, 'name': part})
+        subs, files, tree = snap.browse(folder)
+        reasons = {}
+        layer = dedup_entries(files) if dedup else [(e, []) for e in files]
+        kept = [e for e, _ in dedup_entries(tree)] if dedup else tree
+        readable = [e for e in kept if not reason_of(e[0], reasons)]
+        shown = []
+        for e, others in layer[:RESULT_LIMIT]:
+            item = entry_public(e, reasons)
+            if others:
+                item['dups'] = [entry_public(o, reasons) for o in others[:RESULT_LIMIT]]
+            shown.append(item)
+        return {'dir': folder, 'crumbs': crumbs,
+                'dirs': [{'path': os.path.join(folder, n), 'name': n, 'files': subs[n]} for n in sorted(subs)],
+                'files': shown, 'here': len(files), 'here_dedup': len(layer), 'dedup': dedup,
+                'tree': [entry_public(e, reasons) for e in readable[:TREE_SHOWN]], 'tree_total': len(readable),
+                'status': self.status()}
 
     def contains(self, path):
         """路径须在某个已添加的文件夹里（按真实路径判断，链接出去的不算）。"""
@@ -400,6 +532,42 @@ class FileIndex:
             if real == r or real.startswith(r.rstrip(os.sep) + os.sep):
                 return True
         return False
+
+
+def same_name_key(name):
+    """同名判断用的键：不区分大小写，扩展名不同不算同名，去掉扩展名前的一个副本标记。"""
+    stem, ext = os.path.splitext(name.lower())
+    m = COPY_MARK_RE.match(stem)
+    return (m.group(1) if m else stem) + ext
+
+
+def dedup_entries(entries):
+    """按文件名分组，每组留修改时间最新的一个（相同时取路径较短的），返回 [(留下的条目, 其余同名条目)]：
+    按留下的条目在 entries 里的顺序排列，其余的按修改时间倒序。"""
+    groups = {}
+    for i, e in enumerate(entries):
+        groups.setdefault(same_name_key(os.path.basename(e[0])), []).append((i, e))
+    out = []
+    for g in groups.values():
+        g.sort(key=lambda x: (-x[1][3], len(x[1][0]), x[1][0]))
+        out.append((g[0][0], g[0][1], [e for _, e in g[1:]]))
+    out.sort(key=lambda x: x[0])
+    return [(e, others) for _, e, others in out]
+
+
+def reason_of(path, reasons):
+    ext = os.path.splitext(path)[1].lower()
+    if ext not in reasons:
+        reasons[ext] = unsupported_reason(ext)
+    return reasons[ext]
+
+
+def entry_public(e, reasons):
+    """索引条目转成页面用的字典；reasons 缓存各扩展名读不了的原因。"""
+    reason = reason_of(e[0], reasons)
+    return {'path': e[0], 'name': os.path.basename(e[0]), 'rel': e[1], 'size': e[2],
+            'mtime': time.strftime('%Y-%m-%d %H:%M', time.localtime(e[3])), 'ts': e[3],
+            'supported': not reason, 'reason': reason}
 
 
 # ---------------------------------------------------------------- 取文字
@@ -430,9 +598,9 @@ def html_text(html):
 
 def unsupported_reason(ext):
     """按扩展名判断读不了的原因；读得了（或要读了才知道）时返回空字符串。"""
-    if ext in OLD_OFFICE:
-        return '不支持旧版 %s 格式，请先另存为 docx、xlsx 或 pptx' % ext
-    if ext in DOC2KB_EXT and doc2kb_core is None:
+    if ext in ARCHIVE_EXT:
+        return ARCHIVE_REASON
+    if (ext in DOC2KB_EXT or ext in OLD_OFFICE_AS) and doc2kb_core is None:
         return '缺少同目录的 doc2kb_core.py，无法读取 %s' % ext
     if ext == '.pdf' and not shutil.which('pdftotext'):
         return '读取 pdf 需要 pdftotext（poppler-utils），本机没有安装'
@@ -457,14 +625,36 @@ def extract(path):
         if not md.strip():
             raise ValueError('没有取出文字（可能是扫描件或图片），请换用能复制文字的版本')
         return md, ''
+    if ext in OLD_OFFICE_AS:
+        report = doc2kb_core.Report()
+        try:
+            with tempfile.TemporaryDirectory(prefix='ask-local-files-') as tmp:
+                md, _ = doc2kb_core.convert(path, OLD_OFFICE_AS[ext], tmp, report, save_images=False)
+        except Exception as e:      # 解析器对损坏或不兼容的文件可能抛出任何异常
+            raise ValueError('读取失败：%s。请先另存为 docx、xlsx 或 pptx' % (str(e) or e.__class__.__name__))
+        if not md.strip():
+            raise ValueError('没有取出文字，请先另存为 docx、xlsx 或 pptx 再试')
+        return md, ''
     try:
         return read_text_file(path)
     except ValueError:
         raise ValueError('不支持 %s 格式，请转成 txt、docx、pdf 等支持的格式' % (ext or '无扩展名'))
 
 
+def file_info(path, st):
+    """放在取出的文字开头的文件信息：路径、文件名、修改时间、作者（取不到的省略）。"""
+    lines = ['路径：' + path, '文件名：' + os.path.basename(path),
+             '修改时间：' + time.strftime('%Y-%m-%d %H:%M', time.localtime(st.st_mtime))]
+    author, last = doc2kb_core.doc_authors(path) if doc2kb_core else ('', '')
+    if author or last:
+        lines.append('作者：' + (author or last))
+        if author and last and last != author:
+            lines.append('最后修改者：' + last)
+    return '\n'.join(lines) + '\n\n'
+
+
 class TextCache:
-    """取出的文字只放内存，按路径、大小、修改时间失效。"""
+    """取出的文字只放内存，按路径、大小、修改时间失效。文字开头带 file_info() 的文件信息。"""
 
     def __init__(self):
         self.lock = threading.Lock()
@@ -478,9 +668,267 @@ class TextCache:
             if hit and hit[0] == key:
                 return hit[1], hit[2]
         text, note = extract(path)
+        text = file_info(path, st) + text
         with self.lock:
             self.items[path] = (key, text, note)
         return text, note
+
+
+# ---------------------------------------------------------------- skill
+
+def parse_front_matter(text):
+    """拆出 SKILL.md 开头 --- 之间的前置信息（只认 key: value、带引号的值与 > | 多行值），返回 (字典, 正文)。"""
+    lines = text.lstrip('﻿').split('\n')
+    if not lines or lines[0].strip() != '---':
+        return {}, text
+    meta, key, block = {}, None, []
+    for i, line in enumerate(lines[1:], 1):
+        if line.strip() == '---':
+            if key is not None:
+                meta[key] = ' '.join(block).strip()
+            return meta, '\n'.join(lines[i + 1:]).strip()
+        m = re.match(r'^([A-Za-z_][\w-]*):\s*(.*)$', line)
+        if m and not line[0].isspace():
+            if key is not None:
+                meta[key] = ' '.join(block).strip()
+            key, value = m.group(1).lower(), m.group(2).strip()
+            if value in ('>', '|', '>-', '|-'):
+                block = []
+            else:
+                if len(value) >= 2 and value[0] == value[-1] and value[0] in '"\'':
+                    value = value[1:-1]
+                meta[key], key, block = value, None, []
+        elif key is not None:
+            block.append(line.strip())
+    return {}, text
+
+
+def skill_files(d):
+    """skill 目录里的 (脚本, 参考文件)，相对路径；跳过隐藏文件、SKILL.md、UPSTREAM.md 与许可文件。"""
+    scripts, refs = [], []
+    for root, dirs, names in os.walk(d):
+        dirs[:] = sorted(x for x in dirs if not x.startswith('.') and x not in SKIP_DIRS)
+        for n in sorted(names):
+            low = n.lower()
+            if n.startswith('.') or low.endswith('.pyc'):
+                continue
+            rel = os.path.relpath(os.path.join(root, n), d)
+            if rel.lower() in SKILL_META_FILES or (root == d and low.startswith(('license', 'licence'))):
+                continue
+            (scripts if os.path.splitext(low)[1] in SCRIPT_EXT else refs).append(rel)
+    return scripts[:SKILL_LIST_MAX], refs[:SKILL_LIST_MAX]
+
+
+def load_skills(dirs=None):
+    """读取各来源的 skill，返回 ({名称: skill}, [跳过的原因])；后面的来源同名覆盖前面的。"""
+    dirs = dirs or ((BUNDLED_SKILLS, 'bundled'), (USER_SKILLS, 'user'))
+    skills, problems = {}, []
+    for base, source in dirs:
+        try:
+            names = sorted(os.listdir(base))
+        except OSError:
+            continue
+        for n in names:
+            d = os.path.join(base, n)
+            md = os.path.join(d, 'SKILL.md')
+            if n.startswith('.') or not os.path.isfile(md):
+                continue
+            try:
+                with open(md, encoding='utf-8-sig') as f:
+                    text = f.read(SKILL_MAX_CHARS * 4 + 1)
+            except (OSError, UnicodeDecodeError) as e:
+                problems.append('%s：读不了 SKILL.md（%s）' % (d, e))
+                continue
+            meta, body = parse_front_matter(text)
+            name, desc = meta.get('name', '').strip(), meta.get('description', '').strip()
+            if not name or not desc:
+                problems.append('%s：SKILL.md 开头缺少 name 或 description' % d)
+                continue
+            scripts, refs = skill_files(d)
+            skills[name] = {'name': name, 'description': desc, 'dir': os.path.realpath(d), 'source': source,
+                            'body': body, 'scripts': scripts, 'refs': refs,
+                            'too_long': len(body) > SKILL_MAX_CHARS}
+    for p in problems:
+        log.info('skill skipped: %s', p)
+    return skills, problems
+
+
+def skill_label(skill):
+    return BUNDLED_LABELS.get(skill['name'], skill['name']) if skill['source'] == 'bundled' else skill['name']
+
+
+def skills_public(skills):
+    return [{'name': s['name'], 'label': skill_label(s), 'description': s['description'], 'source': s['source'],
+             'chars': len(s['body']),
+             'scripts': len(s['scripts']), 'refs': len(s['refs']), 'too_long': s['too_long']}
+            for s in sorted(skills.values(), key=lambda s: (s['source'] != 'bundled', s['name']))]
+
+
+def skill_tools(skill):
+    """skill 有脚本或参考文件时给模型的函数定义；都没有时返回 None（仅指令）。"""
+    tools = []
+    if skill['refs'] or skill['scripts']:
+        tools.append({'type': 'function', 'function': {
+            'name': 'read_skill_file',
+            'description': '读取 skill 目录里的文件（相对路径），如参考资料、范例、脚本源码。可读的参考文件：'
+                           + ('、'.join(skill['refs']) or '无'),
+            'parameters': {'type': 'object', 'properties': {'path': {'type': 'string', 'description': '相对路径'}},
+                           'required': ['path']}}})
+    if skill['scripts']:
+        tools.append({'type': 'function', 'function': {
+            'name': 'run_script',
+            'description': '运行 skill 目录里的脚本（.py 用 Python 3，.sh 用 bash），参数逐个给出，不经 shell。'
+                           '脚本从环境变量拿到：ASK_FILES 已选文件的绝对路径（换行分隔），ASK_ROOTS 使用者添加的文件夹，'
+                           'ASK_OUT 输出目录（写进去的文件使用者可以保存），ASK_WORK 本问的工作目录'
+                           '（' + WRITE_TOOL + ' 写入的文件在这里）。限时 %d 秒。可用脚本：%s'
+                           % (SCRIPT_TIMEOUT, '、'.join(skill['scripts'])),
+            'parameters': {'type': 'object', 'properties': {
+                'script': {'type': 'string', 'description': '脚本的相对路径'},
+                'args': {'type': 'array', 'items': {'type': 'string'}, 'description': '命令行参数'}},
+                'required': ['script']}}})
+        tools.append({'type': 'function', 'function': {
+            'name': WRITE_TOOL,
+            'description': '把文字写进本问的工作目录（脚本从环境变量 ASK_WORK 拿到该目录），供随后运行的脚本读取，'
+                           '如要转成 Word 的 Markdown、要转成 Excel 的 JSON。脚本参数里直接写文件名即可。'
+                           '同名文件默认覆盖；append 为 true 时接在原内容后面，用于分几次写长内容。'
+                           '单个文件最多 %d 字，每个问题最多写 %d 次。工作目录在回答结束后删除，使用者看不到也不能保存，'
+                           '要给使用者的文件须由脚本写进 ASK_OUT。' % (MAX_WORK_CHARS, MAX_WRITE_CALLS),
+            'parameters': {'type': 'object', 'properties': {
+                'path': {'type': 'string', 'description': '工作目录内的相对路径，如 报告.md'},
+                'content': {'type': 'string', 'description': '要写入的文字'},
+                'append': {'type': 'boolean', 'description': '为 true 时追加到已有内容后面，默认覆盖'}},
+                'required': ['path', 'content']}}})
+    return tools or None
+
+
+def inside(base, rel):
+    """rel 为 base 内的相对路径时返回其绝对路径（解析链接后仍在 base 内），否则抛 ValueError。"""
+    if not isinstance(rel, str) or not rel.strip() or os.path.isabs(rel) or '\0' in rel:
+        raise ValueError('路径须为 skill 目录内的相对路径')
+    path = os.path.realpath(os.path.join(base, rel.strip()))
+    if not path.startswith(base.rstrip(os.sep) + os.sep):
+        raise ValueError('路径超出 skill 目录：%s' % rel)
+    if not os.path.isfile(path):
+        raise ValueError('skill 目录里没有这个文件：%s' % rel)
+    return path
+
+
+def write_work_file(work, rel, content, append=False):
+    """把文字写进工作目录，返回 (相对路径, 本次字数, 写后总字数)；不合法时抛 ValueError。"""
+    if not isinstance(rel, str) or not rel.strip() or os.path.isabs(rel.strip()) or '\0' in rel:
+        raise ValueError('path 须为工作目录内的相对路径')
+    if not isinstance(content, str) or '\0' in content:
+        raise ValueError('content 须为文字，不能含空字符')
+    rel = os.path.normpath(rel.strip())
+    base = os.path.realpath(work)
+    path = os.path.join(base, rel)
+    under = lambda p: os.path.realpath(p).startswith(base + os.sep)
+    # 建目录前后各查一次：已有的链接不能把写入带出工作目录
+    if rel == '.' or rel.split(os.sep)[0] == '..' or not under(path):
+        raise ValueError('路径超出工作目录：%s' % rel)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    if not under(path) or os.path.islink(path) or os.path.isdir(path):
+        raise ValueError('不能写入：%s' % rel)
+    old = 0
+    if append and os.path.isfile(path):
+        with open(path, encoding='utf-8', errors='replace') as f:
+            old = len(f.read())
+    total = old + len(content)
+    if total > MAX_WORK_CHARS:
+        raise ValueError('单个文件最多 %d 字，写入后会有 %d 字；请拆成几个文件分别生成' % (MAX_WORK_CHARS, total))
+    with open(path, 'a' if append else 'w', encoding='utf-8') as f:
+        f.write(content)
+    return rel, len(content), total
+
+
+_docx = []
+
+
+def markdown_docx(markdown, title=''):
+    """用预装 office-gen 的 make_docx.py 把 Markdown 转成 docx 字节；找不到脚本时抛 OSError。"""
+    if not _docx:
+        spec = importlib.util.spec_from_file_location('make_docx', DOCX_SCRIPT)
+        if spec is None or not os.path.isfile(DOCX_SCRIPT):
+            raise OSError('找不到 %s' % os.path.relpath(DOCX_SCRIPT, HERE))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _docx.append(mod)
+    return _docx[0].build_docx(markdown, title)[0]
+
+
+def clip(text, limit=TOOL_OUTPUT_CHARS):
+    if len(text) <= limit:
+        return text
+    return text[:limit] + '\n……（共 %d 字，以下已截断）' % len(text)
+
+
+def read_skill_file(skill, rel):
+    path = inside(skill['dir'], rel)
+    text, note = read_text_file(path)
+    return clip(text) + ('\n（%s）' % note if note else '')
+
+
+def run_skill_script(skill, rel, args, env_extra, out_dir, gone=lambda: False, timeout=SCRIPT_TIMEOUT):
+    """运行 skill 目录里的脚本，返回 {'exit', 'output', 'timed_out', 'stopped'}；参数不合法时抛 ValueError。"""
+    path = inside(skill['dir'], rel)
+    ext = os.path.splitext(path)[1].lower()
+    if ext not in SCRIPT_EXT:
+        raise ValueError('只能运行 .py 或 .sh 脚本：%s' % rel)
+    if args is None:
+        args = []
+    if not isinstance(args, list) or len(args) > 50 or not all(
+            isinstance(a, (str, int, float)) and not isinstance(a, bool) for a in args):
+        raise ValueError('args 须为字符串列表，最多 50 个')
+    args = [str(a) for a in args]
+    if any('\0' in a or len(a) > 10000 for a in args):
+        raise ValueError('参数不能含空字符，单个不超过 10000 字')
+    cmd = ([sys.executable] if ext == '.py' else ['bash']) + [path] + args
+    env = dict(os.environ)
+    env.update(env_extra)
+    env.update({'ASK_OUT': out_dir, 'PYTHONIOENCODING': 'utf-8', 'PYTHONDONTWRITEBYTECODE': '1'})
+    proc = subprocess.Popen(cmd, cwd=skill['dir'], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, env=env, start_new_session=True)
+    chunks, size = [], [0]
+
+    def drain():
+        for block in iter(lambda: proc.stdout.read(65536), b''):
+            if size[0] < TOOL_OUTPUT_CHARS * 4:
+                chunks.append(block)
+                size[0] += len(block)
+
+    reader = threading.Thread(target=drain, daemon=True)
+    reader.start()
+    deadline, timed_out, stopped = time.monotonic() + timeout, False, False
+    while proc.poll() is None:
+        if time.monotonic() > deadline:
+            timed_out = True
+        elif gone():
+            stopped = True
+        if timed_out or stopped:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except OSError:
+                proc.kill()
+            break
+        time.sleep(0.1)
+    rc = proc.wait()
+    reader.join(5)
+    proc.stdout.close()
+    out = b''.join(chunks).decode('utf-8', 'replace')
+    log.info('skill %s ran %s: rc=%s timed_out=%s stopped=%s', skill['name'], rel, rc, timed_out, stopped)
+    return {'exit': rc, 'output': clip(out), 'timed_out': timed_out, 'stopped': stopped}
+
+
+def list_outputs(out_dir):
+    """输出目录里的文件，[(相对路径, 大小)]，最多 MAX_OUTPUT_FILES 个。"""
+    found = []
+    for root, dirs, names in os.walk(out_dir):
+        dirs.sort()
+        for n in sorted(names):
+            p = os.path.join(root, n)
+            if os.path.isfile(p) and not os.path.islink(p):
+                found.append((os.path.relpath(p, out_dir), os.path.getsize(p)))
+    return found[:MAX_OUTPUT_FILES]
 
 
 # ---------------------------------------------------------------- 模型接口
@@ -585,11 +1033,28 @@ CITE_RULE = ('只依据下面这些文件的文字回答，不用常识或文件
              '每个结论后面紧跟出处，写成（文件 N：「原文摘句」），摘句从原文逐字照抄，不改写、不概括，'
              '太长时只摘最关键的一句。所选文件中找不到依据的内容，直接写「' + NOT_FOUND + '」，不要推测。')
 CITE_RE = re.compile(r'文件\s*(\d+)\s*[:：]\s*「([^「」]+)」')
+SCRIPT_NOTE = '（脚本输出）'
+SKILL_INTRO = ('使用者选用了 skill「%s」，下面是它的说明，按说明完成使用者的要求。'
+               '说明里提到的 skill 目录文件用 read_skill_file 读取，脚本用 run_script 运行，要交给脚本的长内容先用 '
+               + WRITE_TOOL + ' 写进工作目录（只能用这几个工具，'
+               '没有其他工具；说明里要求联网、保存到别处或询问使用者的步骤，改为在回答里直接给出结果）。')
+SKILL_CITE_NOTE = '依据脚本输出或 skill 参考文件得出的内容，在后面写「' + SCRIPT_NOTE + '」，不必附原文摘句。'
+TOOL_LIMIT_NOTE = '工具调用次数已到上限（%d 次），不能再调用工具，请根据已有结果直接回答。' % MAX_TOOL_CALLS
+WRITE_LIMIT_NOTE = '写入次数已到上限（%d 次），没有写入；请用已写入的文件运行脚本，或直接回答。' % MAX_WRITE_CALLS
 
 
-def build_messages(files, history):
-    """files: [(路径, 文字)]；history: [{role, content}]，最后一条是使用者的新问题。"""
-    parts = [CITE_RULE, '使用者选了下面 %d 个文件，以下是从中取出的文字。' % len(files)]
+def skill_prompt(skill):
+    return SKILL_INTRO % skill['name'] + '\n\n===== skill 说明 =====\n' + skill['body']
+
+
+def build_messages(files, history, skill=None):
+    """files: [(路径, 文字)]；history: [{role, content}]，最后一条是使用者的新问题；skill 为所选 skill。"""
+    parts = [skill_prompt(skill)] if skill else []
+    if files:
+        parts += [CITE_RULE + (SKILL_CITE_NOTE if skill else ''),
+                  '使用者选了下面 %d 个文件，以下是从中取出的文字。' % len(files)]
+    else:
+        parts.append('使用者没有选文件。')
     for i, (path, text) in enumerate(files, 1):
         parts.append('===== 文件 %d：%s =====\n%s' % (i, path, text))
     return [{'role': 'system', 'content': '\n\n'.join(parts)}] + history
@@ -621,8 +1086,11 @@ def fit_texts(texts, limit):
     return out, True
 
 
-def http_error_text(code, detail):
+def http_error_text(code, detail, tools=False):
     """把接口的 HTTP 错误写成「原因：下一步怎么做」。"""
+    if tools and code in (400, 404, 422, 500, 501) and re.search(r'tool|function', detail, re.I):
+        return ('此模型不支持 skill 工具（函数调用，HTTP %d）：请改选不带脚本和参考文件的 skill，'
+                '或换一个支持函数调用的模型' % code)
     if code in (401, 403):
         return '接口拒绝了请求（HTTP %d），多半是 AK 无效或过期：请检查 OpenCode 配置或「模型设置」里的 AK' % code
     if code == 404:
@@ -634,9 +1102,13 @@ def http_error_text(code, detail):
     return '接口返回 HTTP %d%s' % (code, '：' + detail if detail else '')
 
 
-def stream_chat(tg, msgs, timeout=TIMEOUT):
-    """从 OpenAI 兼容接口逐段取回答；接口不流式时整段返回。出错抛 ModelError，写明原因。"""
-    body = json.dumps({'model': tg['model'], 'messages': msgs, 'stream': True}).encode('utf-8')
+def stream_chat(tg, msgs, timeout=TIMEOUT, tools=None):
+    """从 OpenAI 兼容接口逐段取回答（逐段产出 str）；接口不流式时整段返回。给了 tools 且模型要调用时，
+    最后产出一个列表 [{'id', 'name', 'arguments'}]。出错抛 ModelError，写明原因。"""
+    req_body = {'model': tg['model'], 'messages': msgs, 'stream': True}
+    if tools:
+        req_body['tools'] = tools
+    body = json.dumps(req_body).encode('utf-8')
     headers = {'Content-Type': 'application/json', 'Accept': 'text/event-stream',
                'Authorization': 'Bearer ' + tg['key']}
     headers.update(tg['headers'])
@@ -648,7 +1120,7 @@ def stream_chat(tg, msgs, timeout=TIMEOUT):
             detail = ' '.join(e.read(300).decode('utf-8', 'replace').split())
         except OSError:
             detail = ''
-        raise ModelError(http_error_text(e.code, detail))
+        raise ModelError(http_error_text(e.code, detail, bool(tools)))
     except (socket.timeout, TimeoutError):
         raise ModelError('接口 %d 秒没有响应' % timeout)
     except urllib.error.URLError as e:
@@ -657,27 +1129,44 @@ def stream_chat(tg, msgs, timeout=TIMEOUT):
         raise ModelError('连不上接口：%s' % e)
     try:
         with r:
+            calls = {}      # 序号 -> {'id', 'name', 'arguments'}，流式时分段拼接
             if 'event-stream' not in r.headers.get('Content-Type', ''):
                 try:
-                    text = json.loads(r.read())['choices'][0]['message'].get('content') or ''
+                    msg = json.loads(r.read())['choices'][0]['message']
+                    text = msg.get('content') or ''
+                    for i, c in enumerate(msg.get('tool_calls') or []):
+                        fn = c.get('function') or {}
+                        calls[i] = {'id': c.get('id') or '', 'name': fn.get('name') or '',
+                                    'arguments': fn.get('arguments') or ''}
                 except (ValueError, KeyError, IndexError, TypeError, AttributeError):
                     raise ModelError('接口返回的内容看不懂')
                 if text:
                     yield text
-                return
-            for raw in r:
-                line = raw.decode('utf-8', 'replace').strip()
-                if not line.startswith('data:'):
-                    continue
-                data = line[5:].strip()
-                if data == '[DONE]':
-                    return
-                try:
-                    piece = (json.loads(data)['choices'][0].get('delta') or {}).get('content')
-                except (ValueError, KeyError, IndexError, TypeError, AttributeError):
-                    continue
-                if piece:
-                    yield piece
+            else:
+                for raw in r:
+                    line = raw.decode('utf-8', 'replace').strip()
+                    if not line.startswith('data:'):
+                        continue
+                    data = line[5:].strip()
+                    if data == '[DONE]':
+                        break
+                    try:
+                        delta = json.loads(data)['choices'][0].get('delta') or {}
+                    except (ValueError, KeyError, IndexError, TypeError, AttributeError):
+                        continue
+                    for c in delta.get('tool_calls') or []:
+                        if not isinstance(c, dict):
+                            continue
+                        slot = calls.setdefault(c.get('index', len(calls)), {'id': '', 'name': '', 'arguments': ''})
+                        fn = c.get('function') or {}
+                        slot['id'] = c.get('id') or slot['id']
+                        slot['name'] += fn.get('name') or ''
+                        slot['arguments'] += fn.get('arguments') or ''
+                    piece = delta.get('content')
+                    if piece:
+                        yield piece
+            if tools and calls:
+                yield [calls[k] for k in sorted(calls)]
     except (socket.timeout, TimeoutError):
         raise ModelError('接口 %d 秒没有新内容' % timeout)
     except OSError as e:
@@ -686,7 +1175,135 @@ def stream_chat(tg, msgs, timeout=TIMEOUT):
 
 
 
+# ---------------------------------------------------------------- 目录选择框
+
+# tkinter 在子进程里弹框：不在服务线程里跑 Tk；出错时退出码 2，取消时 1
+TK_PICK = r"""
+import sys
+try:
+    import tkinter
+    from tkinter import filedialog
+    root = tkinter.Tk()
+    root.withdraw()
+    path = filedialog.askdirectory(initialdir=sys.argv[1], title=sys.argv[2], mustexist=True)
+    root.destroy()
+except Exception as e:
+    sys.stderr.write(str(e) or e.__class__.__name__)
+    sys.exit(2)
+if not path:
+    sys.exit(1)
+sys.stdout.write(path)
+"""
+
+
+def detect_picker(env=None):
+    """可用的目录选择框：依次看 zenity、kdialog、tkinter，返回第一个可用的名称；没有图形环境或都不可用时返回空字符串。"""
+    env = os.environ if env is None else env
+    if not env.get('DISPLAY') and not env.get('WAYLAND_DISPLAY'):
+        return ''
+    for name in ('zenity', 'kdialog'):
+        if shutil.which(name, path=env.get('PATH', os.defpath)):
+            return name
+    try:
+        has_tk = importlib.util.find_spec('tkinter') is not None
+    except (ImportError, ValueError):
+        has_tk = False
+    return 'tkinter' if has_tk and env.get('DISPLAY') else ''
+
+
+class PickerBusy(Exception):
+    pass
+
+
+class FolderPicker:
+    """由本机服务弹出系统的目录选择框（浏览器拿不到完整路径）；同一时刻只开一个。"""
+
+    def __init__(self, kind):
+        self.kind = kind
+        self.lock = threading.Lock()
+        self.proc = None
+        self.page = None
+
+    def busy(self):
+        with self.lock:
+            return self.proc is not None
+
+    def command(self, start, title):
+        if self.kind == 'zenity':
+            return ['zenity', '--file-selection', '--directory', '--title=' + title,
+                    '--filename=' + start.rstrip(os.sep) + os.sep]
+        if self.kind == 'kdialog':
+            return ['kdialog', '--title', title, '--getexistingdirectory', start]
+        return [sys.executable, '-c', TK_PICK, start, title]
+
+    def pick(self, start, title, page='', gone=lambda: False):
+        """弹框选文件夹，返回路径，取消（或页面已断开）时返回 None。已有选择框时抛 PickerBusy，失败时抛 ValueError。"""
+        if not self.kind:
+            raise ValueError('本机没有可用的选择窗口')
+        env = dict(os.environ, PYTHONIOENCODING='utf-8')
+        with self.lock:
+            if self.proc:
+                raise PickerBusy()
+            try:
+                proc = subprocess.Popen(self.command(start, title), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                        stderr=subprocess.PIPE, env=env, start_new_session=True)
+            except OSError as e:
+                raise ValueError(e.strerror or str(e))
+            self.proc, self.page = proc, page
+        try:
+            while True:     # 选择框开着时不设超时，页面断开时结束它
+                try:
+                    out, err = proc.communicate(timeout=0.3)
+                    break
+                except subprocess.TimeoutExpired:
+                    if gone():
+                        self._kill(proc)
+                        proc.communicate()
+                        return None
+        finally:
+            with self.lock:
+                self.proc = self.page = None
+        rc = proc.returncode
+        path = out.decode('utf-8', 'replace').rstrip('\r\n')
+        log.info('folder picker %s finished: rc=%s', self.kind, rc)
+        if rc == 0 and path:
+            return path
+        if rc == 1 or rc < 0:
+            return None
+        lines = [x.strip() for x in err.decode('utf-8', 'replace').splitlines() if x.strip()]
+        raise ValueError((lines[-1][:200] if lines else '') or '%s 退出码 %s' % (self.kind, rc))
+
+    @staticmethod
+    def _kill(proc):
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+        except OSError:
+            proc.kill()
+
+    def close(self, page=None):
+        """结束开着的选择框；给了 page 时只结束由这个页面打开的。"""
+        with self.lock:
+            proc = self.proc if self.proc and (page is None or self.page == page) else None
+        if proc:
+            log.info('closing folder picker')
+            self._kill(proc)
+
+
 # ---------------------------------------------------------------- 网页服务
+
+def open_folder(folder):
+    """用 OPENERS 里第一个找得到的命令打开文件夹，不等它结束；没有命令或启动失败时抛 OSError。"""
+    for cmd in OPENERS:
+        if shutil.which(cmd[0]):
+            try:
+                proc = subprocess.Popen(list(cmd) + [folder], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                        stderr=subprocess.DEVNULL, start_new_session=True)
+            except OSError as e:
+                raise OSError('无法启动 %s（%s）' % (cmd[0], e.strerror or e))
+            threading.Thread(target=proc.wait, daemon=True).start()     # 回收子进程
+            return
+    raise OSError('本机没有 xdg-open 或 gio，无法打开文件管理器')
+
 
 def log_file_path():
     """日志放工具目录，不可写时放 ~/.cache/ask-local-files/。"""
@@ -707,23 +1324,54 @@ class WebState:
         self.texts = TextCache()
         self.started = time.monotonic()
         self.lock = threading.Lock()
-        self.pages = {}         # 页面编号 -> 最近一次心跳时间
+        self.pages = {}         # 页面编号 -> (最近一次心跳时间, 所在窗口编号)
         self.seen = False
         self.empty_since = None
         self.quit = threading.Event()
         self.chats = 0          # 正在生成的回答数
+        self.out_root = None    # skill 脚本输出的临时目录，退出时删除
+        self.outputs = {}       # 输出文件编号 -> (路径, 文件名)
+        self.picker = FolderPicker(detect_picker())
 
-    def ping(self, page):
+    def ping(self, page, shell=None):
+        """登记心跳，返回当前开着的窗口数：同一窗口里各标签的页面（shell 相同）算一个。"""
         with self.lock:
-            self.pages[page] = time.monotonic()
+            self.pages[page] = (time.monotonic(), shell or page)
             self.seen = True
             self.empty_since = None
+            return len({s for _, s in self.pages.values()})
 
     def bye(self, page):
+        self.picker.close(page)
         with self.lock:
             self.pages.pop(page, None)
             if self.seen and not self.pages and self.empty_since is None:
                 self.empty_since = time.monotonic()
+
+    def new_output_dir(self, prefix='tmp'):
+        with self.lock:
+            if not self.out_root:
+                self.out_root = tempfile.mkdtemp(prefix='ask-local-files-out-')
+            root = self.out_root
+        return tempfile.mkdtemp(prefix=prefix, dir=root)
+
+    def new_work_dir(self):
+        """每个问题一个工作目录，供 write_work_file 写入、脚本读取；回答结束时由调用方删除。"""
+        return self.new_output_dir('work-')
+
+    def register_outputs(self, out_dir):
+        out = []
+        for rel, size in list_outputs(out_dir):
+            fid = secrets.token_urlsafe(12)
+            with self.lock:
+                self.outputs[fid] = (os.path.join(out_dir, rel), os.path.basename(rel))
+            out.append({'id': fid, 'name': rel, 'size': size})
+        return out
+
+    def cleanup(self):
+        self.picker.close()
+        if self.out_root:
+            shutil.rmtree(self.out_root, ignore_errors=True)
 
     def chat_begin(self):
         with self.lock:
@@ -734,10 +1382,12 @@ class WebState:
             self.chats -= 1
 
     def should_exit(self):
-        """返回退出原因，不该退出时返回 None；有回答正在生成时一律不退出。"""
+        """返回退出原因，不该退出时返回 None；有回答正在生成或选择框开着时一律不退出。"""
+        if self.picker.busy():      # 选择框开着时也不按心跳把页面判为已关闭
+            return None
         now = time.monotonic()
         with self.lock:
-            for page, t in list(self.pages.items()):
+            for page, (t, _) in list(self.pages.items()):
                 if now - t > PING_TIMEOUT:
                     log.info('page %s heartbeat lost', page)
                     del self.pages[page]
@@ -847,12 +1497,37 @@ class Handler(BaseHTTPRequestHandler):
             out = st.config.public()
             out.update(models_public(st.config))
             out.update({'index': st.index.status(), 'version': VERSION, 'max_files': MAX_FILES,
+                        'picker': bool(st.picker.kind),
                         'pdftotext': bool(shutil.which('pdftotext')), 'doc2kb': doc2kb_core is not None})
             self.send_json(200, out)
         elif url.path == '/api/dirs':
             self.send_json(200, {'dirs': list_dirs(arg('prefix')), 'places': common_places()})
+        elif url.path == '/api/skills':
+            skills, problems = load_skills()
+            self.send_json(200, {'skills': skills_public(skills), 'problems': problems, 'user_dir': USER_SKILLS})
+        elif url.path == '/api/output':
+            with st.lock:
+                hit = st.outputs.get(arg('id'))
+            if not hit or not os.path.isfile(hit[0]):
+                self.send_json(404, {'error': '文件已不存在（服务重启后输出文件会删除），请重新提问生成'})
+                return
+            with open(hit[0], 'rb') as f:
+                body = f.read()
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/octet-stream')
+            self.send_header('Content-Length', str(len(body)))
+            self.send_header('Content-Disposition', "attachment; filename*=UTF-8''" + urllib.parse.quote(hit[1]))
+            self.send_header('Cache-Control', 'no-store')
+            self.end_headers()
+            self.wfile.write(body)
         elif url.path == '/api/search':
-            self.send_json(200, st.index.search(arg('q'), arg('ext')))
+            try:
+                self.send_json(200, st.index.search(arg('q'), arg('ext'), arg('re') == '1'))
+            except re.error as e:
+                self.send_json(400, {'error': '正则表达式有误：%s' % e})
+        elif url.path == '/api/browse':
+            dedup = arg('dedup')
+            self.send_json(200, st.index.browse(arg('dir'), dedup == '1' if dedup else st.config.dedup))
         elif url.path == '/api/text':
             path = arg('path')
             if not path or not st.index.contains(path) or not os.path.isfile(path):
@@ -888,12 +1563,13 @@ class Handler(BaseHTTPRequestHandler):
             return
         data = self.read_json()
         if url.path == '/api/ping':
-            st.ping(str(data.get('page')))
-            self.send_json(200, {'ok': True})
+            shell = data.get('shell')
+            self.send_json(200, {'ok': True, 'pages': st.ping(str(data.get('page')), str(shell) if shell else None)})
         elif url.path == '/api/quit':
             busy = st.chats > 0
             log.info('quit requested by page%s', ', waiting for answers' if busy else '')
             self.send_json(200, {'ok': True, 'waiting': busy})
+            st.picker.close()
             st.quit.set()
         elif url.path == '/api/folders':
             self.post_folders(data)
@@ -906,8 +1582,33 @@ class Handler(BaseHTTPRequestHandler):
             self.post_chat(data)
         elif url.path == '/api/test-model':
             self.post_test_model(data)
+        elif url.path == '/api/pick-folder':
+            self.post_pick_folder(data)
+        elif url.path == '/api/open-folder':
+            self.post_open_folder(data)
+        elif url.path == '/api/docx':
+            self.post_docx(data)
         else:
             self.send_json(404, {'error': '没有这个地址'})
+
+    def post_docx(self, data):
+        """「保存为 Word」：把页面发来的 Markdown 转成 docx 返回，不落盘。"""
+        text, title = data.get('markdown'), data.get('title') or ''
+        if not isinstance(text, str) or not text.strip() or not isinstance(title, str):
+            self.send_json(400, {'error': '没有可保存的内容'})
+            return
+        try:
+            body = markdown_docx(text, title[:200])
+        except Exception as e:      # 转换脚本缺失或出错时都只回报原因
+            log.error('docx failed: %s', e)
+            self.send_json(500, {'error': '转换出错（%s）' % (str(e) or e.__class__.__name__)})
+            return
+        self.send_response(200)
+        self.send_header('Content-Type', DOCX_TYPE)
+        self.send_header('Content-Length', str(len(body)))
+        self.send_header('Cache-Control', 'no-store')
+        self.end_headers()
+        self.wfile.write(body)
 
     def post_folders(self, data):
         cfg, idx = self.state.config, self.state.index
@@ -958,11 +1659,47 @@ class Handler(BaseHTTPRequestHandler):
                     cfg.custom['key'] = ''
             if 'model' in data:
                 cfg.model = str(data['model'] or '')
+            if 'dedup' in data:
+                cfg.dedup = bool(data['dedup'])
+            if 'regex' in data:
+                cfg.regex = bool(data['regex'])
             cfg.save()
         out = cfg.public()
         out.update(models_public(cfg))
         self.send_json(200, out)
 
+
+    def post_open_folder(self, data):
+        """用文件管理器打开已索引文件所在的文件夹；打不开时带上文件夹路径，页面让使用者自己去打开。"""
+        path = str(data.get('path') or '')
+        if not path or not self.state.index.contains(path):
+            self.send_json(400, {'error': MISSING_FILE})
+            return
+        folder = os.path.dirname(path)
+        if not os.path.isdir(folder):
+            self.send_json(400, {'error': MISSING_FILE})
+            return
+        try:
+            open_folder(folder)
+        except OSError as e:
+            log.info('cannot open folder %r: %s', folder, e)
+            self.send_json(500, {'error': str(e), 'folder': folder})
+            return
+        self.send_json(200, {'ok': True, 'folder': folder})
+
+    def post_pick_folder(self, data):
+        """弹出目录选择框，只把选中的路径交给页面，不添加、不保存；取消时 path 为 null。"""
+        title = ' '.join(str(data.get('title') or '选择文件夹').split())[:100]
+        try:
+            path = self.state.picker.pick(start_dir(data.get('start')), title, str(data.get('page') or ''),
+                                          self.client_gone)
+        except PickerBusy:
+            self.send_json(409, {'error': '已有选择窗口打开：请先在那个窗口里选好或取消'})
+            return
+        except ValueError as e:
+            self.send_json(200, {'ok': False, 'error': str(e)})
+            return
+        self.send_json(200, {'ok': True, 'path': path})
 
     def post_test_model(self, data):
         """向所选模型发一条极短的请求，拿到第一段回答即算连通。"""
@@ -984,14 +1721,28 @@ class Handler(BaseHTTPRequestHandler):
     def post_chat(self, data):
         st = self.state
         files, history = data.get('files'), data.get('messages')
-        if not isinstance(files, list) or not files or len(files) > MAX_FILES:
+        skill = None
+        if data.get('skill'):
+            skill = load_skills()[0].get(str(data['skill']))
+            if not skill:
+                self.send_json(400, {'error': '找不到 skill「%s」，请点「重新读取」后重选' % data['skill']})
+                return
+            if skill['too_long']:
+                self.send_json(400, {'error': 'skill「%s」的说明超过 %d 字，不能选用' % (skill['name'], SKILL_MAX_CHARS)})
+                return
+        if not isinstance(files, list) or len(files) > MAX_FILES or (not files and not skill):
             self.send_json(400, {'error': '请选 1 到 %d 个文件' % MAX_FILES})
             return
         if not isinstance(history, list) or not history or not all(
                 isinstance(m, dict) and m.get('role') in ('user', 'assistant') and isinstance(m.get('content'), str)
-                for m in history) or history[-1]['role'] != 'user' or not history[-1]['content'].strip():
+                for m in history) or history[-1]['role'] != 'user':
             self.send_json(400, {'error': '请先写下要问的内容'})
             return
+        if not history[-1]['content'].strip():
+            if not skill:
+                self.send_json(400, {'error': '请先写下要问的内容'})
+                return
+            history[-1]['content'] = EMPTY_ASK
         targets, default = model_targets(st.config)
         tg = targets.get(data.get('model') or default)
         if not tg:
@@ -1007,40 +1758,81 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 self.send_json(400, {'error': '取不出文字：%s（%s）' % (path, e)})
                 return
-        # 字数上限管文件与对话的合计；截断只截文件，给对话留出位置
+        # 字数上限管文件、skill 说明与对话的合计；截断只截文件，给 skill 和对话留出位置
         limit = st.config.char_limit
         files_chars, history_chars = sum(len(t) for t in texts), sum(len(m['content']) for m in history)
-        total = files_chars + history_chars
-        if history_chars >= limit:
-            self.send_json(413, {'error': 'history_too_long', 'history': history_chars, 'limit': limit})
+        skill_chars = len(skill['body']) if skill else 0
+        fixed = history_chars + skill_chars
+        total = files_chars + fixed
+        if fixed >= limit:
+            self.send_json(413, {'error': 'history_too_long', 'history': history_chars, 'skill': skill_chars,
+                                 'limit': limit})
             return
         if total > limit and not data.get('truncate'):
             self.send_json(413, {'error': 'too_long', 'total': total, 'files': files_chars,
-                                 'history': history_chars, 'limit': limit})
+                                 'history': history_chars, 'skill': skill_chars, 'limit': limit})
             return
         full = texts
-        texts, cut = fit_texts(texts, limit - history_chars)
+        texts, cut = fit_texts(texts, limit - fixed)
         msgs = build_messages(list(zip(files, texts)), [{'role': m['role'], 'content': m['content']}
-                                                       for m in history])
-        log.info('chat: %d files, %d chars, model %s, host %s', len(files), total, tg['model'], tg['host'])
+                                                       for m in history], skill)
+        tools = skill_tools(skill) if skill else None
+        log.info('chat: %d files, %d chars, model %s, host %s, skill %s, tools %s', len(files), total,
+                 tg['model'], tg['host'], skill['name'] if skill else '-', bool(tools))
         self.send_response(200)
         self.send_header('Content-Type', 'application/x-ndjson; charset=utf-8')
         self.send_header('Cache-Control', 'no-store')
         self.end_headers()
         st.chat_begin()
+        work = None
         emit = lambda obj: (self.wfile.write((json.dumps(obj, ensure_ascii=False) + '\n').encode('utf-8')),
                             self.wfile.flush())
         try:
-            emit({'start': True, 'truncated': cut, 'model': tg['model'], 'host': tg['host']})
-            pieces = []
-            for piece in stream_chat(tg, msgs):
-                pieces.append(piece)
-                emit({'t': piece})
+            emit({'start': True, 'truncated': cut, 'model': tg['model'], 'host': tg['host'],
+                  'skill': skill['name'] if skill else ''})
+            pieces, used, writes = [], 0, 0
+            if skill and skill['scripts']:
+                work = st.new_work_dir()
+            while True:
+                offered = tools if used < MAX_TOOL_CALLS else None
+                if offered and writes >= MAX_WRITE_CALLS:
+                    offered = [t for t in offered if t['function']['name'] != WRITE_TOOL]
+                calls = None
+                for piece in stream_chat(tg, msgs, tools=offered):
+                    if isinstance(piece, list):
+                        calls = piece
+                    else:
+                        pieces.append(piece)
+                        emit({'t': piece})
+                if not calls:
+                    break
+                msgs.append({'role': 'assistant', 'content': None, 'tool_calls': [
+                    {'id': c['id'] or 'call_%d' % i, 'type': 'function',
+                     'function': {'name': c['name'], 'arguments': c['arguments']}} for i, c in enumerate(calls)]})
+                for i, c in enumerate(calls):
+                    # 写入单独计数；超出写入次数的调用不执行，并按普通工具调用计数，保证总次数有上限
+                    if c['name'] == WRITE_TOOL and writes < MAX_WRITE_CALLS:
+                        writes += 1
+                        result = self.run_tool(skill, c, files, emit, work)
+                    elif c['name'] == WRITE_TOOL:
+                        used += 1
+                        result = WRITE_LIMIT_NOTE
+                    else:
+                        used += 1
+                        result = self.run_tool(skill, c, files, emit, work) if used <= MAX_TOOL_CALLS \
+                            else TOOL_LIMIT_NOTE
+                    msgs.append({'role': 'tool', 'tool_call_id': c['id'] or 'call_%d' % i, 'content': result})
+                if used >= MAX_TOOL_CALLS:
+                    msgs.append({'role': 'user', 'content': TOOL_LIMIT_NOTE})
             answer = ''.join(pieces)
-            count, missing = check_quotes(answer, full)
-            log.info('answer: %d quotes, %d not found in files', count, len(missing))
-            emit({'done': True, 'quotes': count, 'missing': missing,
-                  'uncited': count == 0 and NOT_FOUND not in answer})
+            if files:
+                count, missing = check_quotes(answer, full)
+                uncited = count == 0 and NOT_FOUND not in answer and not (skill and SCRIPT_NOTE in answer)
+            else:
+                count, missing, uncited = 0, [], False
+            log.info('answer: %d quotes, %d not found in files, %d tool calls, %d writes',
+                     count, len(missing), used, writes)
+            emit({'done': True, 'quotes': count, 'missing': missing, 'uncited': uncited})
         except ModelError as e:
             log.warning('chat failed: %s', e)
             try:
@@ -1050,7 +1842,79 @@ class Handler(BaseHTTPRequestHandler):
         except OSError as e:
             log.info('page went away during answer: %s', e)
         finally:
+            if work:
+                shutil.rmtree(work, ignore_errors=True)
             st.chat_end()
+
+    def client_gone(self):
+        """页面断开（点了「停止」或关了页面）时返回 True。"""
+        try:
+            readable, _, _ = select.select([self.connection], [], [], 0)
+            return bool(readable) and self.connection.recv(1, socket.MSG_PEEK) == b''
+        except (OSError, ValueError):
+            return True
+
+    def run_tool(self, skill, call, files, emit, work=None):
+        """执行模型要求的一次工具调用，把过程发给页面，返回交给模型的结果文字。"""
+        st = self.state
+        try:
+            args = json.loads(call['arguments'] or '{}')
+            if not isinstance(args, dict):
+                raise ValueError
+        except ValueError:
+            args = None
+        name = call['name']
+        kinds = {'read_skill_file': 'read', 'run_script': 'run', WRITE_TOOL: 'write'}
+        info = {'kind': kinds.get(name, 'run'), 'name': '', 'args': []}
+        if args is None:
+            info.update(error='参数不是合法的 JSON')
+        elif name == 'read_skill_file':
+            info['name'] = str(args.get('path') or '')
+        elif name == WRITE_TOOL and work:
+            info.update(name=str(args.get('path') or ''), append=args.get('append') is True)
+        elif name == 'run_script':
+            info['name'] = str(args.get('script') or '')
+            info['args'] = args.get('args') if isinstance(args.get('args'), list) else []
+        else:
+            info.update(name=name, error='没有这个工具：%s' % name)
+        if 'error' in info:
+            emit({'tool': info})
+            return '调用失败：%s' % info['error']
+        emit({'tool_start': info})
+        try:
+            if info['kind'] == 'read':
+                text = read_skill_file(skill, info['name'])
+                info['output'] = text
+                emit({'tool': info})
+                return text
+            if info['kind'] == 'write':
+                rel, n, total = write_work_file(work, info['name'], args.get('content'), info['append'])
+                info.update(name=rel, chars=n, total=total, output=args.get('content'))
+                emit({'tool': info})
+                log.info('skill %s wrote %s: %d chars (total %d)', skill['name'], rel, n, total)
+                return '已%s %s：本次 %d 字，文件共 %d 字。运行脚本时参数直接写 %s（脚本在 ASK_WORK 里找）。' % (
+                    '追加到' if info['append'] else '写入', rel, n, total, rel)
+            out_dir = st.new_output_dir()
+            env = {'ASK_FILES': '\n'.join(files), 'ASK_ROOTS': '\n'.join(st.config.folders), 'ASK_TOOL_DIR': HERE}
+            if work:
+                env['ASK_WORK'] = work
+            r = run_skill_script(skill, info['name'], args.get('args'), env, out_dir, gone=self.client_gone)
+        except (ValueError, OSError) as e:
+            info['error'] = str(e)
+            emit({'tool': info})
+            return '调用失败：%s' % e
+        if r['stopped']:
+            raise ConnectionAbortedError('page stopped the answer while a script was running')
+        info.update(exit=r['exit'], output=r['output'], timed_out=r['timed_out'],
+                    files=st.register_outputs(out_dir))
+        emit({'tool': info})
+        parts = ['退出码 %s' % r['exit']]
+        if r['timed_out']:
+            parts.append('超过 %d 秒未结束，已终止' % SCRIPT_TIMEOUT)
+        parts.append('输出：\n' + (r['output'] or '（无）'))
+        if info['files']:
+            parts.append('生成的文件（使用者可在页面上保存）：' + '、'.join(f['name'] for f in info['files']))
+        return clip('\n'.join(parts))
 
 
 def watchdog(server, st, interval=2):
@@ -1066,7 +1930,30 @@ def watchdog(server, st, interval=2):
     server.shutdown()
 
 
-def serve(open_browser=True):
+def find_app_browser():
+    """返回第一个找得到的 Chromium 系浏览器路径，没有时返回 None。"""
+    for name in APP_BROWSERS:
+        path = shutil.which(name)
+        if path:
+            return path
+    return None
+
+
+def open_page(url, app=True):
+    """打开页面：优先用 Chromium 系浏览器的应用窗口模式（不显示地址栏），找不到或启动失败时用默认浏览器。"""
+    exe = find_app_browser() if app else None
+    if exe:
+        try:
+            subprocess.Popen([exe, '--app=' + url], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True)
+            log.info('opened app window with %s', exe)
+            return True
+        except OSError as e:
+            log.warning('app window failed with %s: %s', exe, e)
+    return webbrowser.open(url)
+
+
+def serve(open_browser=True, app=True):
     if not os.path.isfile(PAGE_FILE):
         tell_user('找不到页面文件 %s，请重新解压完整的工具目录。' % PAGE_FILE)
         return 1
@@ -1085,7 +1972,7 @@ def serve(open_browser=True):
     log.info('serving on %s', st.origin)
     print('网页界面：' + url, flush=True)
     threading.Thread(target=watchdog, args=(server, st), daemon=True).start()
-    if open_browser and not webbrowser.open(url):
+    if open_browser and not open_page(url, app):
         tell_user('未能自动打开浏览器，请在浏览器中打开：' + url)
     try:
         server.serve_forever(poll_interval=0.5)
@@ -1093,6 +1980,7 @@ def serve(open_browser=True):
         pass
     finally:
         server.server_close()
+        st.cleanup()
     log.info('server stopped')
     return 0
 
@@ -1100,12 +1988,14 @@ def serve(open_browser=True):
 def main(argv=None):
     ap = argparse.ArgumentParser(description='找文件问 AI：快速找出文件，交给 AI 提问、改写、总结（双击运行即此程序）。')
     ap.add_argument('--no-browser', action='store_true', help='不自动打开浏览器，只打印网址')
+    ap.add_argument('--no-app', action='store_true',
+                    help='用默认浏览器的普通窗口打开，不用 Chromium 系浏览器的应用窗口模式')
     ap.add_argument('--log-level', default=os.environ.get('LOG_LEVEL', 'WARNING').upper(),
                     choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
                     help='日志级别，默认 WARNING，可由环境变量 LOG_LEVEL 覆盖')
     args = ap.parse_args(argv)
     logging.basicConfig(level=args.log_level, format=LOG_FORMAT, stream=sys.stderr)
-    return serve(open_browser=not args.no_browser)
+    return serve(open_browser=not args.no_browser, app=not args.no_app)
 
 
 if __name__ == '__main__':
