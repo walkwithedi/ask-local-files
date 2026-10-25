@@ -15,7 +15,9 @@ import time
 import unittest
 from unittest import mock
 import urllib.error
+import urllib.parse
 import urllib.request
+import zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TOOL = os.path.dirname(HERE)
@@ -52,7 +54,7 @@ class ServerCase(unittest.TestCase):
         self.docs = os.path.join(self.root, '资料')
         write(os.path.join(self.docs, '季度总结.txt'), '甲' * 100)
         write(os.path.join(self.docs, '子目录', '会议记录.md'), '乙' * 50)
-        write(os.path.join(self.docs, '旧文件.doc'), 'x')
+        write(os.path.join(self.docs, '资料包.zip'), 'x')
         self.config = fa.Config(os.path.join(self.root, 'config.json'))
         self.config.folders = [self.docs]
         self.config.custom = {'base': MODEL_BASE, 'model': self.model, 'key': 'k'}
@@ -96,6 +98,11 @@ class ServerCase(unittest.TestCase):
         if code != 200:
             return code, raw
         return code, [json.loads(line) for line in raw.splitlines() if line.strip()]
+
+    def head(self, name='季度总结.txt'):
+        """取出的文字开头的文件信息有多少字。"""
+        path = os.path.join(self.docs, name)
+        return len(fa.file_info(path, os.stat(path)))
 
     def wait_index(self):
         for _ in range(100):
@@ -143,19 +150,205 @@ class SearchTest(ServerCase):
         self.assertEqual([x['name'] for x in r['results']], ['季度总结.txt'])
 
 
+class RegexSearchTest(ServerCase):
+    def search(self, query, ext=''):
+        return self.call('/api/search?re=1&q=%s&ext=%s' % (q(query), q(ext)))
+
+    def test_regex_matches_display_path(self):
+        write(os.path.join(self.docs, '需求说明v2.docx'), 'x')
+        write(os.path.join(self.docs, '需求说明.txt'), 'x')
+        self.index.refresh(full=True, wait=True)
+        code, r = self.search(r'需求.*V\d')
+        self.assertEqual(code, 200)
+        self.assertEqual([x['name'] for x in r['results']], ['需求说明v2.docx'])
+        self.assertEqual(r['total'], 1)
+        r = self.search(r'^资料/子目录/')[1]
+        self.assertEqual([x['name'] for x in r['results']], ['会议记录.md'])
+
+    def test_regex_with_ext(self):
+        r = self.search('季度|会议', 'md')[1]
+        self.assertEqual([x['name'] for x in r['results']], ['会议记录.md'])
+
+    def test_bad_regex(self):
+        code, r = self.search('季度(')
+        self.assertEqual(code, 400)
+        self.assertTrue(r['error'].startswith('正则表达式有误：'))
+
+    def test_without_flag_is_plain(self):
+        r = self.call('/api/search?q=' + q('季度|会议'))[1]
+        self.assertEqual(r['results'], [])
+
+    def test_setting_saved(self):
+        self.assertFalse(self.call('/api/state')[1]['regex'])
+        code, r = self.call('/api/settings', {'regex': True})
+        self.assertEqual(code, 200)
+        self.assertTrue(r['regex'])
+        self.assertTrue(fa.Config(self.config.path).regex)
+        self.assertTrue(self.call('/api/state')[1]['regex'])
+
+
+class BrowseTest(ServerCase):
+    def browse(self, folder=''):
+        return self.call('/api/browse?dir=' + urllib.request.quote(folder))[1]
+
+    def test_top_level_lists_added_folders(self):
+        r = self.browse()
+        self.assertEqual(r['dir'], '')
+        self.assertEqual([(d['path'], d['files']) for d in r['dirs']], [(self.docs, 3)])
+
+    def test_level_lists_subfolders_and_files(self):
+        write(os.path.join(self.docs, '子目录', '深一层', '纪要.txt'), '丙')
+        self.index.refresh(full=True, wait=True)
+        r = self.browse(self.docs)
+        self.assertEqual([(d['name'], d['files']) for d in r['dirs']], [('子目录', 2)])
+        self.assertEqual(sorted(f['name'] for f in r['files']), ['季度总结.txt', '资料包.zip'])
+        self.assertEqual(r['here'], 2)
+        self.assertEqual([c['name'] for c in r['crumbs']], ['资料'])
+        # 全部加入含子文件夹，只算读得了的
+        self.assertEqual(r['tree_total'], 3)
+        self.assertEqual(sorted(f['name'] for f in r['tree']), ['会议记录.md', '季度总结.txt', '纪要.txt'])
+        sub = self.browse(os.path.join(self.docs, '子目录'))
+        self.assertEqual([c['name'] for c in sub['crumbs']], ['资料', '子目录'])
+        self.assertEqual([d['name'] for d in sub['dirs']], ['深一层'])
+
+    def test_tree_capped_at_twice_max_files_plus_one(self):
+        for i in range(fa.TREE_SHOWN + 4):
+            write(os.path.join(self.docs, '大批', '%d.txt' % i), 'x')
+        self.index.refresh(full=True, wait=True)
+        r = self.browse(os.path.join(self.docs, '大批'))
+        self.assertEqual(r['tree_total'], fa.TREE_SHOWN + 4)
+        self.assertEqual(len(r['tree']), fa.MAX_FILES * 2 + 1)
+
+    def test_folder_outside_rejected(self):
+        self.assertIn('error', self.browse(self.root))
+        self.assertIn('error', self.browse(self.docs + '-其他'))
+
+
+class PagesTest(ServerCase):
+    def test_ping_reports_open_pages(self):
+        self.assertEqual(self.call('/api/ping', {'page': 'a'})[1]['pages'], 1)
+        self.assertEqual(self.call('/api/ping', {'page': 'b'})[1]['pages'], 2)
+        self.call('/api/bye', {'t': 'tok', 'page': 'b'})
+        self.assertEqual(self.call('/api/ping', {'page': 'a'})[1]['pages'], 1)
+
+    def test_tabs_in_one_window_count_as_one_page(self):
+        self.assertEqual(self.call('/api/ping', {'page': 'a'})[1]['pages'], 1)
+        self.assertEqual(self.call('/api/ping', {'page': 'a2', 'shell': 'a'})[1]['pages'], 1)
+        self.assertEqual(self.call('/api/ping', {'page': 'a3', 'shell': 'a'})[1]['pages'], 1)
+        self.assertEqual(self.call('/api/ping', {'page': 'b'})[1]['pages'], 2)
+        self.call('/api/bye', {'t': 'tok', 'page': 'a2'})
+        self.assertEqual(self.call('/api/ping', {'page': 'a'})[1]['pages'], 2)
+
+
+class OpenPageTest(unittest.TestCase):
+    """优先用 Chromium 系浏览器的应用窗口模式打开，找不到或启动失败时用默认浏览器。"""
+
+    def which(self, found):
+        return lambda name: '/usr/bin/' + name if name in found else None
+
+    def test_app_window_with_first_found_browser(self):
+        with mock.patch.object(fa.shutil, 'which', self.which({'google-chrome', 'microsoft-edge'})), \
+                mock.patch.object(fa.subprocess, 'Popen') as popen, mock.patch.object(fa.webbrowser, 'open') as wb:
+            self.assertTrue(fa.open_page('http://127.0.0.1:1/?t=x'))
+        self.assertEqual(popen.call_args[0][0], ['/usr/bin/google-chrome', '--app=http://127.0.0.1:1/?t=x'])
+        wb.assert_not_called()
+
+    def test_falls_back_to_default_browser(self):
+        with mock.patch.object(fa.shutil, 'which', self.which(set())), \
+                mock.patch.object(fa.subprocess, 'Popen') as popen, \
+                mock.patch.object(fa.webbrowser, 'open', return_value=True) as wb:
+            self.assertTrue(fa.open_page('http://x/'))
+        popen.assert_not_called()
+        wb.assert_called_once_with('http://x/')
+
+    def test_falls_back_when_launch_fails(self):
+        with mock.patch.object(fa.shutil, 'which', self.which({'chromium'})), \
+                mock.patch.object(fa.subprocess, 'Popen', side_effect=OSError('x')), \
+                mock.patch.object(fa.webbrowser, 'open', return_value=True) as wb:
+            self.assertTrue(fa.open_page('http://x/'))
+        wb.assert_called_once_with('http://x/')
+
+    def test_no_app_uses_default_browser(self):
+        with mock.patch.object(fa.shutil, 'which', self.which({'chromium'})), \
+                mock.patch.object(fa.subprocess, 'Popen') as popen, \
+                mock.patch.object(fa.webbrowser, 'open', return_value=True) as wb:
+            fa.open_page('http://x/', app=False)
+        popen.assert_not_called()
+        wb.assert_called_once_with('http://x/')
+
+    def test_no_app_option(self):
+        with mock.patch.object(fa, 'serve', return_value=0) as serve:
+            fa.main(['--no-app'])
+            self.assertEqual(serve.call_args[1], {'open_browser': True, 'app': False})
+            fa.main([])
+            self.assertEqual(serve.call_args[1], {'open_browser': True, 'app': True})
+
+
+class MaxFilesTest(ServerCase):
+    def test_fifty_files_accepted(self):
+        self.assertEqual(fa.MAX_FILES, 50)
+        self.assertEqual(self.call('/api/state')[1]['max_files'], 50)
+        paths = []
+        for i in range(fa.MAX_FILES):
+            paths.append(os.path.join(self.docs, '批量', '%02d.txt' % i))
+            write(paths[-1], '丁')
+        self.index.refresh(full=True, wait=True)
+        code, lines = self.chat([{'role': 'user', 'content': '总结'}], files=paths)
+        self.assertEqual(code, 200)
+        code, r = self.chat([{'role': 'user', 'content': '总结'}], files=paths + [os.path.join(self.docs, '季度总结.txt')])
+        self.assertEqual(code, 400)
+
+
 class TextTest(ServerCase):
     def test_text_chars(self):
         code, r = self.call('/api/text?path=' + urllib.request.quote(os.path.join(self.docs, '季度总结.txt')))
-        self.assertEqual(r['chars'], 100)
+        self.assertEqual(r['chars'], 100 + self.head())
+
+    def test_file_info_first(self):
+        path = os.path.join(self.docs, '季度总结.txt')
+        os.utime(path, (1772600767, 1772600767))
+        code, r = self.call('/api/text?preview=1&path=' + urllib.request.quote(path))
+        when = time.strftime('%Y-%m-%d %H:%M', time.localtime(1772600767))
+        self.assertEqual(r['text'], '路径：%s\n文件名：季度总结.txt\n修改时间：%s\n\n%s' % (path, when, '甲' * 100))
+
+    def test_file_info_authors(self):
+        path = os.path.join(self.docs, 'a.txt')
+        write(path, 'x')
+        st = os.stat(path)
+        for authors, lines in ((('张三', '李四'), ['作者：张三', '最后修改者：李四']), (('张三', '张三'), ['作者：张三']),
+                               (('', '李四'), ['作者：李四']), (('', ''), [])):
+            with mock.patch.object(fa.doc2kb_core, 'doc_authors', return_value=authors):
+                info = fa.file_info(path, st).rstrip('\n').split('\n')
+            self.assertEqual(info[3:], lines)
+
+    def test_archive_not_read(self):
+        code, r = self.call('/api/text?path=' + urllib.request.quote(os.path.join(self.docs, '资料包.zip')))
+        self.assertEqual(r['error'], fa.ARCHIVE_REASON)
+
+    def test_old_office_by_doc2kb(self):
+        seen = []
+
+        def convert(path, ext, out, report, save_images=True):
+            seen.append(ext)
+            return '表格内容', []
+        for name, ext in (('a.doc', '.doc'), ('b.xls', '.xls'), ('c.ppt', '.ppt'), ('d.wps', '.doc'), ('e.et', '.xls'),
+                          ('f.dps', '.ppt')):
+            write(os.path.join(self.docs, name), 'x')
+            with mock.patch.object(fa.doc2kb_core, 'convert', side_effect=convert):
+                text, _ = fa.TextCache().get(os.path.join(self.docs, name))
+            self.assertTrue(text.endswith('\n\n表格内容'))
+            self.assertEqual(seen[-1], ext)
 
     def test_outside_folder_rejected(self):
         outside = os.path.join(self.root, 'x.txt')
         write(outside, 'x')
         self.assertEqual(self.call('/api/text?path=' + urllib.request.quote(outside))[0], 400)
 
-    def test_old_office_unsupported(self):
-        code, r = self.call('/api/text?path=' + urllib.request.quote(os.path.join(self.docs, '旧文件.doc')))
-        self.assertIn('另存为', r['error'])
+    def test_broken_old_office(self):
+        write(os.path.join(self.docs, '旧文件.wps'), 'x')
+        code, r = self.call('/api/text?path=' + urllib.request.quote(os.path.join(self.docs, '旧文件.wps')))
+        self.assertTrue(r['error'].startswith('读取失败：'))
+        self.assertTrue(r['error'].endswith('请先另存为 docx、xlsx 或 pptx'))
 
 
 class ChatTest(ServerCase):
@@ -188,10 +381,15 @@ class SupportFlagTest(ServerCase):
     def names(self, r):
         return {x['name']: x for x in r['results']}
 
-    def test_old_office_marked_unsupported(self):
+    def test_archive_marked_unsupported(self):
+        write(os.path.join(self.docs, '旧表格.xls'), 'x')
+        write(os.path.join(self.docs, '备份.tar.gz'), 'x')
+        self.index.refresh(full=True, wait=True)
         r = self.names(self.call('/api/search?q=')[1])
-        self.assertFalse(r['旧文件.doc']['supported'])
-        self.assertIn('另存为', r['旧文件.doc']['reason'])
+        for name in ('资料包.zip', '备份.tar.gz'):
+            self.assertFalse(r[name]['supported'])
+            self.assertEqual(r[name]['reason'], fa.ARCHIVE_REASON)
+        self.assertTrue(r['旧表格.xls']['supported'])
         self.assertTrue(r['季度总结.txt']['supported'])
         self.assertEqual(r['季度总结.txt']['reason'], '')
 
@@ -202,6 +400,32 @@ class SupportFlagTest(ServerCase):
             r = self.names(self.call('/api/search?q=pdf')[1])
         self.assertFalse(r['扫描.pdf']['supported'])
         self.assertIn('pdftotext', r['扫描.pdf']['reason'])
+
+
+class OpenFolderTest(ServerCase):
+    def test_opens_containing_folder(self):
+        path = os.path.join(self.docs, '子目录', '会议记录.md')
+        with mock.patch.object(fa.shutil, 'which', side_effect=lambda c: '/usr/bin/' + c if c == 'gio' else None), \
+                mock.patch.object(fa.subprocess, 'Popen') as popen:
+            code, r = self.call('/api/open-folder', {'path': path})
+        self.assertEqual((code, r['folder']), (200, os.path.join(self.docs, '子目录')))
+        self.assertEqual(popen.call_args[0][0], ['gio', 'open', os.path.join(self.docs, '子目录')])
+
+    def test_no_opener(self):
+        path = os.path.join(self.docs, '资料包.zip')
+        with mock.patch.object(fa.shutil, 'which', return_value=None):
+            code, r = self.call('/api/open-folder', {'path': path})
+        self.assertEqual(code, 500)
+        self.assertEqual(r['folder'], self.docs)
+        self.assertIn('xdg-open', r['error'])
+
+    def test_outside_rejected(self):
+        outside = os.path.join(self.root, 'x.zip')
+        write(outside, 'x')
+        with mock.patch.object(fa.subprocess, 'Popen') as popen:
+            self.assertEqual(self.call('/api/open-folder', {'path': outside})[0], 400)
+            self.assertEqual(self.call('/api/open-folder', {'path': ''})[0], 400)
+        popen.assert_not_called()
 
 
 class FolderMergeTest(ServerCase):
@@ -277,13 +501,14 @@ class HistoryLimitTest(ServerCase):
                {'role': 'user', 'content': '追' * 10}]
 
     def test_history_counts_toward_limit(self):
-        self.config.char_limit = 120
+        h = self.head()
+        self.config.char_limit = 120 + h
         code, r = self.chat(self.history)
         self.assertEqual(code, 413)
-        self.assertEqual((r['error'], r['files'], r['history'], r['total']), ('too_long', 100, 30, 130))
+        self.assertEqual((r['error'], r['files'], r['history'], r['total']), ('too_long', 100 + h, 30, 130 + h))
 
     def test_truncate_leaves_room_for_history(self):
-        self.config.char_limit = 120
+        self.config.char_limit = 120 + self.head()
         code, lines = self.chat(self.history, truncate=True)
         self.assertTrue(lines[0]['truncated'])
         sent = json.loads(urllib.request.urlopen(MODEL_BASE + '/last').read())
@@ -389,6 +614,550 @@ class ClearStartsNewChatTest(ServerCase):
         self.assertEqual([m['content'] for m in sent['messages'][1:]], ['新问题'])
 
 
+
+
+SKILL_MD = '---\nname: %s\ndescription: %s\n---\n\n%s\n'
+ECHO_PY = '''import os, sys
+print('files=' + os.environ.get('ASK_FILES', '').replace('\\n', '|'))
+print('args=' + '|'.join(sys.argv[1:]))
+with open(os.path.join(os.environ['ASK_OUT'], 'out.txt'), 'w', encoding='utf-8') as f:
+    f.write('生成的内容')
+'''
+CAT_PY = '''import os, sys
+work = os.environ['ASK_WORK']
+print('work=' + work)
+with open(os.path.join(work, sys.argv[1]), encoding='utf-8') as f:
+    text = f.read()
+print(text)
+with open(os.path.join(os.environ['ASK_OUT'], '副本.md'), 'w', encoding='utf-8') as f:
+    f.write(text)
+'''
+
+
+class FrontMatterTest(unittest.TestCase):
+    def test_quotes_and_folded(self):
+        meta, body = fa.parse_front_matter('---\nname: "a-b"\ndescription: >\n  第一行\n  第二行\nlicense: x\n---\n正文')
+        self.assertEqual(meta['name'], 'a-b')
+        self.assertEqual(meta['description'], '第一行 第二行')
+        self.assertEqual(body, '正文')
+
+    def test_no_front_matter(self):
+        self.assertEqual(fa.parse_front_matter('正文')[0], {})
+        self.assertEqual(fa.parse_front_matter('---\nname: a\n正文没有结束')[0], {})
+
+
+class SkillCase(ServerCase):
+    """预装与自建 skill 目录都指向临时目录。"""
+
+    def setUp(self):
+        super().setUp()
+        self.bundled, self.user = os.path.join(self.root, 'bundled'), os.path.join(self.root, 'user')
+        patcher = mock.patch.multiple(fa, BUNDLED_SKILLS=self.bundled, USER_SKILLS=self.user)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.make('echo', '运行脚本的测试', '按要求运行脚本。', {'scripts/echo.py': ECHO_PY, 'ref.md': '参考内容'})
+        self.make('plain', '仅指令的测试', '用一句话回答。')
+        write(os.path.join(self.root, 'secret.txt'), '目录外的内容')
+
+    def make(self, name, desc, body, files=None, base=None):
+        d = os.path.join(base or self.bundled, name)
+        write(os.path.join(d, 'SKILL.md'), SKILL_MD % (name, desc, body))
+        for rel, text in (files or {}).items():
+            write(os.path.join(d, rel), text)
+        return d
+
+    def ask(self, model, skill='echo', files=None, **extra):
+        self.config.custom['model'] = model
+        return self.chat([{'role': 'user', 'content': '做吧'}], files=files, skill=skill, **extra)
+
+
+class LoadSkillsTest(SkillCase):
+    def test_user_overrides_bundled_and_bad_skipped(self):
+        self.make('plain', '自建的同名 skill', '自建正文', base=self.user)
+        write(os.path.join(self.user, 'bad', 'SKILL.md'), '---\nname: bad\n---\n没有说明')
+        skills, problems = fa.load_skills()
+        self.assertEqual(skills['plain']['source'], 'user')
+        self.assertEqual(skills['plain']['body'], '自建正文')
+        self.assertNotIn('bad', skills)
+        self.assertEqual(len(problems), 1)
+
+    def test_files_and_tools(self):
+        skills = fa.load_skills()[0]
+        self.assertEqual(skills['echo']['scripts'], ['scripts/echo.py'])
+        self.assertEqual(skills['echo']['refs'], ['ref.md'])
+        names = [t['function']['name'] for t in fa.skill_tools(skills['echo'])]
+        self.assertEqual(names, ['read_skill_file', 'run_script', fa.WRITE_TOOL])
+        self.assertIsNone(fa.skill_tools(skills['plain']))
+
+    def test_too_long_flagged(self):
+        self.make('big', '很长', '字' * (fa.SKILL_MAX_CHARS + 1))
+        self.assertTrue(fa.load_skills()[0]['big']['too_long'])
+        code, r = self.ask('ok', skill='big')
+        self.assertEqual(code, 400)
+
+
+    def test_api_lists_skills(self):
+        code, r = self.call('/api/skills')
+        self.assertEqual(code, 200)
+        self.assertEqual([k['name'] for k in r['skills']], ['echo', 'plain'])
+        self.assertEqual(r['user_dir'], self.user)
+
+
+class SkillLabelTest(SkillCase):
+    def test_bundled_known_names_get_chinese_label(self):
+        self.make('clarify-needs', '需求澄清的测试', '正文')
+        self.make('doc-compare', '自建的同名', '正文', base=self.user)
+        labels = {k['name']: k['label'] for k in self.call('/api/skills')[1]['skills']}
+        self.assertEqual(labels['clarify-needs'], '需求澄清')
+        self.assertEqual(labels['doc-compare'], 'doc-compare', '自建 skill 显示原名')
+        self.assertEqual(labels['echo'], 'echo')
+
+    def test_every_bundled_skill_has_label(self):
+        names = [n for n in os.listdir(os.path.join(TOOL, 'skills')) if not n.startswith('.')]
+        self.assertEqual(sorted(names), sorted(fa.BUNDLED_LABELS))
+
+
+class EmptyAskTest(SkillCase):
+    def test_empty_question_with_skill_sends_fixed_ask(self):
+        code, lines = self.chat([{'role': 'user', 'content': '  '}], files=[], skill='plain')
+        self.assertEqual(code, 200)
+        sent = json.loads(urllib.request.urlopen(MODEL_BASE + '/last').read())
+        self.assertEqual(sent['messages'][-1], {'role': 'user', 'content': fa.EMPTY_ASK})
+
+    def test_empty_question_without_skill_rejected(self):
+        code, r = self.chat([{'role': 'user', 'content': ''}])
+        self.assertEqual(code, 400)
+        self.assertIn('要问的内容', r['error'])
+
+
+class BundledSkillsTest(unittest.TestCase):
+    def test_all_bundled_skills_load(self):
+        skills, problems = fa.load_skills(((os.path.join(TOOL, 'skills'), 'bundled'),))
+        self.assertEqual(problems, [])
+        for name in ('summarize-meeting', 'doc-compare', 'office-gen', 'prompt-optimize', 'clarify-needs'):
+            self.assertIn(name, skills)
+            self.assertFalse(skills[name]['too_long'])
+        for name in ('summarize-meeting', 'prompt-optimize', 'clarify-needs'):
+            self.assertEqual(skills[name]['refs'], [])
+
+
+class SkillChatTest(SkillCase):
+    def sent(self):
+        return json.loads(urllib.request.urlopen(MODEL_BASE + '/last').read())
+
+    def test_instruction_only_skill(self):
+        code, lines = self.ask('ok', skill='plain')
+        self.assertEqual(code, 200)
+        self.assertEqual(lines[0]['skill'], 'plain')
+        sent = self.sent()
+        self.assertNotIn('tools', sent)
+        system = sent['messages'][0]['content']
+        self.assertLess(system.index('用一句话回答。'), system.index(fa.CITE_RULE))
+
+    def test_no_files_needs_skill(self):
+        code, r = self.call('/api/chat', {'files': [], 'messages': [{'role': 'user', 'content': '做吧'}],
+                                          'model': 'custom'})
+        self.assertEqual(code, 400)
+        code, raw = self.call('/api/chat', {'files': [], 'messages': [{'role': 'user', 'content': '做吧'}],
+                                            'model': 'custom', 'skill': 'plain'})
+        self.assertEqual(code, 200)
+        lines = [json.loads(x) for x in raw.splitlines() if x.strip()]
+        self.assertNotIn(fa.CITE_RULE, self.sent()['messages'][0]['content'])
+        self.assertFalse(lines[-1]['uncited'])
+
+    def test_unknown_skill(self):
+        code, r = self.ask('ok', skill='nope')
+        self.assertEqual(code, 400)
+        self.assertIn('重新读取', r['error'])
+
+    def test_skill_counts_toward_limit(self):
+        self.config.char_limit = 110
+        self.make('wordy', '长说明', '说' * 60)
+        code, r = self.ask('ok', skill='wordy')
+        self.assertEqual(code, 413)
+        self.assertEqual(r['skill'], 60)
+
+    def test_run_script_and_save_output(self):
+        doc = os.path.join(self.docs, '季度总结.txt')
+        code, lines = self.ask('call:run_script:{"script": "scripts/echo.py", "args": ["甲 乙"]}', files=[doc])
+        self.assertEqual(code, 200)
+        self.assertTrue(any('tool_start' in m for m in lines))
+        tool = next(m['tool'] for m in lines if 'tool' in m)
+        self.assertEqual(tool['exit'], 0)
+        self.assertIn('files=' + doc, tool['output'])
+        self.assertIn('args=甲 乙', tool['output'])
+        self.assertEqual([f['name'] for f in tool['files']], ['out.txt'])
+        answer = ''.join(m.get('t', '') for m in lines)
+        self.assertIn('结果：退出码 0', answer)
+        self.assertIn('out.txt', answer)
+        h = {'X-Token': 'tok'}
+        req = urllib.request.Request(self.base + '/api/output?id=' + tool['files'][0]['id'], headers=h)
+        with urllib.request.urlopen(req) as r:
+            self.assertEqual(r.read().decode('utf-8'), '生成的内容')
+        code, r = self.call('/api/output?id=nope')
+        self.assertEqual(code, 404)
+        self.st.cleanup()
+        self.assertFalse(os.path.exists(self.st.out_root))
+
+    def test_read_skill_file(self):
+        code, lines = self.ask('call:read_skill_file:{"path": "ref.md"}')
+        tool = next(m['tool'] for m in lines if 'tool' in m)
+        self.assertEqual(tool['output'], '参考内容')
+        self.assertIn('结果：参考内容', ''.join(m.get('t', '') for m in lines))
+
+    def test_paths_cannot_leave_skill(self):
+        for args in ('{"path": "../../secret.txt"}', '{"path": "%s"}' % os.path.join(self.root, 'secret.txt')):
+            code, lines = self.ask('call:read_skill_file:' + args)
+            tool = next(m['tool'] for m in lines if 'tool' in m)
+            self.assertIn('error', tool)
+            self.assertNotIn('目录外的内容', json.dumps(lines, ensure_ascii=False))
+
+    def test_only_scripts_run(self):
+        code, lines = self.ask('call:run_script:{"script": "ref.md"}')
+        tool = next(m['tool'] for m in lines if 'tool' in m)
+        self.assertIn('.py', tool['error'])
+
+    def test_bad_arguments(self):
+        code, lines = self.ask('call:run_script:{"script": "scripts/echo.py", "args": "不是列表"}')
+        tool = next(m['tool'] for m in lines if 'tool' in m)
+        self.assertIn('args', tool['error'])
+        code, lines = self.ask('call:nope:{}')
+        tool = next(m['tool'] for m in lines if 'tool' in m)
+        self.assertIn('没有这个工具', tool['error'])
+
+    def test_tool_call_limit(self):
+        code, lines = self.ask('loop:read_skill_file:{"path": "ref.md"}')
+        self.assertEqual(sum(1 for m in lines if 'tool' in m), fa.MAX_TOOL_CALLS)
+        self.assertTrue(lines[-1].get('done'))
+        sent = self.sent()
+        self.assertNotIn('tools', sent)
+        self.assertEqual(sent['messages'][-1]['content'], fa.TOOL_LIMIT_NOTE)
+
+    def seq(self, *steps, **kw):
+        return self.ask('seq:' + json.dumps([list(s) for s in steps], ensure_ascii=False), **kw)
+
+    def test_write_then_run_reads_work_dir(self):
+        self.make('cat', '读工作目录', '运行', {'scripts/cat.py': CAT_PY})
+        code, lines = self.seq(('write_work_file', {'path': '稿/正文.md', 'content': '第一段'}),
+                               ('write_work_file', {'path': '稿/正文.md', 'content': '，第二段', 'append': True}),
+                               ('run_script', {'script': 'scripts/cat.py', 'args': ['稿/正文.md']}), skill='cat')
+        self.assertEqual(code, 200)
+        tools = [m['tool'] for m in lines if 'tool' in m]
+        self.assertEqual([t['kind'] for t in tools], ['write', 'write', 'run'])
+        self.assertEqual((tools[0]['chars'], tools[0]['append']), (3, False))
+        self.assertEqual((tools[1]['total'], tools[1]['append'], tools[1]['output']), (7, True, '，第二段'))
+        self.assertIn('第一段，第二段', tools[2]['output'])
+        self.assertEqual([f['name'] for f in tools[2]['files']], ['副本.md'])
+        work = tools[2]['output'].split('work=')[1].split('\n')[0]
+        self.assertTrue(work.startswith(self.st.out_root))
+        self.assertFalse(os.path.exists(work), '回答结束后删除工作目录')
+        self.assertIn('已追加到 稿/正文.md', ''.join(m.get('t', '') for m in lines))
+
+    def test_write_paths_and_size(self):
+        d = tempfile.mkdtemp(dir=self.root)
+        os.symlink(self.root, os.path.join(d, 'out'))
+        for rel in ('../x.md', '/tmp/x.md', 'out/x.md', '.', '', 'a/../../x.md'):
+            with self.assertRaises(ValueError, msg=rel):
+                fa.write_work_file(d, rel, '内容')
+        with self.assertRaises(ValueError):
+            fa.write_work_file(d, 'a.md', None)
+        self.assertEqual(fa.write_work_file(d, 'a.md', '字' * 10), ('a.md', 10, 10))
+        with mock.patch.object(fa, 'MAX_WORK_CHARS', 15):
+            with self.assertRaises(ValueError):
+                fa.write_work_file(d, 'a.md', '字' * 6, append=True)
+            self.assertEqual(fa.write_work_file(d, 'a.md', '字' * 15)[2], 15)
+        self.assertFalse(os.path.exists(os.path.join(self.root, 'x.md')))
+
+    def test_write_counted_separately(self):
+        code, lines = self.ask('loop:write_work_file:{"path": "a.md", "content": "x"}')
+        tools = [m['tool'] for m in lines if 'tool' in m]
+        self.assertEqual(len(tools), fa.MAX_WRITE_CALLS)
+        self.assertTrue(lines[-1].get('done'))
+        tool_msgs = [m['content'] for m in self.sent()['messages'] if m.get('role') == 'tool']
+        self.assertEqual(tool_msgs.count(fa.WRITE_LIMIT_NOTE), fa.MAX_TOOL_CALLS)
+
+    def test_write_needs_scripts(self):
+        code, lines = self.ask('call:write_work_file:{"path": "a.md", "content": "x"}', skill='plain')
+        self.assertFalse(any('tool' in m for m in lines))
+
+    def test_model_without_tool_support(self):
+        code, lines = self.ask('notools')
+        self.assertIn('不支持 skill 工具', lines[-1]['error'])
+
+    def test_script_timeout(self):
+        d = self.make('slow', '慢脚本', '运行', {'scripts/slow.py': 'import time\ntime.sleep(30)\n'})
+        skill = fa.load_skills()[0]['slow']
+        t0 = time.monotonic()
+        r = fa.run_skill_script(skill, 'scripts/slow.py', [], {}, tempfile.mkdtemp(dir=d), timeout=0.5)
+        self.assertTrue(r['timed_out'])
+        self.assertLess(time.monotonic() - t0, 10)
+
+    def test_output_clipped(self):
+        self.make('loud', '输出很多', '运行', {'scripts/loud.py': 'print("字" * 50000)\n'})
+        skill = fa.load_skills()[0]['loud']
+        r = fa.run_skill_script(skill, 'scripts/loud.py', [], {}, tempfile.mkdtemp(dir=self.root))
+        self.assertLess(len(r['output']), fa.TOOL_OUTPUT_CHARS + 100)
+        self.assertIn('已截断', r['output'])
+
+
+class OfficeGenTest(SkillCase):
+    """预装 office-gen：模型写入 Markdown/JSON 后运行脚本生成 docx/xlsx。"""
+
+    def setUp(self):
+        super().setUp()
+        shutil.copytree(os.path.join(TOOL, 'skills', 'office-gen'), os.path.join(self.bundled, 'office-gen'))
+
+    def test_docx_and_xlsx(self):
+        rows = {'sheets': [{'name': '明细', 'rows': [['部门', '金额'], ['财务', 100]]}]}
+        code, lines = self.seq(
+            ('write_work_file', {'path': '报告.md', 'content': '# 标题\n\n正文'}),
+            ('run_script', {'script': 'scripts/make_docx.py', 'args': ['报告.md', '--out', '季度报告']}),
+            ('write_work_file', {'path': '数据.json', 'content': json.dumps(rows, ensure_ascii=False)}),
+            ('run_script', {'script': 'scripts/make_xlsx.py', 'args': ['数据.json']}), skill='office-gen')
+        self.assertEqual(code, 200)
+        runs = [m['tool'] for m in lines if 'tool' in m and m['tool']['kind'] == 'run']
+        self.assertEqual([r['exit'] for r in runs], [0, 0], runs)
+        self.assertEqual([f['name'] for r in runs for f in r['files']], ['季度报告.docx', '数据.xlsx'])
+
+    seq = SkillChatTest.seq
+
+
+class SaveDocxTest(ServerCase):
+    """「保存为 Word」：/api/docx 把 Markdown 转成 docx 直接返回。"""
+
+    def post(self, body, token='tok'):
+        req = urllib.request.Request(self.base + '/api/docx', data=json.dumps(body).encode('utf-8'),
+                                     headers={'X-Token': token, 'Content-Type': 'application/json'}, method='POST')
+        try:
+            with urllib.request.urlopen(req, timeout=20) as r:
+                return r.status, r.headers.get('Content-Type'), r.read()
+        except urllib.error.HTTPError as e:
+            return e.code, e.headers.get('Content-Type'), e.read()
+
+    def test_converts(self):
+        code, ctype, body = self.post({'markdown': '# 结论\n\n- 甲\n- 乙', 'title': '季度 & 总结'})
+        self.assertEqual(code, 200)
+        self.assertEqual(ctype, fa.DOCX_TYPE)
+        doc = zipfile.ZipFile(io.BytesIO(body)).read('word/document.xml').decode('utf-8')
+        for want in ('季度 &amp; 总结', 'Heading1', '结论', '乙'):
+            self.assertIn(want, doc)
+
+    def test_rejects(self):
+        self.assertEqual(self.post({'markdown': '  '})[0], 400)
+        self.assertEqual(self.post({'markdown': 'x'}, token='bad')[0], 403)
+        with mock.patch.object(fa, 'DOCX_SCRIPT', os.path.join(self.root, 'none.py')), \
+                mock.patch.object(fa, '_docx', []):
+            code, _, body = self.post({'markdown': 'x'})
+        self.assertEqual(code, 500)
+        self.assertIn('找不到', json.loads(body)['error'])
+
+
+class LocalPathTest(ServerCase):
+    """文件夹输入框接受 file:/// 地址。"""
+
+    def url(self, path):
+        return 'file://' + urllib.parse.quote(path)
+
+    def test_escapes_quotes_and_trailing_slash(self):
+        self.assertEqual(fa.local_path(self.url(self.docs) + '/'), self.docs)
+        self.assertEqual(fa.local_path('file:///home/user/%E6%96%87%E6%A1%A3'), '/home/user/文档')
+        self.assertEqual(fa.norm_folder(' "%s/" ' % self.url(self.docs)), self.docs)
+        self.assertEqual(fa.local_path('~/文档'), '~/文档')
+
+    def test_host_or_bad_escape_rejected(self):
+        for bad in ('file://localhost' + self.docs, 'file://server/share', 'file:/tmp',
+                    'file:///tmp/%E6%96', 'file:///tmp/%zz', 'file:///tmp/%00'):
+            with self.assertRaises(ValueError, msg=bad) as cm:
+                fa.norm_folder(bad)
+            self.assertEqual(str(cm.exception), fa.FILE_URL_ERROR)
+
+    def test_add_folder_by_file_url(self):
+        other = os.path.join(self.root, '文档')
+        os.makedirs(other)
+        code, r = self.call('/api/folders', {'add': self.url(other) + '/'})
+        self.assertEqual(code, 200)
+        self.assertIn(other, r['folders'])
+        code, r = self.call('/api/folders', {'add': 'file://localhost' + other})
+        self.assertEqual(code, 400)
+        self.assertEqual(r['error'], fa.FILE_URL_ERROR)
+
+    def test_completion_writes_plain_path(self):
+        sub = os.path.join(self.docs, '子目录')
+        for prefix in (self.url(self.docs) + '/', self.url(os.path.join(self.docs, '子'))):
+            code, r = self.call('/api/dirs?prefix=' + q(prefix))
+            self.assertEqual(r['dirs'], [sub], prefix)
+        self.assertEqual(self.call('/api/dirs?prefix=' + q('file://h/x'))[1]['dirs'], [])
+
+    def test_start_dir(self):
+        self.assertEqual(fa.start_dir(self.url(self.docs)), self.docs)
+        self.assertEqual(fa.start_dir(self.docs + '/'), self.docs)
+        self.assertEqual(fa.start_dir(os.path.join(self.docs, '不存在')), fa.HOME)
+        self.assertEqual(fa.start_dir('file://h/x'), fa.HOME)
+        self.assertEqual(fa.start_dir(''), fa.HOME)
+
+
+class SameNameTest(unittest.TestCase):
+    def test_cases(self):
+        with open(os.path.join(HERE, 'same_name_cases.json'), encoding='utf-8') as f:
+            cases = json.load(f)
+        for group in cases['same']:
+            self.assertEqual(len({fa.same_name_key(n) for n in group}), 1, group)
+        for a, b in cases['different']:
+            self.assertNotEqual(fa.same_name_key(a), fa.same_name_key(b), (a, b))
+
+    def test_keep_newest_then_shorter_path(self):
+        entries = [('/a/报告 (1).txt', '', 1, 200), ('/a/长目录/报告.txt', '', 1, 100), ('/a/报告.txt', '', 1, 100),
+                   ('/a/其他.txt', '', 1, 50), ('/a/长目录/其他 - 副本.txt', '', 1, 50), ('/a/其他 copy.txt', '', 1, 50)]
+        out = [(e[0], [o[0] for o in others]) for e, others in fa.dedup_entries(entries)]
+        self.assertEqual(out, [('/a/报告 (1).txt', ['/a/报告.txt', '/a/长目录/报告.txt']),
+                               ('/a/其他.txt', ['/a/其他 copy.txt', '/a/长目录/其他 - 副本.txt'])])
+        # 修改时间相同时留路径较短的，排在它原来的位置
+        out = fa.dedup_entries([('/a/长目录/报告.txt', '', 1, 100), ('/a/报告.txt', '', 1, 100)])
+        self.assertEqual([e[0] for e, _ in out], ['/a/报告.txt'])
+
+
+class BrowseDedupTest(ServerCase):
+    def setUp(self):
+        super().setUp()
+        for rel, mtime in (('报告.txt', 1000), ('报告 (1).txt', 2000), ('报告 - 副本.txt', 500),
+                           (os.path.join('子目录', '报告_副本.txt'), 3000)):
+            path = os.path.join(self.docs, rel)
+            write(path, '丁')
+            os.utime(path, (mtime, mtime))
+        self.index.refresh(full=True, wait=True)
+
+    def browse(self, dedup):
+        return self.call('/api/browse?dir=%s&dedup=%s' % (q(self.docs), dedup))[1]
+
+    def test_dedup_layer_and_tree(self):
+        r = self.browse('1')
+        self.assertEqual((r['here'], r['here_dedup']), (5, 3))
+        rep = next(f for f in r['files'] if f['name'].startswith('报告'))
+        self.assertEqual(rep['name'], '报告 (1).txt')
+        self.assertEqual([d['name'] for d in rep['dups']], ['报告.txt', '报告 - 副本.txt'])
+        # 含子文件夹时跨层去重：留子目录里最新的那个；读不了的资料包.zip 不算
+        self.assertEqual(r['tree_total'], 3)
+        self.assertEqual(sorted(f['name'] for f in r['tree']), ['会议记录.md', '季度总结.txt', '报告_副本.txt'])
+
+    def test_off(self):
+        r = self.browse('0')
+        self.assertEqual((r['here'], r['here_dedup']), (5, 5))
+        self.assertFalse(any(f.get('dups') for f in r['files']))
+        self.assertEqual(r['tree_total'], 6)
+
+    def test_default_follows_setting(self):
+        self.assertEqual(self.call('/api/browse?dir=' + q(self.docs))[1]['here_dedup'], 3)
+        self.config.dedup = False
+        self.assertEqual(self.call('/api/browse?dir=' + q(self.docs))[1]['here_dedup'], 5)
+
+    def test_search_results_carry_mtime(self):
+        r = self.call('/api/search?q=' + q('报告'))[1]
+        self.assertEqual({x['name']: x['ts'] for x in r['results']}['报告 (1).txt'], 2000)
+
+
+class DedupSettingTest(ServerCase):
+    def test_default_on_and_saved(self):
+        self.assertTrue(self.call('/api/state')[1]['dedup'])
+        code, r = self.call('/api/settings', {'dedup': False})
+        self.assertEqual(code, 200)
+        self.assertFalse(r['dedup'])
+        self.assertFalse(fa.Config(self.config.path).dedup)
+        self.assertTrue(fa.Config(os.path.join(self.root, '没有.json')).dedup)
+
+
+class PickerTest(ServerCase):
+    """原生目录选择：用 tests/fake_picker.sh 冒充 zenity、kdialog。"""
+
+    def setUp(self):
+        super().setUp()
+        self.bin = os.path.join(self.root, 'bin')
+        os.makedirs(self.bin)
+        self.args = os.path.join(self.root, 'args.txt')
+        self.env = mock.patch.dict(os.environ, {'PATH': self.bin + os.pathsep + os.environ.get('PATH', ''),
+                                                'FAKE_PICK': self.docs, 'FAKE_PICK_ARGS': self.args})
+        self.env.start()
+        self.addCleanup(self.env.stop)
+
+    def fake(self, name):
+        os.symlink(os.path.join(HERE, 'fake_picker.sh'), os.path.join(self.bin, name))
+
+    def pick(self, start=''):
+        return self.call('/api/pick-folder', {'start': start, 'title': '选择文件夹', 'page': 'p1'})
+
+    def test_detect(self):
+        path = {'PATH': self.bin}
+        self.assertEqual(fa.detect_picker(path), '')       # 没有图形环境
+        with mock.patch.object(fa.importlib.util, 'find_spec', return_value=None):
+            self.assertEqual(fa.detect_picker(dict(path, DISPLAY=':0')), '')
+        with mock.patch.object(fa.importlib.util, 'find_spec', return_value=object()):
+            self.assertEqual(fa.detect_picker(dict(path, DISPLAY=':0')), 'tkinter')
+            self.assertEqual(fa.detect_picker(dict(path, WAYLAND_DISPLAY='w')), '')
+            self.fake('kdialog')
+            self.assertEqual(fa.detect_picker(dict(path, DISPLAY=':0')), 'kdialog')
+            self.fake('zenity')
+            self.assertEqual(fa.detect_picker(dict(path, WAYLAND_DISPLAY='w')), 'zenity')
+
+    def test_state_reports_picker(self):
+        self.st.picker = fa.FolderPicker('')
+        self.assertFalse(self.call('/api/state')[1]['picker'])
+        code, r = self.pick()
+        self.assertFalse(r['ok'])
+        self.st.picker = fa.FolderPicker('zenity')
+        self.assertTrue(self.call('/api/state')[1]['picker'])
+
+    def test_zenity_pick_from_existing_folder(self):
+        self.fake('zenity')
+        self.st.picker = fa.FolderPicker('zenity')
+        code, r = self.pick('file://' + urllib.parse.quote(self.docs))
+        self.assertEqual((code, r), (200, {'ok': True, 'path': self.docs}))
+        with open(self.args, encoding='utf-8') as f:
+            self.assertIn('--filename=' + self.docs + '/', f.read().splitlines())
+        self.pick(os.path.join(self.docs, '不存在'))
+        with open(self.args, encoding='utf-8') as f:
+            self.assertIn('--filename=' + fa.HOME.rstrip('/') + '/', f.read().splitlines())
+
+    def test_kdialog_cancel_and_failure(self):
+        self.fake('kdialog')
+        self.st.picker = fa.FolderPicker('kdialog')
+        os.environ['FAKE_PICK'] = 'cancel'
+        self.assertEqual(self.pick()[1], {'ok': True, 'path': None})
+        os.environ['FAKE_PICK'] = 'fail'
+        r = self.pick()[1]
+        self.assertFalse(r['ok'])
+        self.assertIn('cannot open display', r['error'])
+
+    def start_slow(self, seconds):
+        self.fake('zenity')
+        self.st.picker = fa.FolderPicker('zenity')
+        os.environ['FAKE_PICK_SLEEP'] = str(seconds)
+        out = {}
+        t = threading.Thread(target=lambda: out.update(r=self.pick()), daemon=True)
+        t.start()
+        for _ in range(100):
+            if self.st.picker.busy():
+                break
+            time.sleep(0.05)
+        self.assertTrue(self.st.picker.busy())
+        return t, out
+
+    def test_only_one_at_a_time_and_no_exit_while_open(self):
+        t, out = self.start_slow(1)
+        code, r = self.pick()
+        self.assertEqual(code, 409)
+        self.assertIn('已有选择窗口打开', r['error'])
+        self.st.quit.set()
+        self.assertIsNone(self.st.should_exit())
+        t.join(10)
+        self.assertEqual(out['r'], (200, {'ok': True, 'path': self.docs}))
+        self.assertFalse(self.st.picker.busy())
+
+    def test_page_closed_ends_picker(self):
+        t, out = self.start_slow(30)
+        t0 = time.monotonic()
+        self.call('/api/bye', {'t': 'tok', 'page': 'p1'}, token=None)
+        t.join(10)
+        self.assertLess(time.monotonic() - t0, 5)
+        self.assertEqual(out['r'][1], {'ok': True, 'path': None})
 
 
 class PageVersionTest(unittest.TestCase):

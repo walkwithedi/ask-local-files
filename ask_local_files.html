@@ -4,16 +4,18 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>找文件问 AI</title>
+<script>if (new URLSearchParams(location.search).get('embed') === '1') document.documentElement.classList.add('embed');</script>
 <style>
-  :root { --bg:#f6f7f9; --card:#fff; --text:#1f2328; --muted:#656d76; --line:#d0d7de; --accent:#0969da; --ok:#1a7f37; --warn:#9a6700; --bad:#cf222e; --pick:#ddf4ff; }
+  :root { --bg:#f6f7f9; --card:#fff; --text:#1f2328; --muted:#656d76; --line:#d0d7de; --accent:#0969da; --ok:#1a7f37; --warn:#9a6700; --bad:#cf222e; --pick:#ddf4ff; --bad-bg:#ffebe9; --folder:#9a5b00; }
   @media (prefers-color-scheme: dark) {
-    :root { --bg:#0d1117; --card:#161b22; --text:#e6edf3; --muted:#8d96a0; --line:#30363d; --accent:#4493f8; --ok:#3fb950; --warn:#d29922; --bad:#f85149; --pick:#132a44; }
+    :root { --bg:#0d1117; --card:#161b22; --text:#e6edf3; --muted:#8d96a0; --line:#30363d; --accent:#4493f8; --ok:#3fb950; --warn:#d29922; --bad:#f85149; --pick:#132a44; --bad-bg:#3d1d20; --folder:#e3b341; }
   }
   * { box-sizing: border-box; }
   [hidden] { display:none !important; }
   body { margin:0; background:var(--bg); color:var(--text); font:15px/1.6 "Noto Sans CJK SC","WenQuanYi Micro Hei","PingFang SC","Microsoft YaHei",sans-serif; }
   main { max-width:1000px; margin:0 auto; padding:20px 16px 40px; }
   header { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+  header .row { flex-wrap:nowrap; }
   h1 { font-size:22px; margin:0; }
   h2 { font-size:17px; margin:0 0 10px; }
   .sub, .hint { color:var(--muted); }
@@ -23,13 +25,20 @@
   .row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
   input[type=text], input[type=password], input[type=number], select, textarea { padding:7px 10px; font:inherit; font-size:14px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--text); min-width:0; }
   #q { flex:3 1 220px; font-size:15px; }
-  #ext { flex:1 1 110px; }
+  #ext { flex:1 1 90px; }
   textarea { width:100%; min-height:5.5em; resize:vertical; }
   select { max-width:100%; }
   button { padding:6px 12px; font:inherit; font-size:14px; border:1px solid var(--line); border-radius:6px; background:var(--card); color:var(--text); cursor:pointer; }
   button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
   button.small { padding:1px 8px; font-size:13px; white-space:nowrap; flex-shrink:0; }
   button:disabled { opacity:.5; cursor:default; }
+  button.danger { color:var(--bad); border-color:var(--bad); }
+  button.danger:hover:not(:disabled) { background:var(--bad-bg); }
+  button.toggle { display:inline-flex; align-items:center; gap:4px; padding:1px 8px; font-size:13px; white-space:nowrap; }
+  button.toggle .arrow { color:var(--muted); font-size:11px; }
+  .icon { flex-shrink:0; vertical-align:-2px; }
+  .folder { color:var(--folder) !important; }
+  .folder .icon { margin-right:4px; }
   :focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
   .ok { color:var(--ok); } .warn { color:var(--warn); } .bad { color:var(--bad); } .info { color:var(--muted); }
   .status { margin:8px 0 0; font-size:14px; }
@@ -41,7 +50,32 @@
   .grow { flex:1 1 auto; min-width:0; }
   .name { font-weight:bold; word-break:break-all; }
   .meta { color:var(--muted); font-size:13px; word-break:break-all; }
-  #results { max-height:420px; overflow-y:auto; }
+  #results, #browseList { max-height:420px; overflow-y:auto; }
+  #convBar { display:flex; flex-wrap:wrap; align-items:center; gap:4px 12px; margin:6px 0 0; }
+  #convTabs { display:flex; flex-wrap:wrap; gap:2px 4px; border-bottom:1px solid var(--line); min-width:0; max-width:100%; }
+  .convtab { display:inline-flex; align-items:center; }
+  .convtab [role=tab] { border:none; border-bottom:2px solid transparent; border-radius:0; background:none; color:var(--muted); padding:3px 8px; }
+  .convtab [role=tab][aria-selected=true] { color:var(--text); border-bottom-color:var(--accent); font-weight:bold; }
+  .convtab .close { border:none; background:none; color:var(--muted); padding:0 6px; font-size:15px; line-height:1; }
+  .convtab .close:hover { color:var(--bad); }
+  #convStatus { margin:0; }
+  #convFrames iframe { display:block; width:100%; height:100%; border:0; }
+  #convFrames { height:calc(100vh - 160px); min-height:480px; }
+  .embed header, .embed .sub, .embed #convBar, .embed main > footer { display:none !important; }
+  .embed main { padding:4px 0 8px; }
+  .tabs { display:flex; gap:4px; border-bottom:1px solid var(--line); margin:0 0 8px; }
+  .tabs [role=tab] { border:none; border-bottom:2px solid transparent; border-radius:0; background:none; color:var(--muted); padding:4px 12px; }
+  .tabs [role=tab][aria-selected=true] { color:var(--text); border-bottom-color:var(--accent); font-weight:bold; }
+  #crumbs { display:flex; flex-wrap:wrap; align-items:center; gap:2px; font-size:14px; }
+  #crumbs .sep { color:var(--muted); }
+  #crumbs [aria-current] { font-weight:bold; padding:2px 4px; word-break:break-all; }
+  button.dir { border:none; background:none; color:var(--folder); padding:0; font-weight:bold; text-align:left; word-break:break-all; }
+  .meta button.link { padding:0; text-align:left; word-break:break-all; }
+  ul.list ul.dups { flex-basis:100%; min-width:0; margin:2px 0 0 1.2em; }
+  ul.list ul.dups li { padding:3px 0; }
+  .dedup { display:inline-flex; gap:4px; align-items:center; font-size:13px; color:var(--muted); margin-top:6px; }
+  .pickrow { flex-wrap:nowrap; }
+  .pickrow input { flex:1 1 auto; width:auto; min-width:0; }
   .card-head { display:flex; align-items:center; gap:8px; margin:0 0 10px; }
   .card-head h2 { margin:0; flex:1 1 auto; }
   .status-row { display:flex; flex-wrap:wrap; gap:4px 10px; align-items:baseline; margin-top:8px; }
@@ -51,26 +85,81 @@
   .panel h3 { font-size:15px; margin:4px 0 6px; }
   #chatWrap { margin-bottom:8px; }
   #chat { max-height:60vh; overflow-y:auto; }
-  #modelRow { margin-top:4px; }
+  #skillHint .one { display:flex; gap:6px; align-items:baseline; }
+  #skillHint .one span { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #skillHint .one button { flex-shrink:0; white-space:nowrap; }
+  #optRow { gap:0 16px; }
+  #optRow > .row { min-width:0; max-width:100%; }
+  #modelRow, #skillRow { margin-top:4px; }
+  #skillSel { max-width:100%; }
+  .tools { margin:0 0 6px; font-size:13px; }
+  .tools details { border-left:3px solid var(--line); padding:2px 0 2px 8px; margin:4px 0; }
+  .tools summary { cursor:pointer; color:var(--muted); word-break:break-all; }
+  .tools .bad { color:var(--bad); }
+  .tools .row { margin-top:4px; }
   #askNotice { margin-top:6px; }
   #askNotice .status { margin:0; }
   .layout { display:block; }
+  /* 电脑屏幕：页面铺满窗口，找文件约占四成，问 AI 占满其余宽度和高度；两栏各自滚动，页脚常驻底部 */
   @media (min-width:900px) {
-    main { max-width:1280px; }
-    .layout { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:0 16px; align-items:start; }
-    .col-right { position:sticky; top:0; }
-    #chat { max-height:max(200px, calc(100vh - 430px)); }
+    main { max-width:none; height:100vh; display:flex; flex-direction:column; padding:12px 24px 8px; }
+    .sub { margin:2px 0 4px; }
+    .embed main { padding:4px 0; }
+    .layout { flex:1 1 auto; min-height:0; display:grid; grid-template-columns:minmax(300px,3fr) minmax(0,7fr); gap:0 16px; }
+    #convFrames { flex:1 1 auto; min-height:0; height:auto; }
+    /* 左栏不整体滚动：标签、状态、路径固定在上，结果列表占满剩余高度、只有这一条滚动条；已选最高约四成，自己滚动 */
+    .col-left { min-height:0; display:flex; flex-direction:column; overflow:hidden; padding-right:4px; }
+    #findCard { flex:1 1 0; min-height:180px; display:flex; flex-direction:column; overflow:hidden; }
+    #findBody { flex:1 1 auto; min-height:0; display:flex; flex-direction:column; }
+    #findBody > * { flex:0 0 auto; }
+    #findBody > #folderPanel { flex:0 1 auto; min-height:60px; overflow-y:auto; }
+    #findBody > #searchPane, #findBody > #browsePane { flex:1 1 auto; min-height:0; display:flex; flex-direction:column; }
+    #searchPane > *, #browsePane > * { flex:0 0 auto; }
+    #results, #browseList { flex:1 1 auto; min-height:60px; max-height:none; }
+    #pickedCard { flex:0 0 auto; min-height:0; max-height:40%; display:flex; flex-direction:column; }
+    #pickedCard > * { flex:0 0 auto; }
+    #picked { flex:1 1 auto; min-height:0; overflow-y:auto; }
+    .col-right { min-height:0; display:flex; flex-direction:column; }
+    #askCard { flex:1 1 auto; min-height:0; display:flex; flex-direction:column; overflow-y:auto; }
+    #chatWrap { flex:1 1 auto; min-height:160px; display:flex; flex-direction:column; }
+    #chat { flex:1 1 auto; min-height:0; max-height:none; }
+    #chatWrap #chat:empty { display:block; }
+    #askCard textarea { min-height:calc(6.4em + 16px); }
+    main > footer { flex:0 0 auto; margin-top:4px; padding-top:6px; }
   }
   pre, .msg-body { white-space:pre-wrap; word-break:break-word; }
+  /* 回答按 Markdown 显示 */
+  .msg-body.md { white-space:normal; }
+  .md p, .md li, .md td, .md th, .md h1, .md h2, .md h3, .md h4, .md h5, .md h6 { white-space:pre-wrap; word-break:break-word; }
+  .md p { margin:0 0 8px; }
+  .md > :last-child { margin-bottom:0; }
+  .md h1, .md h2, .md h3, .md h4, .md h5, .md h6 { margin:10px 0 6px; line-height:1.4; }
+  .md h1 { font-size:19px; } .md h2 { font-size:17px; } .md h3 { font-size:16px; } .md h4, .md h5, .md h6 { font-size:15px; }
+  .md ul, .md ol { margin:0 0 8px; padding-left:1.6em; }
+  .md li > ul, .md li > ol { margin:2px 0; }
+  .md blockquote { margin:0 0 8px; padding:2px 0 2px 10px; border-left:3px solid var(--line); color:var(--muted); }
+  .md hr { border:none; border-top:1px solid var(--line); margin:10px 0; }
+  .md code { font:13px/1.5 "Noto Sans Mono CJK SC","DejaVu Sans Mono",monospace; background:var(--bg); border:1px solid var(--line); border-radius:4px; padding:0 3px; }
+  .md pre { margin:0 0 8px; max-height:none; white-space:pre; }
+  .md pre code { border:none; padding:0; background:none; }
+  .md .table-wrap { max-width:100%; overflow-x:auto; margin:0 0 8px; }
+  .md table { border-collapse:collapse; font-size:14px; }
+  .md th, .md td { border:1px solid var(--line); padding:3px 8px; text-align:left; vertical-align:top; }
+  .md th { background:var(--bg); }
+  .md .md-url { color:var(--muted); word-break:break-all; }
   pre { background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:8px 10px; margin:6px 0 0; max-height:320px; overflow:auto; font:13px/1.5 "Noto Sans Mono CJK SC","DejaVu Sans Mono",monospace; }
   .preview { flex-basis:100%; min-width:0; }
   .preview .hint { margin:4px 0 0; }
   .num { color:var(--muted); min-width:1.6em; }
   .acts { display:flex; gap:8px; flex-shrink:0; }
-  .msg { border-top:1px solid var(--line); padding:8px 0; }
-  .msg:first-child { border-top:none; }
-  .who { font-size:13px; color:var(--muted); display:flex; gap:8px; align-items:center; }
-  .msg.user .msg-body { color:var(--muted); }
+  .msg { border:1px solid var(--line); border-radius:8px; padding:8px 10px; margin:8px 0; }
+  .msg:first-child { margin-top:0; }
+  .msg.user { background:var(--pick); border-color:var(--pick); }
+  .msg.assistant { background:var(--card); }
+  .who { font-size:13px; color:var(--muted); display:flex; flex-wrap:wrap; gap:4px 8px; align-items:center; }
+  .msg.user .who { color:var(--accent); font-weight:bold; }
+  .msg.assistant .who { color:var(--ok); }
+  .msg .foot { margin-top:6px; }
   .msg .partial { color:var(--warn); font-size:13px; }
   .msg .cite { color:var(--warn); font-size:13px; white-space:pre-wrap; word-break:break-word; }
   #chat:empty { display:none; }
@@ -88,13 +177,20 @@
 <main>
   <header>
     <h1>找文件问 AI</h1>
-    <button id="quit" type="button">退出</button>
+    <div class="row">
+      <button id="newConv" type="button" title="在本窗口新开一个对话标签，已选和对话各自独立">＋ 新对话</button>
+      <button id="quit" type="button">退出</button>
+    </div>
   </header>
-  <p class="sub">在添加的文件夹里按文件名快速找出文件，选几个交给 AI 提问、改写、总结。</p>
+  <p class="sub">逐层浏览或按文件名找出文件交给 AI，或选用 skill 让 AI 运行脚本处理；点「＋ 新对话」可在新标签里并行。支持 Word（docx）、Excel（xlsx、xlsm）、PowerPoint（pptx）、旧版 doc、xls、ppt（wps、et、dps 按同类格式试读）、PDF、邮件（eml）、网页（html、htm）、纯文本与代码文件；压缩包等读不了的文件可点「打开文件夹」自己处理。</p>
   <div id="closed">服务已退出，可关闭本页。需要再用时重新双击「双击运行」。</div>
   <div id="banner" class="banner" role="status" hidden></div>
+  <div id="convBar" hidden>
+    <div id="convTabs" role="tablist" aria-label="对话"></div>
+    <div id="convStatus" class="status info" aria-live="polite"></div>
+  </div>
 
-  <div class="layout">
+  <div id="convMain" class="layout">
   <div class="col-left">
   <section class="card" id="findCard" aria-labelledby="h-find">
     <h2 id="h-find">找文件</h2>
@@ -103,32 +199,54 @@
       <button id="reselect" type="button">改选文件</button>
     </div>
     <div id="findBody">
-      <div class="row">
-        <input id="q" type="text" placeholder="文件名或路径里的字，空格分开多个关键字，回车加入第一个结果" autocomplete="off" aria-label="关键字" autofocus>
+      <div class="tabs" role="tablist" aria-label="找文件的方式">
+        <button id="tabBrowse" type="button" role="tab" aria-selected="true" aria-controls="browsePane">浏览文件夹</button>
+        <button id="tabSearch" type="button" role="tab" aria-selected="false" aria-controls="searchPane" tabindex="-1">搜索</button>
+      </div>
+      <div id="searchRow" class="row" hidden>
+        <input id="q" type="text" placeholder="文件名或路径里的字，空格分开多个关键字，回车加入第一个结果" autocomplete="off" aria-label="关键字">
         <input id="ext" type="text" placeholder="扩展名，如 docx pdf" autocomplete="off" aria-label="扩展名">
       </div>
       <div id="findStatusRow" class="status-row">
         <div id="findStatus" class="status info" aria-live="polite"></div>
         <button id="refresh" class="link" type="button">刷新</button>
-        <button id="manageFolders" class="link" type="button" aria-expanded="false" aria-controls="folderPanel">管理文件夹</button>
+        <button id="manageFolders" class="toggle" type="button" aria-expanded="false" aria-controls="folderPanel"><svg class="icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false"><path fill="currentColor" d="M1.5 3.5A1.5 1.5 0 0 1 3 2h3.2l1.5 1.5H13a1.5 1.5 0 0 1 1.5 1.5v7.5A1.5 1.5 0 0 1 13 14H3a1.5 1.5 0 0 1-1.5-1.5z"/></svg>管理文件夹<span class="arrow" aria-hidden="true">▸</span></button>
+      </div>
+      <div id="openStatusRow" class="status-row" hidden>
+        <div id="openStatus" class="status info" aria-live="polite"></div>
+        <button id="copyFolder" class="link" type="button" hidden>复制路径</button>
       </div>
       <div id="folderPanel" class="panel" hidden>
         <h3>索引的文件夹</h3>
         <ul id="folders" class="list"></ul>
         <div class="row" style="margin-top:8px">
-          <input id="folder" type="text" placeholder="绝对路径或 ~/ 开头，如 ~/文档" autocomplete="off" aria-label="要添加的文件夹" list="folderList" style="flex:1 1 240px">
+          <input id="folder" type="text" placeholder="绝对路径、~/ 开头或粘贴 file:/// 地址，如 ~/文档" autocomplete="off" aria-label="要添加的文件夹" list="folderList" style="flex:1 1 240px">
           <datalist id="folderList"></datalist>
+          <button id="pickFolder" type="button" aria-label="选择要添加的文件夹" hidden>选择……</button>
           <button id="addFolder" type="button">添加</button>
           <button id="rebuild" type="button">重建索引</button>
         </div>
         <div id="places" class="row hint" style="margin-top:6px"></div>
         <div id="folderStatus" class="status" aria-live="polite"></div>
       </div>
-      <div id="addAllRow" class="row" style="margin-top:6px" hidden>
-        <button id="addAll" class="small" type="button"></button>
-        <span id="addAllHint" class="hint" style="margin:0"></span>
+      <div id="searchPane" role="tabpanel" aria-labelledby="tabSearch" hidden>
+        <label class="dedup"><input id="dedupSearch" type="checkbox" checked>按文件名去重</label>
+        <label class="dedup" style="margin-left:12px"><input id="regex" type="checkbox">正则表达式</label>
+        <div id="addAllRow" class="row" style="margin-top:6px" hidden>
+          <button id="addAll" class="small" type="button"></button>
+          <span id="addAllHint" class="hint" style="margin:0"></span>
+        </div>
+        <ul id="results" class="list"></ul>
       </div>
-      <ul id="results" class="list"></ul>
+      <div id="browsePane" role="tabpanel" aria-labelledby="tabBrowse">
+        <label class="dedup"><input id="dedupBrowse" type="checkbox" checked>按文件名去重</label>
+        <nav id="crumbs" aria-label="当前文件夹" style="margin-top:6px"></nav>
+        <div id="browseAddRow" class="row" style="margin-top:6px" hidden>
+          <button id="browseAdd" class="small" type="button"></button>
+          <span id="browseAddHint" class="hint" style="margin:0"></span>
+        </div>
+        <ul id="browseList" class="list"></ul>
+      </div>
     </div>
   </section>
 
@@ -137,7 +255,7 @@
     <ul id="picked" class="list"></ul>
     <div class="row" style="margin-top:6px">
       <button id="removeBad" type="button" hidden></button>
-      <button id="clearPicked" type="button" hidden>清空已选</button>
+      <button id="clearPicked" class="danger" type="button" hidden>清空已选</button>
     </div>
     <div id="pickStatus" class="status info" aria-live="polite"></div>
   </section>
@@ -148,15 +266,24 @@
     <div class="card-head">
       <h2 id="h-ask">问 AI</h2>
       <button id="save" class="small" type="button">保存对话</button>
-      <button id="clear" class="small" type="button">清空对话</button>
+      <button id="saveDocx" class="small" type="button">保存为 Word</button>
+      <button id="clear" class="small danger" type="button">清空对话</button>
     </div>
     <div id="chatStatus" class="status" aria-live="polite"></div>
     <div id="chatWrap"><div id="chat"></div></div>
+    <div id="optRow" class="row">
     <div id="modelRow" class="row">
       <label for="model" class="hint" style="margin:0">模型</label>
       <select id="model"></select>
-      <button id="modelSettings" class="link" type="button" aria-expanded="false" aria-controls="modelPanel">模型设置</button>
+      <button id="modelSettings" class="toggle" type="button" aria-expanded="false" aria-controls="modelPanel"><svg class="icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false"><g fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="8" cy="8" r="2.2"/><circle cx="8" cy="8" r="4.6"/><path d="M8 1.2v2.2M8 12.6v2.2M1.2 8h2.2M12.6 8h2.2M3.2 3.2l1.5 1.5M11.3 11.3l1.5 1.5M3.2 12.8l1.5-1.5M11.3 4.7l1.5-1.5"/></g></svg>模型设置<span class="arrow" aria-hidden="true">▸</span></button>
     </div>
+    <div id="skillRow" class="row">
+      <label for="skillSel" class="hint" style="margin:0">skill</label>
+      <select id="skillSel"><option value="">不用 skill</option></select>
+      <button id="skillReload" class="link" type="button">重新读取</button>
+    </div>
+    </div>
+    <div id="skillHint" class="hint" aria-live="polite"></div>
     <div id="dest" class="hint"></div>
     <div id="modelPanel" class="panel" hidden>
       <h3>发送字数上限</h3>
@@ -183,7 +310,7 @@
     <div class="row" style="margin-top:8px">
       <button id="send" class="primary" type="button">发送</button>
       <button id="stop" type="button" hidden>停止</button>
-      <span id="sendHint" class="hint">Ctrl+Enter 发送</span>
+      <span id="sendHint" class="hint">Enter 发送，Shift+Enter 换行</span>
     </div>
     <div id="askNotice" class="status-row">
       <div id="askStatus" class="status" aria-live="polite"></div>
@@ -192,19 +319,28 @@
   </section>
   </div>
   </div>
+  <div id="convFrames" hidden></div>
 
 
-  <footer><span id="ver">找文件问 AI v1.5</span>　关闭本页后服务自动退出；点「退出」立即结束。有回答正在生成时，服务等它结束再退出。对话不自动保存，退出即清空。</footer>
+  <footer><span id="ver">找文件问 AI v1.15</span>　关闭全部页面后服务自动退出；点「退出」立即结束，开着的页面一起结束。有回答正在生成（含 skill 脚本运行）时，服务等它结束再退出。对话不自动保存，退出即清空。</footer>
 </main>
 <script>
 'use strict';
-const TOKEN = new URLSearchParams(location.search).get('t') || '';
+const QS = new URLSearchParams(location.search);
+const TOKEN = QS.get('t') || '';
 const PAGE = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+// embed=1：作为「＋ 新对话」的标签嵌在窗口里，shell 为所在窗口的页面编号；页头、页脚由窗口负责
+const EMBED = QS.get('embed') === '1', SHELL = EMBED ? QS.get('shell') || '' : '';
 const $ = id => document.getElementById(id);
-let alive = true, state = null, maxFiles = 20, charLimit = 100000;
+let alive = true, state = null, maxFiles = 50, charLimit = 100000;
 let results = [], picked = [], chat = [], busy = false, controller = null, searchTimer = null, pollTimer = null;
 let savedLen = 0;      // 上次「保存对话」时的条数，用来判断有没有未保存的问答
-let resultsKey = '', indexNote = ['', 'info'], openPreviews = {}, overShown = false, searchTotal = 0, addedNote = '';
+let skills = [], skillsDir = '';
+let resultsKey = '', indexNote = ['', 'info'], openPreviews = {}, overShown = false, searchComplete = false, addedNote = '';
+let findMode = 'browse', browseDir = '', browse = null, browseKey = '', skillOpen = false;
+let rawResults = [], hiddenSearch = new Set(), hiddenBrowse = new Set(), regexOn = false, dedupOn = true, openDups = {}, dupPreviews = {}, listVer = 0, addedKind = 'ok', cutAction = null;
+const EMPTY_ASK = '请按所选 skill 的说明处理已选文件。';   // 选了 skill、没写问题时代为提问，与服务端一致
+const CONTINUE_ASK = '继续：从上一条回答的断处接着写，不要重复已写的内容。';
 
 function api(path, opts) {
   opts = opts || {};
@@ -225,12 +361,13 @@ function serviceGone(msg) {
   $('closed').style.display = 'block';
   document.querySelectorAll('button, input, textarea, select').forEach(el => { el.disabled = true; });
   if (pollTimer) clearInterval(pollTimer);
+  convs.forEach(c => { if (c.frame) try { c.frame.contentWindow.askConv.gone(msg); } catch (e) { /* 标签已关闭 */ } });
 }
 
 // 心跳连续失败 3 次才判定服务已退出，偶发一次失败不影响使用
 let pingFails = 0;
 function ping() {
-  post('/api/ping', {page: PAGE}).then(() => { pingFails = 0; }).catch(() => { if (++pingFails >= 3) serviceGone(); });
+  post('/api/ping', {page: PAGE, shell: SHELL}).then(() => { pingFails = 0; }).catch(() => { if (++pingFails >= 3) serviceGone(); });
 }
 ping();
 setInterval(() => { if (alive) ping(); }, 10000);
@@ -273,6 +410,26 @@ function fmtSize(n) {
   return n + ' B';
 }
 function fmtNum(n) { return Number(n).toLocaleString('zh-CN'); }
+// 文件夹按钮：文件夹图标加名称，用 --folder 颜色与文件区分
+function folderIcon() {
+  const ns = 'http://www.w3.org/2000/svg', svg = document.createElementNS(ns, 'svg'), p = document.createElementNS(ns, 'path');
+  svg.setAttribute('class', 'icon');
+  svg.setAttribute('viewBox', '0 0 16 16');
+  svg.setAttribute('width', '14');
+  svg.setAttribute('height', '14');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.setAttribute('focusable', 'false');
+  p.setAttribute('fill', 'currentColor');
+  p.setAttribute('d', 'M1.5 3.5A1.5 1.5 0 0 1 3 2h3.2l1.5 1.5H13a1.5 1.5 0 0 1 1.5 1.5v7.5A1.5 1.5 0 0 1 13 14H3a1.5 1.5 0 0 1-1.5-1.5z');
+  svg.appendChild(p);
+  return svg;
+}
+function folderBtn(name, cls, onClick) {
+  const b = btn('', cls + ' folder', onClick);
+  b.appendChild(folderIcon());
+  b.appendChild(document.createTextNode(name));
+  return b;
+}
 
 // ---------------- 找文件
 
@@ -290,20 +447,38 @@ function indexText(ix) {
 
 function search() {
   const q = $('q').value.trim(), ext = $('ext').value.trim();
-  return api('/api/search?q=' + encodeURIComponent(q) + '&ext=' + encodeURIComponent(ext)).then(r => {
-    results = r.results;
-    searchTotal = q || ext ? r.total : 0;
+  return api('/api/search?q=' + encodeURIComponent(q) + '&ext=' + encodeURIComponent(ext) + (regexOn ? '&re=1' : '')).then(r => {
+    rawResults = r.results;
+    const all = dedupOn ? dedupList(rawResults) : rawResults.slice();
+    results = all.filter(x => !hiddenSearch.has(x.path));
+    searchComplete = r.total <= r.results.length;
     renderResults();
     let s = indexText(r.status);
     if (state && state.folders.length) {
       s += q || ext ? '。找到 ' + fmtNum(r.total) + ' 个' : '。下面是最近修改的文件';
       if (r.total > r.results.length) s += '，显示最近修改的 ' + r.results.length + ' 个';
+      if (all.length < rawResults.length) s += '（去重后 ' + fmtNum(all.length) + ' 个）';
+      if (results.length < all.length) s += '，已从列表移除 ' + (all.length - results.length) + ' 个';
     }
+    if (findMode !== 'search') return;
     indexNote = [s, r.status.error ? 'warn' : 'info'];
     showFindStatus();
     watchScan(r.status.scanning);
-  }).catch(e => { if (alive) say('findStatus', '搜索失败：' + e.message + '。请点「刷新」重试。', 'bad'); });
+  }).catch(e => {
+    if (!alive || findMode !== 'search') return;
+    if (e.status !== 400 || !regexOn) { say('findStatus', '搜索失败：' + e.message + '。请点「刷新」重试。', 'bad'); return; }
+    // 正则写错：清空结果，提示改写
+    rawResults = [];
+    results = [];
+    searchComplete = false;
+    renderResults();
+    indexNote = ['搜索失败：' + e.message + '。请修改后再搜。', 'bad'];
+    showFindStatus();
+  });
 }
+
+// 按当前标签页重新取结果：扫描轮询、刷新、增删文件夹后调用
+function refreshFind() { return findMode === 'browse' ? loadBrowse(browseDir) : search(); }
 
 function full() { return picked.length >= maxFiles; }
 
@@ -320,7 +495,7 @@ function watchScan(scanning) {
   $('refresh').disabled = scanning || !alive;
   $('rebuild').disabled = scanning || !alive;
   if (scanning && !pollTimer) {
-    pollTimer = setInterval(() => { search(); }, 1500);
+    pollTimer = setInterval(() => { refreshFind(); }, 1500);
   } else if (!scanning && pollTimer) {
     clearInterval(pollTimer);
     pollTimer = null;
@@ -328,29 +503,118 @@ function watchScan(scanning) {
 }
 
 function folderOf(rel) { const i = rel.lastIndexOf('/'); return i < 0 ? rel : rel.slice(0, i); }
+function dirOf(path) { const i = path.lastIndexOf('/'); return i <= 0 ? '/' : path.slice(0, i); }
 
 function isPicked(path) { return picked.some(p => p.path === path); }
+
+// ---------------- 按文件名去重：与服务端 same_name_key 同一规则（tests/same_name_cases.json）
+// 不区分大小写，扩展名不同不算同名，去掉扩展名前的一个副本标记（「 (2)」「（2）」「 - 副本」「 copy」等，后可再带序号）
+const COPY_NUM = ' ?(?:\\([0-9]+\\)|（[0-9]+）)';
+const COPY_MARK_RE = new RegExp('^(.+?)(?:' + COPY_NUM + '|(?: - 副本|-副本|_副本| \\(副本\\)|副本| - copy| \\(copy\\)| copy)(?:' + COPY_NUM + ')?)$');
+function sameNameKey(name) {
+  name = name.toLowerCase();
+  const i = name.lastIndexOf('.'), cut = i > 0 && /[^.]/.test(name.slice(0, i));
+  const stem = cut ? name.slice(0, i) : name, m = COPY_MARK_RE.exec(stem);
+  return (m ? m[1] : stem) + (cut ? name.slice(i) : '');
+}
+// 同名一组只留修改时间最新的（相同时取路径较短的），其余放进 dups（按修改时间倒序）；保持原来的先后
+function dedupList(list) {
+  const groups = new Map();
+  list.forEach((r, i) => {
+    const k = sameNameKey(r.name);
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push({r, i});
+  });
+  const out = [];
+  groups.forEach(g => {
+    g.sort((a, b) => b.r.ts - a.r.ts || a.r.path.length - b.r.path.length || (a.r.path < b.r.path ? -1 : a.r.path > b.r.path ? 1 : 0));
+    out.push({i: g[0].i, r: Object.assign({}, g[0].r, {dups: g.slice(1).map(x => x.r)})});
+  });
+  return out.sort((a, b) => a.i - b.i).map(x => x.r);
+}
+// 已选里各文件的同名键；去重关闭时为空，不跳过同名
+function pickedKeys() { return new Set(dedupOn ? picked.map(p => sameNameKey(p.name)) : []); }
+function samePicked(r) { return dedupOn ? picked.find(p => sameNameKey(p.name) === sameNameKey(r.name)) : null; }
+
+function setDedup(on) {
+  dedupOn = on;
+  $('dedupSearch').checked = on;
+  $('dedupBrowse').checked = on;
+}
+['dedupSearch', 'dedupBrowse'].forEach(id => $(id).addEventListener('change', () => {
+  setDedup($(id).checked);
+  post('/api/settings', {dedup: dedupOn}).catch(e => say('findStatus', failText('保存去重设置', e.message, RETRY), 'bad'));
+  refreshFind();
+}));
+
+// 展开、收起同名文件或其预览后重绘列表，保留滚动与焦点
+function redrawLists() { listVer++; renderResults(); }
+function toggleDups(path) {
+  if (openDups[path]) delete openDups[path]; else openDups[path] = true;
+  redrawLists();
+}
+function toggleDupPreview(d) {
+  if (dupPreviews[d.path]) { delete dupPreviews[d.path]; redrawLists(); return; }
+  api('/api/text?preview=1&path=' + encodeURIComponent(d.path)).then(t => {
+    if (t.error) { say('findStatus', failText('预览', t.error, '请换一个文件。'), 'bad'); return; }
+    dupPreviews[d.path] = {text: t.text, more: t.more};
+    redrawLists();
+  }).catch(e => say('findStatus', failText('预览', e.message, RETRY), 'bad'));
+}
+// 其余同名文件：位置、大小、修改时间，各带「预览」「加入」
+function dupList(dups) {
+  const ul = el('ul', 'list dups');
+  dups.forEach(d => {
+    const on = isPicked(d.path);
+    const li = el('li', on ? 'picked' : '');
+    li.dataset.path = d.path;
+    li.style.flexWrap = 'wrap';
+    const meta = el('div', 'grow meta', d.rel + '　' + fmtSize(d.size) + '　' + d.mtime);
+    if (!d.supported) meta.appendChild(el('span', 'bad', '　' + d.reason));
+    li.appendChild(meta);
+    const open = !!dupPreviews[d.path];
+    const pv = btn(open ? '收起' : '预览', 'small', () => toggleDupPreview(d));
+    pv.dataset.act = 'preview';
+    pv.disabled = !d.supported;
+    pv.setAttribute('aria-expanded', String(open));
+    pv.setAttribute('aria-label', (open ? '收起预览 ' : '预览 ') + d.rel);
+    const b = !on && !d.supported ? openFolderBtn(d.path, d.rel) : btn(on ? '移除' : '加入', 'small', () => { on ? unpick(d.path) : pick(d); });
+    if (on || d.supported) {
+      b.dataset.act = 'toggle';
+      b.disabled = !on && full();
+      b.setAttribute('aria-label', (on ? '移除 ' : '加入 ') + d.rel);
+    }
+    const acts = el('span', 'acts');
+    acts.appendChild(pv);
+    acts.appendChild(b);
+    li.appendChild(acts);
+    if (open) li.appendChild(previewNode(dupPreviews[d.path]));
+    ul.appendChild(li);
+  });
+  return ul;
+}
 
 // 列表重绘前记下焦点所在的行与按钮，重绘后放回同一行；那一行没了就落到同位置的下一行
 function focusedRow(ul) {
   const a = document.activeElement;
   if (!a || !ul.contains(a)) return null;
   const li = a.closest('li');
-  return {path: li.dataset.path, idx: [...ul.children].indexOf(li), act: a.dataset.act || ''};
+  return {path: li.dataset.path, idx: [...ul.querySelectorAll('li')].indexOf(li), act: a.dataset.act || ''};
 }
 function restoreFocus(ul, f) {
   if (!f) return;
-  const rows = [...ul.children].filter(li => li.dataset.path);
+  const rows = [...ul.querySelectorAll('li')].filter(li => li.dataset.path);
   const li = rows.find(x => x.dataset.path === f.path) || rows[Math.min(f.idx, rows.length - 1)];
   const b = li && (li.querySelector('button[data-act="' + f.act + '"]:not(:disabled)') || li.querySelector('button:not(:disabled)'));
-  (b || $('q')).focus();
+  (b || (findMode === 'browse' ? $('tabBrowse') : $('q'))).focus();
 }
 
-// 填了关键字或扩展名、找到的少于选取上限时，给「全部加入」；只算读得了且还没加入的
-function addable() { return results.filter(r => r.supported && !isPicked(r.path)); }
+// 服务端找到的都已返回、列表里（去重与从列表移除之后）少于选取上限时，给「全部加入」；
+// 只算列表里读得了且还没加入（去重时含同名）的
+function addable() { const keys = pickedKeys(); return results.filter(r => r.supported && !isPicked(r.path) && !keys.has(sameNameKey(r.name))); }
 function renderAddAll() {
   const n = addable().length, room = maxFiles - picked.length;
-  const show = searchTotal > 0 && searchTotal < maxFiles && n > 0;
+  const show = searchComplete && results.length < maxFiles && n > 0;
   $('addAllRow').hidden = !show;
   if (!show) return;
   $('addAll').textContent = '全部加入（' + n + ' 个）';
@@ -359,47 +623,129 @@ function renderAddAll() {
 }
 $('addAll').addEventListener('click', () => {
   const todo = addable(), skipped = results.filter(r => !r.supported).length;
+  const same = results.filter(r => r.supported && !isPicked(r.path)).length - todo.length;
   if (!todo.length || todo.length > maxFiles - picked.length) return;
-  if (!confirmNewChat()) return;
+  if (!newChat()) return;
   todo.forEach(r => pick(r, true));
   // 记下结果，取文字期间和取完后重绘「已选」时仍显示，直到下一次改动已选
-  addedNote = '已加入 ' + todo.length + ' 个' + (skipped ? '，' + skipped + ' 个读不了的已跳过' : '') + '。';
+  addedNote = '已加入 ' + todo.length + ' 个' + (skipped ? '，' + skipped + ' 个读不了的已跳过' : '') +
+    (same ? '，' + same + ' 个与已选同名的已跳过' : '') + '。';
+  addedKind = 'ok';
   renderPicked();
 });
 
 function renderResults() {
   renderAddAll();
-  const key = JSON.stringify([results.map(r => r.path), picked.map(p => p.path), full()]);
+  renderBrowse();
+  const key = JSON.stringify([results.map(r => [r.path, (r.dups || []).map(d => d.path)]), picked.map(p => p.path), full(), listVer]);
   if (key === resultsKey) return;      // 没变就不重绘，扫描轮询时不打断滚动与焦点
   resultsKey = key;
   const ul = $('results'), top = ul.scrollTop, focus = focusedRow(ul);
   ul.textContent = '';
-  results.forEach(r => {
-    const on = isPicked(r.path);
-    const li = el('li', on ? 'picked' : '');
-    li.dataset.path = r.path;
-    const box = el('div', 'grow');
-    box.appendChild(el('div', 'name', r.name));
-    const meta = el('div', 'meta', folderOf(r.rel) + '　' + fmtSize(r.size) + '　' + r.mtime);
-    if (!r.supported) meta.appendChild(el('span', 'bad', '　' + r.reason));
-    box.appendChild(meta);
-    li.appendChild(box);
-    const b = btn(on ? '移除' : '加入', 'small', () => { on ? unpick(r.path) : pick(r); });
-    b.dataset.act = 'toggle';
-    b.setAttribute('aria-label', (on ? '移除 ' : '加入 ') + r.name);
-    b.disabled = !on && (!r.supported || full());
-    li.appendChild(b);
-    ul.appendChild(li);
-  });
+  results.forEach(r => ul.appendChild(fileRow(r, true)));
   ul.scrollTop = top;
   restoreFocus(ul, focus);
 }
 
-$('q').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(search, 120); });
-$('ext').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(search, 120); });
+// 「从列表移除」：只把这一行（连同去重收起的同名）从当前标签页的列表拿掉，不动已选、索引和文件
+function hideRow(r) {
+  const set = findMode === 'browse' ? hiddenBrowse : hiddenSearch;
+  set.add(r.path);
+  (r.dups || []).forEach(d => set.add(d.path));
+  listVer++;
+  refreshFind();
+}
+
+// 一个文件行：文件名、所在文件夹（withFolder 时可点，跳到「浏览」里那个文件夹）、大小、时间、从列表移除、加入/移除
+function fileRow(r, withFolder) {
+  const on = isPicked(r.path);
+  const li = el('li', on ? 'picked' : '');
+  li.dataset.path = r.path;
+  const box = el('div', 'grow');
+  box.appendChild(el('div', 'name', r.name));
+  const meta = el('div', 'meta');
+  if (withFolder) {
+    const f = folderBtn(folderOf(r.rel), 'link', () => openBrowse(dirOf(r.path)));
+    f.dataset.act = 'folder';
+    f.setAttribute('aria-label', '浏览文件夹 ' + folderOf(r.rel));
+    meta.appendChild(f);
+    meta.appendChild(document.createTextNode('　'));
+  }
+  meta.appendChild(document.createTextNode(fmtSize(r.size) + '　' + r.mtime));
+  if (!r.supported) meta.appendChild(el('span', 'bad', '　' + r.reason));
+  const dups = r.dups || [], open = dups.length > 0 && !!openDups[r.path];
+  if (dups.length) {
+    meta.appendChild(document.createTextNode('　'));
+    const more = btn('另有 ' + dups.length + ' 个同名', 'link', () => toggleDups(r.path));
+    more.dataset.act = 'dups';
+    more.setAttribute('aria-expanded', String(open));
+    more.setAttribute('aria-label', '另有 ' + dups.length + ' 个与 ' + r.name + ' 同名的文件');
+    meta.appendChild(more);
+  }
+  box.appendChild(meta);
+  li.appendChild(box);
+  const b = !on && !r.supported ? openFolderBtn(r.path, r.name) : btn(on ? '移除' : '加入', 'small', () => { on ? unpick(r.path) : pick(r); });
+  if (on || r.supported) {
+    b.dataset.act = 'toggle';
+    b.setAttribute('aria-label', (on ? '移除 ' : '加入 ') + r.name);
+    b.disabled = !on && full();
+  }
+  const h = btn('从列表移除', 'small', () => hideRow(r));
+  h.dataset.act = 'hide';
+  h.setAttribute('aria-label', '从列表移除 ' + r.name);
+  const acts = el('span', 'acts');
+  acts.appendChild(h);
+  acts.appendChild(b);
+  li.appendChild(acts);
+  if (open) { li.style.flexWrap = 'wrap'; li.appendChild(dupList(dups)); }
+  return li;
+}
+
+// 读不了的文件（压缩包、缺 pdftotext 的 pdf 等）：「加入」换成「打开文件夹」，由使用者自己处理；
+// 打不开时写出所在文件夹的路径，给「复制路径」
+let openFolderPath = '';
+function openFolderBtn(path, name) {
+  const b = btn('打开文件夹', 'small', () => {
+    b.disabled = true;
+    post('/api/open-folder', {path}).then(r => {
+      openFolderPath = r.folder;
+      $('openStatusRow').hidden = false;
+      $('copyFolder').hidden = true;
+      say('openStatus', '已打开文件夹：' + r.folder, 'ok');
+    }).catch(e => {
+      openFolderPath = (e.data && e.data.folder) || '';
+      $('openStatusRow').hidden = false;
+      $('copyFolder').hidden = !openFolderPath;
+      say('openStatus', failText('打开文件夹', e.message, '') + (openFolderPath ? '请在文件管理器里打开：' + openFolderPath : RETRY), 'bad');
+    }).finally(() => { b.disabled = !alive; });
+  });
+  b.dataset.act = 'open-folder';
+  b.setAttribute('aria-label', '打开 ' + name + ' 所在的文件夹');
+  return b;
+}
+$('copyFolder').addEventListener('click', () => copyText(openFolderPath, $('copyFolder'), 'openStatus', '路径'));
+
+// 改关键字、扩展名或正则开关时，搜索里从列表移除的恢复显示
+['q', 'ext'].forEach(id => $(id).addEventListener('input', () => {
+  hiddenSearch.clear();
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(search, 120);
+}));
+const Q_HINT = $('q').placeholder;
+function setRegex(on) {
+  regexOn = on;
+  $('regex').checked = on;
+  $('q').placeholder = on ? '正则表达式，如 需求.*v\\d' : Q_HINT;
+}
+$('regex').addEventListener('change', () => {
+  setRegex($('regex').checked);
+  hiddenSearch.clear();
+  post('/api/settings', {regex: regexOn}).catch(e => say('findStatus', failText('保存正则表达式设置', e.message, RETRY), 'bad'));
+  search();
+});
 $('q').addEventListener('keydown', ev => {
   if (ev.key === 'ArrowDown') {
-    const b = $('results').querySelector('button:not(:disabled)');
+    const b = $('results').querySelector('button[data-act="toggle"]:not(:disabled)');
     if (b) { ev.preventDefault(); b.focus(); }
     return;
   }
@@ -409,44 +755,197 @@ $('q').addEventListener('keydown', ev => {
   else if (!r.supported) say('findStatus', '第一个结果「' + r.name + '」读不了：' + r.reason + '。', 'warn');
   else pick(r);
 });
-// 方向键在结果的按钮之间移动，最上面再往上回到搜索框
+// 方向键在结果的加入/移除按钮之间移动，最上面再往上回到搜索框
 $('results').addEventListener('keydown', ev => {
   if (ev.key !== 'ArrowDown' && ev.key !== 'ArrowUp') return;
-  const bs = [...$('results').querySelectorAll('button:not(:disabled)')], i = bs.indexOf(document.activeElement);
+  const bs = [...$('results').querySelectorAll('button[data-act="toggle"]:not(:disabled)')], i = bs.indexOf(document.activeElement);
   if (i < 0) return;
   ev.preventDefault();
   const j = i + (ev.key === 'ArrowDown' ? 1 : -1);
   if (j < 0) $('q').focus(); else if (j < bs.length) bs[j].focus();
 });
 $('refresh').addEventListener('click', () => {
+  (findMode === 'browse' ? hiddenBrowse : hiddenSearch).clear();
   $('refresh').disabled = true;
   post('/api/refresh', {}).then(r => {
-    if (r.started) return search();
+    if (r.started) return refreshFind();
     say('findStatus', '正在扫描中，扫完会自动更新。', 'info');
     watchScan(true);
   }).catch(e => { $('refresh').disabled = !alive; say('findStatus', failText('刷新', e.message, RETRY), 'bad'); });
 });
 
+// ---------------- 浏览：按已添加的文件夹逐层查看，数据来自索引
+
+function setFindMode(mode, focus) {
+  findMode = mode;
+  const on = mode === 'browse';
+  $('tabSearch').setAttribute('aria-selected', String(!on));
+  $('tabBrowse').setAttribute('aria-selected', String(on));
+  $('tabSearch').tabIndex = on ? -1 : 0;
+  $('tabBrowse').tabIndex = on ? 0 : -1;
+  $('searchRow').hidden = on;
+  $('searchPane').hidden = on;
+  $('browsePane').hidden = !on;
+  if (focus) $(on ? 'tabBrowse' : 'tabSearch').focus();
+  return refreshFind();
+}
+$('tabSearch').addEventListener('click', () => setFindMode('search'));
+$('tabBrowse').addEventListener('click', () => setFindMode('browse'));
+$('tabSearch').parentNode.addEventListener('keydown', ev => {
+  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(ev.key)) return;
+  ev.preventDefault();
+  const next = ev.key === 'Home' ? 'browse' : ev.key === 'End' ? 'search' : findMode === 'search' ? 'browse' : 'search';
+  setFindMode(next, true);
+});
+
+function openBrowse(dir) {
+  if (dir !== browseDir) hiddenBrowse.clear();
+  browseDir = dir;
+  return setFindMode('browse');
+}
+// 焦点放回找文件：搜索时放在搜索框，浏览时放在标签上
+function findFocus() { (findMode === 'search' ? $('q') : $('tabBrowse')).focus(); }
+
+function loadBrowse(dir) {
+  return api('/api/browse?dir=' + encodeURIComponent(dir) + '&dedup=' + (dedupOn ? 1 : 0)).then(r => {
+    if (findMode !== 'browse') return;
+    if (r.error) {
+      browseDir = '';
+      return loadBrowse('').then(() => say('findStatus', failText('打开文件夹', r.error, ''), 'warn'));
+    }
+    browseDir = r.dir;
+    // 去掉从列表移除的；listed 为服务端列出的个数，tree_total 相应扣掉，「全部加入」的个数随之减少
+    const listed = r.files.length, treeN = r.tree.length;
+    r.files = r.files.filter(f => !hiddenBrowse.has(f.path));
+    r.tree = r.tree.filter(f => !hiddenBrowse.has(f.path));
+    r.tree_total -= treeN - r.tree.length;
+    r.listed = listed;
+    browse = r;
+    renderBrowse();
+    let s = indexText(r.status);
+    if (state && state.folders.length) {
+      s += r.dir ? '。本层 ' + fmtNum(r.here) + ' 个文件' + (r.here_dedup < r.here ? '（去重后 ' + fmtNum(r.here_dedup) + ' 个）' : '') +
+        '、' + r.dirs.length + ' 个子文件夹' + (r.here_dedup > listed ? '，列出最近修改的 ' + listed + ' 个' : '') +
+        (listed > r.files.length ? '，已从列表移除 ' + (listed - r.files.length) + ' 个' : '')
+        : '。已添加 ' + r.dirs.length + ' 个文件夹，点文件夹逐层查看';
+    }
+    indexNote = [s, r.status.error ? 'warn' : 'info'];
+    showFindStatus();
+    watchScan(r.status.scanning);
+  }).catch(e => { if (alive && findMode === 'browse') say('findStatus', failText('浏览', e.message, '请点「刷新」重试。'), 'bad'); });
+}
+
+// 「全部加入」含各层子文件夹，只算（去重后留下的）读得了且还没加入的，去重时已选里有同名的也跳过；
+// 超过已选还能加的个数时不可点。服务端最多给 2 倍上限加 1 个候选，没给全时 n 偏大，但已超出名额
+function browseTodo() {
+  if (!browse || !browse.dir) return {todo: [], n: 0, same: 0};
+  const keys = pickedKeys();
+  let same = 0;
+  const todo = browse.tree.filter(r => {
+    if (isPicked(r.path)) return false;
+    if (keys.has(sameNameKey(r.name))) { same++; return false; }
+    return true;
+  });
+  return {todo, n: todo.length + browse.tree_total - browse.tree.length, same};
+}
+function renderBrowseAdd() {
+  const n = browseTodo().n, room = maxFiles - picked.length;
+  $('browseAddRow').hidden = !n;
+  if (!n) return;
+  $('browseAdd').textContent = '全部加入（' + n + ' 个，含子文件夹）';
+  $('browseAdd').disabled = n > room || !alive;
+  $('browseAddHint').textContent = n > room ? '超过已选还能加的 ' + room + ' 个：请进入子文件夹分批加入，或先在「已选」里移除几个。' : '';
+}
+$('browseAdd').addEventListener('click', () => {
+  const {todo, n, same} = browseTodo();
+  if (!n || n !== todo.length || n > maxFiles - picked.length) return;
+  if (!newChat()) return;
+  todo.forEach(r => pick(r, true));
+  addedNote = '已加入 ' + todo.length + ' 个' + (same ? '，' + same + ' 个与已选同名的已跳过' : '') + '。';
+  addedKind = 'ok';
+  renderPicked();
+});
+
+function renderBrowse() {
+  renderBrowseAdd();
+  if (!browse) return;
+  const key = JSON.stringify([browse.dir, browse.dirs, browse.files.map(f => [f.path, (f.dups || []).map(d => d.path)]), picked.map(p => p.path), full(), listVer]);
+  if (key === browseKey) return;
+  const moved = !browseKey || JSON.parse(browseKey)[0] !== browse.dir;
+  browseKey = key;
+  const nav = $('crumbs');
+  nav.textContent = '';
+  const here = (text, title) => { const x = el('span', '', text); x.setAttribute('aria-current', 'location'); if (title) x.title = title; nav.appendChild(x); };
+  if (!browse.dir) here('全部');
+  else nav.appendChild(btn('全部', 'link', () => openBrowse('')));
+  browse.crumbs.forEach((c, i) => {
+    nav.appendChild(el('span', 'sep', '›'));
+    if (i === browse.crumbs.length - 1) here(c.name, c.path);
+    else { const b = btn(c.name, 'link', () => openBrowse(c.path)); b.title = c.path; nav.appendChild(b); }
+  });
+  const ul = $('browseList'), top = moved ? 0 : ul.scrollTop, focus = moved ? null : focusedRow(ul);
+  const lost = moved && (!document.activeElement || document.activeElement === document.body || $('browsePane').contains(document.activeElement));
+  ul.textContent = '';
+  browse.dirs.forEach(d => {
+    const li = el('li');
+    li.dataset.path = d.path;
+    const box = el('div', 'grow');
+    const b = folderBtn(d.name, 'dir', () => openBrowse(d.path));
+    b.dataset.act = 'open';
+    b.setAttribute('aria-label', '打开文件夹 ' + d.name);
+    box.appendChild(b);
+    box.appendChild(el('div', 'meta', '文件夹，' + fmtNum(d.files) + ' 个文件'));
+    li.appendChild(box);
+    ul.appendChild(li);
+  });
+  browse.files.forEach(r => ul.appendChild(fileRow(r, false)));
+  if (!browse.dirs.length && !browse.listed) {
+    ul.appendChild(el('li', 'meta', browse.dir ? '这个文件夹里没有已索引的文件；刚放进来的文件请点「刷新」。' : '还没有添加文件夹：先点「管理文件夹」添加。'));
+  }
+  if (browse.here_dedup > browse.listed) {
+    ul.appendChild(el('li', 'meta', '本层共 ' + fmtNum(browse.here_dedup) + ' 个文件，只列出最近修改的 ' + browse.listed + ' 个；要找更早的文件请用「搜索」。'));
+  }
+  ul.scrollTop = top;
+  if (focus) restoreFocus(ul, focus);
+  else if (lost && !$('browsePane').hidden) (ul.querySelector('button:not(:disabled)') || $('tabBrowse')).focus();
+}
+// 方向键在浏览列表的按钮之间移动
+$('browseList').addEventListener('keydown', ev => {
+  if (ev.key !== 'ArrowDown' && ev.key !== 'ArrowUp') return;
+  const bs = [...$('browseList').querySelectorAll('button:not(:disabled)')], i = bs.indexOf(document.activeElement);
+  if (i < 0) return;
+  ev.preventDefault();
+  const j = i + (ev.key === 'ArrowDown' ? 1 : -1);
+  if (j >= 0 && j < bs.length) bs[j].focus();
+});
+
 // ---------------- 已选
 
-function confirmNewChat() {
+// 改动文件清单即开始新对话：直接清空问答，不弹确认，在对话区状态行说明一句
+function newChat() {
   if (!chat.length) return true;
   if (busy) { say('pickStatus', '回答生成中，等它结束或点「停止」后再改动文件清单。', 'warn'); return false; }
-  const rounds = chat.filter(m => m.role === 'user').length;
-  if (!confirm('改动文件清单会开始新对话，清空当前 ' + rounds + ' 轮问答（未保存的会丢失）。\n\n确定继续？')) return false;
   chat = [];
+  cutAction = null;
+  savedLen = 0;
   renderChat();
   layoutFind();
+  say('chatStatus', '文件清单已改动，已开始新对话。', 'info');
   return true;
 }
 
-// confirmed：调用方已确认过开始新对话（全部加入时只确认一次）
-function pick(r, confirmed) {
+// batch：调用方已开始新对话（全部加入时批量调用）
+function pick(r, batch) {
   if (isPicked(r.path)) return;
   if (r.supported === false) { say('pickStatus', '加入失败：' + r.reason + '。', 'warn'); return; }
   if (picked.length >= maxFiles) { say('pickStatus', '一次最多选 ' + maxFiles + ' 个文件，请先移除几个。', 'warn'); return; }
-  if (!confirmed && !confirmNewChat()) return;
-  if (!confirmed) addedNote = '';
+  if (!batch && !newChat()) return;
+  if (!batch) {
+    // 单个加入时已选里有同名文件也照常加入，提示一句
+    const same = samePicked(r);
+    addedNote = same ? '已选里已有同名文件：' + same.name + '。' : '';
+    addedKind = 'info';
+  }
   const item = {path: r.path, name: r.name, rel: r.rel, chars: null, error: '', note: '', loading: true};
   picked.push(item);
   renderPicked();
@@ -464,13 +963,13 @@ $('clearPicked').addEventListener('click', () => {
   picked = [];
   openPreviews = {};
   renderPicked();
-  $('q').focus();
+  findFocus();
   if (chat.length) say('pickStatus', '已清空已选文件，对话保留。继续追问前请先加入文件。', 'ok');
 });
 
 function unpick(path) {
   addedNote = '';
-  if (!confirmNewChat()) return;
+  if (!newChat()) return;
   picked = picked.filter(p => p.path !== path);
   delete openPreviews[path];
   renderPicked();
@@ -478,13 +977,15 @@ function unpick(path) {
 }
 
 function totalChars() { return picked.reduce((n, p) => n + (p.chars || 0), 0); }
+function currentSkill() { return skills.find(k => k.name === $('skillSel').value) || null; }
+function skillChars() { const k = currentSkill(); return k ? k.chars : 0; }
 function historyChars() { return chat.reduce((n, m) => n + m.content.length, 0); }
 
 function renderPicked() {
   const ul = $('picked'), focus = focusedRow(ul);
   ul.textContent = '';
   $('pickCount').textContent = picked.length + ' / ' + maxFiles + (picked.length ? '，共 ' + fmtNum(totalChars()) + ' 字' : '');
-  if (!picked.length) ul.appendChild(el('li', 'meta', '还没有选文件：在上面的搜索结果里点「加入」，可以换关键字多次搜索累加。'));
+  if (!picked.length) ul.appendChild(el('li', 'meta', '还没有选文件：在上面的「浏览文件夹」或「搜索」结果里点「加入」，可以多次浏览、搜索累加。'));
   picked.forEach((p, i) => {
     const li = el('li');
     li.dataset.path = p.path;
@@ -516,14 +1017,14 @@ function renderPicked() {
     ul.appendChild(li);
   });
   restoreFocus(ul, focus);
-  const bad = picked.filter(p => p.error).length, loading = picked.some(p => p.loading);
+  const bad = picked.filter(p => p.error).length, loading = picked.filter(p => p.loading).length;
   $('removeBad').hidden = !bad;
   $('removeBad').textContent = '移除取不出文字的文件（' + bad + ' 个）';
   $('clearPicked').hidden = !picked.length;
   if (!picked.length) say('pickStatus', '');
   else if (bad) say('pickStatus', '有 ' + bad + ' 个文件取不出文字：请点「移除取不出文字的文件」后再发送。', 'bad');
-  else if (loading) say('pickStatus', addedNote + '正在取文字……', 'info');
-  else say('pickStatus', addedNote, addedNote ? 'ok' : 'info');
+  else if (loading) say('pickStatus', addedNote + '正在取文字' + (picked.length > 1 ? '（已完成 ' + (picked.length - loading) + ' / 共 ' + picked.length + ' 个）' : '') + '……', 'info');
+  else say('pickStatus', addedNote, addedNote ? addedKind : 'info');
   noticeLimit();
   renderDest();
   renderResults();
@@ -534,10 +1035,11 @@ function renderPicked() {
 // 文件与对话合计超过上限时，在发送区写明办法并给出「仍然发送」；不再超限时收回
 function noticeLimit() {
   if (busy) return;
-  const total = totalChars() + historyChars();
+  const fixed = historyChars() + skillChars(), total = totalChars() + fixed;
   const ready = picked.length && !picked.some(p => p.loading || p.error);
-  if (historyChars() >= charLimit) {
-    say('askStatus', '对话已有 ' + fmtNum(historyChars()) + ' 字，达到上限 ' + fmtNum(charLimit) +
+  if (fixed >= charLimit) {
+    say('askStatus', (skillChars() ? '对话 ' + fmtNum(historyChars()) + ' 字加 skill 说明 ' + fmtNum(skillChars()) + ' 字'
+        : '对话已有 ' + fmtNum(historyChars()) + ' 字') + '，达到上限 ' + fmtNum(charLimit) +
         ' 字：请先「保存对话」，再点「清空对话」开始新对话，或在「模型设置」里调高上限。', 'warn');
     $('sendCut').hidden = true;
     overShown = true;
@@ -550,11 +1052,12 @@ function noticeLimit() {
     say('askStatus', '');
     $('sendCut').hidden = true;
     overShown = false;
+    cutAction = null;
   }
 }
 
 $('removeBad').addEventListener('click', () => {
-  if (!confirmNewChat()) return;
+  if (!newChat()) return;
   addedNote = '';
   picked = picked.filter(p => !p.error);
   renderPicked();
@@ -619,8 +1122,161 @@ function renderDest() {
   const m = currentModel();
   $('dest').className = m ? 'hint' : 'hint warn';
   $('dest').textContent = m
-    ? '将发送到：' + m.host + '，模型 ' + m.label + '，' + picked.length + ' 个文件；文件 ' + fmtNum(totalChars()) + ' 字 + 对话 ' + fmtNum(historyChars()) + ' 字'
+    ? '将发送到：' + m.host + '，模型 ' + m.label + '，' + picked.length + ' 个文件' + (currentSkill() ? '，skill ' + currentSkill().label : '') +
+      '；文件 ' + fmtNum(totalChars()) + ' 字' + (currentSkill() ? ' + skill ' + fmtNum(skillChars()) + ' 字' : '') + ' + 对话 ' + fmtNum(historyChars()) + ' 字'
     : '没有可用的模型：OpenCode 配置里找不到带接口地址和 AK 的模型，请在「模型设置」里填写自定义接口。';
+}
+
+// ---------------- skill
+
+function skillKind(k) {
+  if (k.too_long) return '说明过长，不可选';
+  if (k.scripts) return k.scripts + ' 个脚本';
+  return k.refs ? '仅指令和参考文件' : '仅指令';
+}
+
+function renderSkills() {
+  const sel = $('skillSel'), keep = sel.value;
+  sel.textContent = '';
+  const none = el('option', '', '不用 skill');
+  none.value = '';
+  sel.appendChild(none);
+  skills.forEach(k => {
+    const o = el('option', '', k.label + '（' + (k.source === 'bundled' ? '预装' : '自建') + '，' + skillKind(k) + '）');
+    o.value = k.name;
+    o.disabled = k.too_long;
+    sel.appendChild(o);
+  });
+  sel.value = skills.some(k => k.name === keep && !k.too_long) ? keep : '';
+  renderSkillHint();
+}
+
+// 选中 skill 后默认只显示一行用途，点「详情」展开完整说明，把高度留给对话区
+function renderSkillHint() {
+  const k = currentSkill(), box = $('skillHint');
+  box.textContent = '';
+  if (k) {
+    const one = el('div', 'one');
+    const d = el('span', '', k.description);
+    if (!skillOpen) d.title = k.description;
+    else d.style.whiteSpace = 'normal';
+    one.appendChild(d);
+    const b = btn(skillOpen ? '收起' : '详情', 'link', () => { skillOpen = !skillOpen; renderSkillHint(); $('skillHint').querySelector('button').focus(); });
+    b.setAttribute('aria-expanded', String(skillOpen));
+    b.setAttribute('aria-label', (skillOpen ? '收起' : '展开') + ' skill 说明');
+    one.appendChild(b);
+    box.appendChild(one);
+    if (skillOpen) {
+      box.appendChild(el('div', '', k.scripts
+        ? '模型会按需自动运行这个 skill 里的脚本（单次最多 60 秒，每个问题最多 5 次），脚本能读到已选文件和已添加的文件夹。'
+        : (k.refs ? '模型会按需读取这个 skill 里的参考文件。' : '只把说明交给模型，不运行任何东西。')));
+      box.appendChild(el('div', '', '选了 skill 时可以不选文件，也可以不写问题直接发送（代为提问「' + EMPTY_ASK + '」）。'));
+    }
+  } else if (skillsDir) {
+    box.appendChild(el('div', '', '自建 skill 放在 ' + skillsDir + '/<名称>/SKILL.md，放好后点「重新读取」。'));
+  }
+  renderDest();
+  noticeLimit();
+}
+
+function loadSkills(manual) {
+  $('skillReload').disabled = true;
+  return api('/api/skills').then(r => {
+    skills = r.skills;
+    skillsDir = r.user_dir;
+    renderSkills();
+    if (manual) say('chatStatus', '已读取 ' + skills.length + ' 个 skill' + (r.problems.length ? '，跳过 ' + r.problems.length + ' 个格式不对的（原因见日志）' : '') + '。', r.problems.length ? 'warn' : 'ok');
+  }).catch(e => say('chatStatus', failText('读取 skill', e.message, '请点「重新读取」重试。'), 'bad'))
+    .then(() => { $('skillReload').disabled = false; });
+}
+
+$('skillSel').addEventListener('change', () => { skillOpen = false; renderSkillHint(); });
+$('skillReload').addEventListener('click', () => loadSkills(true));
+
+const TOOL_VERB = {read: '读取：', run: '运行：', write: '写入：'};
+function toolTitle(t) {
+  const what = (TOOL_VERB[t.kind] || '运行：') + [t.name].concat(t.args || []).join(' ');
+  if (t.running) return what + ' ……';
+  if (t.error) return what + ' → 失败：' + t.error;
+  if (t.kind === 'read') return what;
+  if (t.kind === 'write') return what + '（' + fmtNum(t.chars) + ' 字，' + (t.append ? '追加，文件共 ' + fmtNum(t.total) + ' 字' : '覆盖') + '）';
+  return what + ' → ' + (t.timed_out ? '超时已终止' : '退出码 ' + t.exit) + (t.files && t.files.length ? '，生成 ' + t.files.length + ' 个文件' : '');
+}
+
+function saveOutput(f) {
+  return fetch('/api/output?id=' + encodeURIComponent(f.id), {headers: {'X-Token': TOKEN}}).then(r => {
+    if (!r.ok) return r.json().then(j => { throw new Error(j.error || ('HTTP ' + r.status)); });
+    return r.blob();
+  }).then(b => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(b);
+    a.download = f.name.split('/').pop();
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    return a.download;
+  });
+}
+
+// 文件名里的时间：年月日-时分
+function stampNow() {
+  const now = new Date(), pad = n => String(n).padStart(2, '0');
+  return now.getFullYear() + pad(now.getMonth() + 1) + pad(now.getDate()) + '-' + pad(now.getHours()) + pad(now.getMinutes());
+}
+
+function saveBlob(blob, name) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+// 「保存为 Word」：服务端用预装 office-gen 的 make_docx.py 把 Markdown 转成 docx
+function saveDocx(markdown, title, b) {
+  const name = '找文件问AI-' + stampNow() + '.docx';
+  if (b) b.disabled = true;
+  say('chatStatus', '正在转换为 Word……', 'info');
+  return fetch('/api/docx', {method: 'POST', headers: {'X-Token': TOKEN, 'Content-Type': 'application/json'},
+                             body: JSON.stringify({markdown: markdown, title: title})}).then(r => {
+    if (!r.ok) return r.json().then(j => { throw new Error(j.error || ('HTTP ' + r.status)); }, () => { throw new Error('HTTP ' + r.status); });
+    return r.blob();
+  }).then(blob => {
+    saveBlob(blob, name);
+    say('chatStatus', '已保存为 ' + name + '（在浏览器的下载文件夹里）。', 'ok');
+    return true;
+  }).catch(e => {
+    say('chatStatus', failText('保存为 Word', e.message, '请改用「保存对话」保存为 Markdown。'), 'bad');
+    return false;
+  }).then(ok => { if (b) b.disabled = !alive || (b === $('saveDocx') && busy); return ok; });
+}
+
+function saveOutputs(list) {
+  let chain = Promise.resolve([]);
+  list.forEach(f => { chain = chain.then(done => saveOutput(f).then(n => done.concat([n]))); });
+  chain.then(names => say('chatStatus', '已保存 ' + names.join('、') + '（在浏览器的下载文件夹里）。', 'ok'))
+    .catch(e => say('chatStatus', failText('保存', e.message, '请重新提问生成该文件。'), 'bad'));
+}
+
+function toolsNode(m) {
+  const box = el('div', 'tools');
+  m.tools.forEach(t => {
+    const d = el('details');
+    const s = el('summary', t.error ? 'bad' : '', toolTitle(t));
+    d.appendChild(s);
+    if (t.output) d.appendChild(el('pre', '', t.output));
+    if (t.files && t.files.length) {
+      const row = el('div', 'row');
+      t.files.forEach(f => {
+        const b = btn('保存 ' + f.name, 'small', () => saveOutputs([f]));
+        row.appendChild(b);
+      });
+      if (t.files.length > 1) row.appendChild(btn('全部保存', 'small', () => saveOutputs(t.files)));
+      d.appendChild(row);
+      d.open = true;
+    }
+    box.appendChild(d);
+  });
+  return box;
 }
 
 $('model').addEventListener('change', () => {
@@ -633,16 +1289,40 @@ function renderChat() {
   box.textContent = '';
   chat.forEach((m, i) => {
     const d = el('div', 'msg ' + m.role);
-    const who = el('div', 'who', m.role === 'user' ? '我' : 'AI' + (m.model ? '（' + m.model + '）' : ''));
-    if (m.role === 'assistant' && m.content && !m.streaming) {
+    const who = el('div', 'who', m.role === 'user' ? '我' : 'AI' + (m.model ? '（' + m.model + (m.skill ? '，skill ' + m.skill : '') + '）' : ''));
+    const done = m.role === 'assistant' && m.content && !m.streaming;
+    if (done) {
       const c = btn('复制', 'small', () => copyText(m.content, c));
+      c.setAttribute('aria-label', '复制这条回答');
       who.appendChild(c);
+      const w = btn('保存为 Word', 'small', () => saveDocx(m.content, i > 0 ? chat[i - 1].content.trim().slice(0, 30) : '', w));
+      w.setAttribute('aria-label', '把这条回答保存为 Word');
+      who.appendChild(w);
     }
     d.appendChild(who);
-    const body = el('div', 'msg-body', m.content || (m.streaming ? '……' : ''));
+    if (m.tools && m.tools.length) d.appendChild(toolsNode(m));
+    const body = m.role === 'assistant' ? mdBody(m) : el('div', 'msg-body', m.content);
     d.appendChild(body);
     if (m.partial) d.appendChild(el('div', 'partial', '（回答不完整）'));
     citeNotes(m).forEach(t => d.appendChild(el('div', 'cite', t)));
+    // 长回答读到底部时不用往回滚就能复制
+    if (done) {
+      const foot = el('div', 'row foot');
+      const c = btn('复制', 'small', () => copyText(m.content, c));
+      c.setAttribute('aria-label', '复制这条回答');
+      foot.appendChild(c);
+      // 只在最后一条回答不完整时给「继续」「重新生成」；发了新问题后旧的只留标记
+      if (m.partial && i === chat.length - 1) {
+        const go = btn('继续', 'small resume', () => run({kind: 'continue'}));
+        go.setAttribute('aria-label', '继续这条不完整的回答');
+        const re = btn('重新生成', 'small resume', () => run({kind: 'regen'}));
+        re.setAttribute('aria-label', '重新生成这条不完整的回答');
+        go.disabled = re.disabled = busy || !alive;
+        foot.appendChild(go);
+        foot.appendChild(re);
+      }
+      d.appendChild(foot);
+    }
     m.node = body;
     box.appendChild(d);
   });
@@ -660,6 +1340,9 @@ function setBusy(on) {
   $('stop').disabled = !on || !alive;
   $('clear').disabled = on || !alive;
   $('save').disabled = on || !alive;
+  $('saveDocx').disabled = on || !alive;
+  $('skillReload').disabled = on || !alive;
+  document.querySelectorAll('#chat button.resume').forEach(b => { b.disabled = on || !alive; });
 }
 
 // ---------------- 原文佐证
@@ -677,6 +1360,120 @@ function citeNotes(m) {
 
 
 
+// ---------------- 回答按 Markdown 显示：只用 DOM 节点与 textContent 构建，不拼 innerHTML；链接只显示文字和地址，不可点
+// 复制、保存对话仍用原始文字
+
+function mdBody(m) {
+  const body = el('div', 'msg-body md');
+  if (m.content) body.appendChild(renderMarkdown(m.content));
+  else if (m.streaming) body.textContent = '……';
+  return body;
+}
+
+// 行内：`代码`、**加粗**、*斜体*、[文字](地址)
+const MD_INLINE = /`([^`\n]+)`|\*\*([^*\n]+?)\*\*|\*([^*\s](?:[^*\n]*[^*\s])?)\*|\[([^\]\n]+)\]\(([^()\s]+)\)/g;
+function mdInline(parent, text) {
+  const re = new RegExp(MD_INLINE.source, 'g');
+  let last = 0, m;
+  while ((m = re.exec(text))) {
+    if (m.index > last) parent.appendChild(document.createTextNode(text.slice(last, m.index)));
+    if (m[1] !== undefined) parent.appendChild(el('code', '', m[1]));
+    else if (m[2] !== undefined) mdInline(parent.appendChild(el('strong')), m[2]);
+    else if (m[3] !== undefined) mdInline(parent.appendChild(el('em')), m[3]);
+    else {
+      mdInline(parent.appendChild(el('span', 'md-link')), m[4]);
+      if (m[5] !== m[4]) parent.appendChild(el('span', 'md-url', '（' + m[5] + '）'));
+    }
+    last = re.lastIndex;
+  }
+  if (last < text.length) parent.appendChild(document.createTextNode(text.slice(last)));
+  return parent;
+}
+
+const MD_FENCE = /^ {0,3}(```|~~~)/;
+const MD_HEAD = /^ {0,3}(#{1,6})\s+(.*?)(?:\s+#+)?\s*$/;
+const MD_HR = /^ {0,3}([-*_])(?:\s*\1){2,}\s*$/;
+const MD_ITEM = /^(\s*)([-*+]|(\d{1,9})[.)])\s+(.*)$/;
+const MD_QUOTE = /^ {0,3}> ?/;
+const MD_TABLE_SEP = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
+
+function mdCells(row) {
+  let s = row.trim();
+  if (s.startsWith('|')) s = s.slice(1);
+  if (s.endsWith('|')) s = s.slice(0, -1);
+  return s.split('|').map(c => c.trim());
+}
+
+function renderMarkdown(text) {
+  const root = document.createDocumentFragment();
+  const lines = text.replace(/\r\n?/g, '\n').split('\n');
+  let para = null, lists = [], blank = false;     // lists：当前各层列表 {indent, ordered, list, li}
+  const block = node => { para = null; lists = []; root.appendChild(node); return node; };
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line.trim()) { para = null; blank = true; continue; }
+    const wasBlank = blank;
+    blank = false;
+    let m;
+    if (MD_FENCE.test(line)) {
+      const fence = MD_FENCE.exec(line)[1], code = [];
+      while (++i < lines.length && !new RegExp('^ {0,3}' + fence[0] + '{3,}\\s*$').test(lines[i])) code.push(lines[i]);
+      block(el('pre')).appendChild(el('code', '', code.join('\n')));
+      continue;
+    }
+    if ((m = MD_HEAD.exec(line))) { mdInline(block(el('h' + m[1].length)), m[2]); continue; }
+    if (MD_HR.test(line)) { block(el('hr')); continue; }
+    if (MD_QUOTE.test(line)) {
+      const inner = [line.replace(MD_QUOTE, '')];
+      while (i + 1 < lines.length && MD_QUOTE.test(lines[i + 1])) inner.push(lines[++i].replace(MD_QUOTE, ''));
+      block(el('blockquote')).appendChild(renderMarkdown(inner.join('\n')));
+      continue;
+    }
+    if (line.includes('|') && i + 1 < lines.length && lines[i + 1].includes('|') && MD_TABLE_SEP.test(lines[i + 1])) {
+      const head = mdCells(line), align = mdCells(lines[i + 1]).map(c => /^:-+:$/.test(c) ? 'center' : /-:$/.test(c) ? 'right' : '');
+      const wrap = block(el('div', 'table-wrap')), table = wrap.appendChild(el('table'));
+      const tr = table.appendChild(el('thead')).appendChild(el('tr'));
+      head.forEach((c, k) => { const th = mdInline(tr.appendChild(el('th')), c); if (align[k]) th.style.textAlign = align[k]; });
+      const tbody = table.appendChild(el('tbody'));
+      i++;
+      while (i + 1 < lines.length && lines[i + 1].includes('|') && lines[i + 1].trim()) {
+        const row = tbody.appendChild(el('tr'));
+        mdCells(lines[++i]).forEach((c, k) => { if (k < head.length) { const td = mdInline(row.appendChild(el('td')), c); if (align[k]) td.style.textAlign = align[k]; } });
+      }
+      continue;
+    }
+    if ((m = MD_ITEM.exec(line))) {
+      const indent = m[1].replace(/\t/g, '    ').length, ordered = m[3] !== undefined;
+      while (lists.length && lists[lists.length - 1].indent > indent) lists.pop();
+      let top = lists[lists.length - 1];
+      if (top && top.indent === indent && top.ordered !== ordered) { lists.pop(); top = lists[lists.length - 1]; }
+      if (!top || indent > top.indent) {
+        const list = el(ordered ? 'ol' : 'ul');
+        if (ordered && Number(m[3]) !== 1) list.start = Number(m[3]);
+        (top ? top.li : root).appendChild(list);
+        top = {indent, ordered, list, li: null};
+        lists.push(top);
+      }
+      top.li = mdInline(top.list.appendChild(el('li')), m[4]);
+      para = null;
+      continue;
+    }
+    // 列表项的续行：缩进的行，或紧跟在列表项后的行
+    if (lists.length && (/^\s/.test(line) || !wasBlank)) {
+      const li = lists[lists.length - 1].li;
+      if (wasBlank) { para = mdInline(li.appendChild(el('p')), line.trim()); continue; }
+      const into = para && li.contains(para) ? para : li;
+      into.appendChild(document.createTextNode('\n'));
+      mdInline(into, line.trim());
+      continue;
+    }
+    lists = [];
+    if (para) { para.appendChild(document.createTextNode('\n')); mdInline(para, line.trim()); }
+    else { para = mdInline(el('p'), line.trim()); root.appendChild(para); }
+  }
+  return root;
+}
+
 // ---------------- 布局：窄屏开始对话后收起找文件
 
 const narrow = window.matchMedia('(max-width: 899px)');
@@ -688,27 +1485,37 @@ function layoutFind() {
   $('findSummary').textContent = '已选 ' + picked.length + ' 个文件，共 ' + fmtNum(totalChars()) + ' 字';
 }
 narrow.addEventListener('change', layoutFind);
-$('reselect').addEventListener('click', () => { findOpen = true; layoutFind(); $('q').focus(); });
+$('reselect').addEventListener('click', () => { findOpen = true; layoutFind(); findFocus(); });
 
 function togglePanel(b, panel, open) {
   open = open === undefined ? panel.hidden : open;
   panel.hidden = !open;
   b.setAttribute('aria-expanded', String(open));
+  const arrow = b.querySelector('.arrow');
+  if (arrow) arrow.textContent = open ? '▾' : '▸';
 }
 $('manageFolders').addEventListener('click', () => togglePanel($('manageFolders'), $('folderPanel')));
 $('modelSettings').addEventListener('click', () => togglePanel($('modelSettings'), $('modelPanel')));
 
-function send(truncate) {
-  const q = $('ask').value.trim();
+// action.kind：send 发送输入框里的问题；continue 新增一轮「继续」提问，不完整回答留在历史里；
+// regen 用原问题重新请求，新回答换掉最后那条不完整回答，没拿到内容时放回原来的
+function run(action, truncate) {
+  const kind = action.kind;
+  const typed = kind === 'send' ? $('ask').value.trim() : '';
   $('sendCut').hidden = true;
   overShown = false;
-  if (!picked.length) { say('askStatus', '还没有选文件：先在「找文件」里加入要用的文件。', 'warn'); return; }
+  cutAction = null;
+  const skill = currentSkill(), last = chat[chat.length - 1];
+  if (kind !== 'send' && !(last && last.partial)) return;
+  if (!picked.length && !skill) { say('askStatus', '还没有选文件：先在「找文件」里加入要用的文件，或选一个 skill。', 'warn'); return; }
   if (picked.some(p => p.loading)) { say('askStatus', '还在取文字，请稍等。', 'warn'); return; }
   if (picked.some(p => p.error)) { say('askStatus', '有文件取不出文字：请先在「已选」里点「移除取不出文字的文件」。', 'bad'); return; }
-  if (!q) { say('askStatus', '请先写下要 AI 做什么。', 'warn'); $('ask').focus(); return; }
+  if (kind === 'send' && !typed && !skill) { say('askStatus', '请先写下要 AI 做什么；选了 skill 时可以不写。', 'warn'); $('ask').focus(); return; }
+  const q = kind === 'continue' ? CONTINUE_ASK : typed || EMPTY_ASK;
   if (!currentModel()) { say('askStatus', '发送失败：没有可用的模型。请在「模型设置」里填写自定义接口。', 'bad'); return; }
-  const history = chat.map(m => ({role: m.role, content: m.content})).concat([{role: 'user', content: q}]);
-  const answer = {role: 'assistant', content: '', streaming: true, model: currentModel().label};
+  const history = (kind === 'regen' ? chat.slice(0, -1) : chat).map(m => ({role: m.role, content: m.content}))
+    .concat(kind === 'regen' ? [] : [{role: 'user', content: q}]);
+  const answer = {role: 'assistant', content: '', streaming: true, model: currentModel().label, skill: skill ? skill.label : '', tools: []};
   setBusy(true);
   // 等待期间每秒更新已等待时间；phase 为当前阶段的文字
   const t0 = Date.now();
@@ -718,6 +1525,7 @@ function send(truncate) {
     say('askStatus', phase[0] + '已等待 ' + sec + ' 秒' + (sec >= 30 ? '，模型仍在处理，不想等可点「停止」' : '') + '。', phase[1]);
   };
   answer.onStart = cut => { phase = cut ? ['生成中（已按比例截断每个文件）……', 'warn'] : ['生成中……', 'info']; tick(); };
+  answer.onTool = t => { phase = t ? [({read: '正在读取 ', write: '正在写入 '}[t.kind] || '正在运行 ') + t.name + '……', 'info'] : ['生成中……', 'info']; tick(); };
   tick();
   const timer = setInterval(tick, 1000);
   answer.stopTimer = () => clearInterval(timer);
@@ -725,28 +1533,30 @@ function send(truncate) {
   fetch('/api/chat', {
     method: 'POST', signal: controller.signal,
     headers: {'X-Token': TOKEN, 'Content-Type': 'application/json'},
-    body: JSON.stringify({files: picked.map(p => p.path), messages: history, model: $('model').value, truncate: !!truncate})
+    body: JSON.stringify({files: picked.map(p => p.path), messages: history, model: $('model').value, truncate: !!truncate,
+                          skill: skill ? skill.name : ''})
   }).then(r => {
     if (!r.ok) {
       answer.stopTimer();
       return r.json().then(j => {
         if (r.status === 413 && j.error === 'too_long') {
-          say('askStatus', '先不发送：合计 ' + fmtNum(j.total) + ' 字（文件 ' + fmtNum(j.files) + ' 字 + 对话 ' + fmtNum(j.history) +
-              ' 字），超过上限 ' + fmtNum(j.limit) + ' 字 ' + fmtNum(j.total - j.limit) +
+          say('askStatus', '先不发送：合计 ' + fmtNum(j.total) + ' 字（文件 ' + fmtNum(j.files) + ' 字' +
+              (j.skill ? ' + skill ' + fmtNum(j.skill) + ' 字' : '') + ' + 对话 ' + fmtNum(j.history) + ' 字），超过上限 ' + fmtNum(j.limit) + ' 字 ' + fmtNum(j.total - j.limit) +
               ' 字：可以移除几个文件、在「模型设置」里调高上限，或点「仍然发送」按比例截断每个文件。', 'warn');
           $('sendCut').hidden = false;
           overShown = true;
+          cutAction = action;
         } else if (r.status === 413 && j.error === 'history_too_long') {
-          say('askStatus', '先不发送：对话已有 ' + fmtNum(j.history) + ' 字，达到上限 ' + fmtNum(j.limit) +
+          say('askStatus', '先不发送：对话已有 ' + fmtNum(j.history) + ' 字' + (j.skill ? '，skill 说明 ' + fmtNum(j.skill) + ' 字' : '') + '，达到上限 ' + fmtNum(j.limit) +
               ' 字：请先「保存对话」，再点「清空对话」开始新对话，或在「模型设置」里调高上限。', 'warn');
         } else {
           say('askStatus', failText('发送', j.error || ('HTTP ' + r.status), '请检查后重试。'), 'bad');
         }
       });
     }
-    chat.push({role: 'user', content: q});
-    chat.push(answer);
-    $('ask').value = '';
+    if (kind === 'regen') chat[chat.length - 1] = answer;
+    else { chat.push({role: 'user', content: q}); chat.push(answer); }
+    if (kind === 'send') $('ask').value = '';
     renderChat();
     return readStream(r, answer);
   }).catch(e => {
@@ -756,8 +1566,9 @@ function send(truncate) {
     answer.stopTimer();
     answer.streaming = false;
     if (chat.includes(answer) && !answer.content) {
-      chat.splice(chat.indexOf(answer) - 1, 2);   // 没有拿到回答：撤回这一轮，问题放回输入框
-      $('ask').value = q;
+      const i = chat.indexOf(answer);
+      if (kind === 'regen') chat[i] = last;     // 重新生成没拿到内容：放回原来的不完整回答
+      else { chat.splice(i - 1, 2); if (kind === 'send') $('ask').value = typed; }   // 撤回这一轮，问题放回输入框
     } else if (chat.includes(answer) && !answer.done) {
       answer.partial = true;      // 停止、出错或连接中断：留下已收到的部分并标明不完整
     }
@@ -779,7 +1590,25 @@ function readStream(r, answer) {
     if (m.start) { cut = m.truncated; answer.onStart(cut); }
     if (m.t) {
       answer.content += m.t;
-      if (answer.node) { answer.node.textContent = answer.content; $('chat').scrollTop = $('chat').scrollHeight; }
+      // 逐字到达时每帧最多重绘一次 Markdown
+      if (!answer.raf) answer.raf = requestAnimationFrame(() => {
+        answer.raf = 0;
+        if (!answer.node) return;
+        answer.node.replaceWith(answer.node = mdBody(answer));
+        $('chat').scrollTop = $('chat').scrollHeight;
+      });
+    }
+    if (m.tool_start) {
+      answer.tools.push(Object.assign({running: true}, m.tool_start));
+      answer.onTool(m.tool_start);
+      renderChat();
+    }
+    if (m.tool) {
+      const last = answer.tools[answer.tools.length - 1];
+      if (last && last.running) answer.tools[answer.tools.length - 1] = m.tool;
+      else answer.tools.push(m.tool);
+      answer.onTool(null);
+      renderChat();
     }
     if (m.error) {
       answer.stopTimer();
@@ -804,15 +1633,22 @@ function readStream(r, answer) {
   return step();
 }
 
-$('send').addEventListener('click', () => send(false));
-$('sendCut').addEventListener('click', () => send(true));
-$('ask').addEventListener('keydown', ev => { if (ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey) && !busy) send(false); });
+$('send').addEventListener('click', () => run({kind: 'send'}, false));
+// 「仍然发送」重做被拦下的那次动作（发送、继续或重新生成）
+$('sendCut').addEventListener('click', () => run(cutAction || {kind: 'send'}, true));
+// Enter 与 Ctrl+Enter 发送，Shift+Enter 换行；输入法组字中的回车不发送
+$('ask').addEventListener('keydown', ev => {
+  if (ev.key !== 'Enter' || ev.shiftKey || ev.altKey || ev.isComposing || ev.keyCode === 229) return;
+  ev.preventDefault();
+  if (!busy) run({kind: 'send'}, false);
+});
 $('stop').addEventListener('click', () => { if (controller) controller.abort(); });
 
 // 清空即开始新对话：服务端不存对话，下一次提问只带清空之后的问答。点了直接清，不弹确认
 $('clear').addEventListener('click', () => {
   if (!chat.length) return;
   chat = [];
+  cutAction = null;
   savedLen = 0;
   findOpen = false;
   renderChat();
@@ -822,7 +1658,8 @@ $('clear').addEventListener('click', () => {
   noticeLimit();
 });
 
-function copyText(text, b) {
+function copyText(text, b, statusId, what) {
+  statusId = statusId || 'chatStatus';
   const label = b.textContent;
   const flash = (msg, cls) => { b.textContent = msg; setTimeout(() => { b.textContent = label; }, cls === 'ok' ? 1200 : 3000); };
   const fallback = () => {
@@ -831,31 +1668,43 @@ function copyText(text, b) {
     let ok = false;
     try { ok = document.execCommand('copy'); } catch (e) { /* 视为复制失败 */ }
     t.remove();
-    if (ok) done(); else { flash('复制失败', 'bad'); say('chatStatus', '复制失败：浏览器不允许写剪贴板。请手动选中回答复制。', 'bad'); }
+    if (ok) done(); else { flash('复制失败', 'bad'); say(statusId, '复制失败：浏览器不允许写剪贴板。请手动选中' + (what || '回答') + '复制。' + (statusId === 'chatStatus' ? '' : text), 'bad'); }
   };
-  const done = () => { flash('已复制', 'ok'); say('chatStatus', '已复制。', 'ok'); };
+  const done = () => { flash('已复制', 'ok'); say(statusId, '已复制' + (what ? what + '：' + text : '') + '。', 'ok'); };
   if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(done, fallback);
   else fallback();
 }
 
-$('save').addEventListener('click', () => {
-  if (!chat.length) { say('chatStatus', '还没有对话可保存。', 'warn'); return; }
-  const now = new Date(), pad = n => String(n).padStart(2, '0');
-  const stamp = now.getFullYear() + pad(now.getMonth() + 1) + pad(now.getDate()) + '-' + pad(now.getHours()) + pad(now.getMinutes());
+// 整个对话写成 Markdown：「保存对话」与「保存为 Word」共用
+function chatMarkdown(stamp) {
   const lines = ['# 找文件问 AI 对话 ' + stamp, '', '## 文件', ''];
   picked.forEach((p, i) => lines.push((i + 1) + '. ' + p.path));
+  if (!picked.length) lines.push('（未选文件）');
   chat.forEach(m => {
-    lines.push('', m.role === 'user' ? '## 问' : '## 答' + (m.model ? '（' + m.model + '）' : ''), '', m.content);
+    lines.push('', m.role === 'user' ? '## 问' : '## 答' + (m.model ? '（' + m.model + (m.skill ? '，skill ' + m.skill : '') + '）' : ''));
+    (m.tools || []).forEach(t => {
+      lines.push('', toolTitle(t));
+      if (t.output) lines.push('', '```', t.output, '```');
+    });
+    lines.push('', m.content);
     if (m.partial) lines.push('', '（回答不完整）');
     citeNotes(m).forEach(t => lines.push('', t));
   });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([lines.join('\n') + '\n'], {type: 'text/markdown;charset=utf-8'}));
-  a.download = '找文件问AI-' + stamp + '.md';
-  document.body.appendChild(a); a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  return lines.join('\n') + '\n';
+}
+
+$('save').addEventListener('click', () => {
+  if (!chat.length) { say('chatStatus', '还没有对话可保存。', 'warn'); return; }
+  const stamp = stampNow(), name = '找文件问AI-' + stamp + '.md';
+  saveBlob(new Blob([chatMarkdown(stamp)], {type: 'text/markdown;charset=utf-8'}), name);
   savedLen = chat.length;
-  say('chatStatus', '已保存为 ' + a.download + '（在浏览器的下载文件夹里）。', 'ok');
+  say('chatStatus', '已保存为 ' + name + '（在浏览器的下载文件夹里）。', 'ok');
+});
+
+$('saveDocx').addEventListener('click', () => {
+  if (!chat.length) { say('chatStatus', '还没有对话可保存。', 'warn'); return; }
+  const len = chat.length;
+  saveDocx(chatMarkdown(stampNow()), '', $('saveDocx')).then(ok => { if (ok) savedLen = len; });
 });
 
 // ---------------- 设置
@@ -880,7 +1729,7 @@ function renderFolders() {
           if (chat.length) { chat = []; renderChat(); }
           renderPicked();
         }
-        renderFolders(); search(); say('folderStatus', '已移除。', 'ok');
+        renderFolders(); refreshFind(); say('folderStatus', '已移除。', 'ok');
       }).catch(e => say('folderStatus', failText('移除', e.message, RETRY), 'bad'));
     }));
     ul.appendChild(li);
@@ -893,14 +1742,30 @@ $('addFolder').addEventListener('click', () => {
   $('addFolder').disabled = true;
   post('/api/folders', {add: v}).then(r => {
     state.folders = r.folders; $('folder').value = '';
-    renderFolders(); search();
+    renderFolders(); refreshFind();
     const m = r.merged || [];
     say('folderStatus', '已添加' + (m.length ? '，原有的 ' + m.length + ' 个子文件夹已合并进来：' + m.join('、') : '') +
         '。正在后台扫描，扫描期间也能搜索。', 'ok');
-  }).catch(e => say('folderStatus', '添加失败：' + e.message + '。请检查路径后重试。', 'bad'))
+  }).catch(e => say('folderStatus', failText('添加', e.message, '请检查路径后重试。'), 'bad'))
     .then(() => { $('addFolder').disabled = !alive; });
 });
 $('folder').addEventListener('keydown', ev => { if (ev.key === 'Enter') $('addFolder').click(); });
+
+// 「选择……」：由本机服务弹出系统的目录选择框，只把选中的路径填进输入框，仍由使用者点「添加」或「保存」；
+// 选择框里点取消时输入框不变，也不提示
+function pickInto(input, b, statusId, title) {
+  b.disabled = true;
+  say(statusId, '请在弹出的窗口里选择文件夹……（窗口可能在浏览器后面）', 'info');
+  post('/api/pick-folder', {start: input.value, title: title, page: PAGE}).then(r => {
+    if (!r.ok) { say(statusId, failText('选择', r.error, '请直接输入路径。'), 'bad'); return; }
+    say(statusId, '');
+    if (r.path) { input.value = r.path; input.focus(); }
+  }).catch(e => {
+    if (e.status === 409) say(statusId, e.message + '。', 'warn');
+    else say(statusId, failText('选择', e.message, '请直接输入路径。'), 'bad');
+  }).then(() => { b.disabled = !alive; });
+}
+$('pickFolder').addEventListener('click', () => pickInto($('folder'), $('pickFolder'), 'folderStatus', '选择要添加的文件夹'));
 
 // 路径补全与常用位置
 let dirsTimer = null;
@@ -927,7 +1792,7 @@ function renderPlaces(places) {
 
 $('rebuild').addEventListener('click', () => {
   if (!confirm('丢弃现有索引，重新扫描全部 ' + state.folders.length + ' 个文件夹？\n\n不会改动任何文件；文件多时要等一会儿。')) return;
-  post('/api/refresh', {full: true}).then(() => { say('folderStatus', '正在重建索引……', 'info'); search(); })
+  post('/api/refresh', {full: true}).then(() => { say('folderStatus', '正在重建索引……', 'info'); refreshFind(); })
     .catch(e => say('folderStatus', failText('重建', e.message, RETRY), 'bad'));
 });
 
@@ -983,25 +1848,126 @@ function applyState(s) {
 function unsaved() { return chat.length > 0 && chat.length !== savedLen; }
 function rounds() { return chat.filter(m => m.role === 'user').length; }
 
+// 关闭窗口时按全部标签合计提醒；嵌在窗口里的标签由窗口提醒
 window.addEventListener('beforeunload', ev => {
-  if (alive && unsaved()) { ev.preventDefault(); ev.returnValue = ''; }
+  if (alive && !EMBED && convStates().some(c => c.unsaved)) { ev.preventDefault(); ev.returnValue = ''; }
+});
+
+// ---------------- 「＋ 新对话」：同一窗口里的对话标签
+// 「对话 1」是窗口本身；其余标签各是一个带 embed=1 的 iframe，已选和对话各自独立，文件夹索引与设置共用
+const MAX_CONVS = 8;
+let convs = [{id: 1, frame: null}], convSeq = 1, convActive = 1;
+window.askConv = {state: () => ({busy, unsaved: unsaved(), rounds: rounds()}), page: PAGE, gone: msg => serviceGone(msg)};
+
+function frameConv(c) {
+  try { return c.frame.contentWindow.askConv; } catch (e) { return null; }
+}
+// 各标签的生成与未保存情况；标签还没加载完时按空对话算
+function convStates() {
+  return convs.map(c => {
+    const a = c.frame ? frameConv(c) : window.askConv;
+    return Object.assign({id: c.id}, a ? a.state() : {busy: false, unsaved: false, rounds: 0});
+  });
+}
+
+function renderConvs() {
+  const box = $('convTabs');
+  box.textContent = '';
+  $('convBar').hidden = convs.length < 2;
+  convs.forEach(c => {
+    const wrap = el('span', 'convtab');
+    const t = btn('对话 ' + c.id, '', () => showConv(c.id));
+    t.setAttribute('role', 'tab');
+    t.id = 'convTab' + c.id;
+    t.dataset.id = c.id;
+    t.setAttribute('aria-selected', String(c.id === convActive));
+    t.tabIndex = c.id === convActive ? 0 : -1;
+    wrap.appendChild(t);
+    if (c.frame) {
+      const x = btn('×', 'close', () => closeConv(c.id));
+      x.setAttribute('aria-label', '关闭 对话 ' + c.id);
+      wrap.appendChild(x);
+    }
+    box.appendChild(wrap);
+  });
+  const full = convs.length >= MAX_CONVS;
+  $('newConv').disabled = full || !alive;
+  say('convStatus', full ? '最多同时开 ' + MAX_CONVS + ' 个对话，请先关闭不用的标签。' : '', full ? 'warn' : 'info');
+}
+
+function showConv(id, focus) {
+  convActive = id;
+  $('convMain').hidden = id !== 1;
+  $('convFrames').hidden = id === 1;
+  convs.forEach(c => { if (c.frame) c.frame.hidden = c.id !== id; });
+  renderConvs();
+  if (focus) $('convTab' + id).focus();
+}
+
+$('newConv').addEventListener('click', () => {
+  if (convs.length >= MAX_CONVS) return;
+  const id = ++convSeq, f = document.createElement('iframe');
+  f.title = '对话 ' + id;
+  f.src = location.pathname + '?t=' + encodeURIComponent(TOKEN) + '&embed=1&shell=' + encodeURIComponent(PAGE);
+  $('convFrames').appendChild(f);
+  convs.push({id, frame: f});
+  showConv(id);
+});
+
+function closeConv(id) {
+  const c = convs.find(x => x.id === id), a = frameConv(c), st = a ? a.state() : {};
+  const parts = [];
+  if (st.busy) parts.push('回答正在生成，关闭会停止生成。');
+  if (st.unsaved) parts.push(st.rounds + ' 轮问答未保存，关闭后清空，可先点「保存对话」。');
+  if (parts.length && !confirm('关闭「对话 ' + id + '」？\n' + parts.join('\n'))) return;
+  // 替标签通知服务它已关闭；标签自己的关页通知可能来不及发出
+  if (a && navigator.sendBeacon) navigator.sendBeacon('/api/bye', new Blob([JSON.stringify({t: TOKEN, page: a.page})], {type: 'text/plain'}));
+  const i = convs.indexOf(c);
+  convs.splice(i, 1);
+  c.frame.remove();
+  showConv(convActive === id ? convs[Math.max(0, i - 1)].id : convActive, true);
+}
+
+// 方向键、Home、End 在对话标签之间切换
+$('convTabs').addEventListener('keydown', ev => {
+  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(ev.key) || !ev.target.matches('[role=tab]')) return;
+  ev.preventDefault();
+  const i = convs.findIndex(c => c.id === convActive), n = convs.length;
+  const j = ev.key === 'Home' ? 0 : ev.key === 'End' ? n - 1 : (i + (ev.key === 'ArrowRight' ? 1 : n - 1)) % n;
+  showConv(convs[j].id, true);
 });
 
 $('quit').addEventListener('click', () => {
-  const parts = [];
-  if (busy) parts.push('回答正在生成，服务会等它结束后再退出。');
-  if (unsaved()) parts.push('当前 ' + rounds() + ' 轮问答未保存，退出后会清空，可先点「保存对话」。');
+  $('quit').disabled = true;
+  // 先问服务现在开着几个页面；问不到时按只有本页处理
+  post('/api/ping', {page: PAGE}).then(r => r.pages || 1, () => 1).then(pages => {
+    $('quit').disabled = !alive;
+    quit(pages);
+  });
+});
+
+function quit(pages) {
+  const parts = [], tabs = convStates(), open = tabs.filter(c => c.unsaved);
+  if (pages > 1) parts.push('还有 ' + (pages - 1) + ' 个页面开着，退出会一起结束，那些页面里未保存的对话也会清空。');
+  if (tabs.some(c => c.busy)) parts.push('回答正在生成，服务会等它结束后再退出。');
+  const n = open.reduce((k, c) => k + c.rounds, 0);
+  if (open.length && tabs.length > 1) parts.push(open.length + ' 个对话标签共 ' + n + ' 轮问答未保存，退出后会清空，可先点「保存对话」。');
+  else if (open.length) parts.push('当前 ' + n + ' 轮问答未保存，退出后会清空，可先点「保存对话」。');
   if (parts.length && !confirm(parts.join('\n') + '\n\n确定退出？')) return;
   post('/api/quit').then(r => serviceGone(r.waiting ? '服务将在回答生成结束后退出，可关闭本页。需要再用时重新双击「双击运行」。' : undefined))
     .catch(() => serviceGone());
-});
+}
 
 api('/api/state').then(s => {
   maxFiles = s.max_files;
   $('ver').textContent = '找文件问 AI v' + s.version;
+  setDedup(s.dedup !== false);
+  setRegex(s.regex === true);
+  $('pickFolder').hidden = !s.picker;
   applyState(s);
   renderFolders();
   renderChat();
+  loadSkills(false);
   if (!s.models.length) togglePanel($('modelSettings'), $('modelPanel'), true);
   if (!s.folders.length) {
     togglePanel($('manageFolders'), $('folderPanel'), true);
@@ -1009,11 +1975,11 @@ api('/api/state').then(s => {
     $('folder').focus();
   }
   const miss = [];
-  if (!s.doc2kb) miss.push('缺少同目录的 doc2kb_core.py，读不了 docx、xlsx、pptx、pdf，请重新解压完整的工具目录');
+  if (!s.doc2kb) miss.push('缺少同目录的 doc2kb_core.py，读不了 docx、xlsx、pptx、doc、xls、ppt、pdf，请重新解压完整的工具目录');
   else if (!s.pdftotext) miss.push('本机没有 pdftotext，读不了 pdf；需要时请安装 poppler-utils');
   if (miss.length) { $('banner').textContent = miss.join('；') + '。'; $('banner').hidden = false; }
   loadDirs().then(r => renderPlaces(r.places)).catch(() => {});
-  return search();
+  return setFindMode('browse');
 }).catch(e => say('findStatus', failText('读取状态', e.message, '请关闭本页，重新双击「双击运行」。'), 'bad'));
 
 </script>

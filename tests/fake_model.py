@@ -11,6 +11,12 @@
     notfound  回答「所选文件中未找到」
     err401 / err404 / err429 / err500   返回对应状态码
     toolong   返回 400，内容含 context length exceeded
+    call:<工具名>:<JSON 参数>   请求带 tools 且还没有工具结果时流式返回一次工具调用（参数分两段发），
+              拿到工具结果后回答「结果：<工具结果>」
+    loop:<工具名>:<JSON 参数>   只要请求带 tools 就再调用一次；不带 tools 时回答「停」
+    seq:<JSON 列表>   列表每项为 [工具名, 参数对象]，按已有工具结果数依次调用下一个；
+              用完或请求不带 tools 时回答「结果：」加全部工具结果（以「|」分隔）
+    notools   请求带 tools 时返回 400（tools not supported）
 GET /last 返回最近一次请求的 JSON 正文。
 
 单独运行时监听 127.0.0.1 的随机端口，把端口号打印到标准输出第一行。
@@ -56,6 +62,12 @@ class FakeModel(BaseHTTPRequestHandler):
         if model == 'toolong':
             self.error(400, '{"error":{"message":"context length exceeded"}}')
             return
+        if model == 'notools' and data.get('tools'):
+            self.error(400, '{"error":{"message":"tools not supported"}}')
+            return
+        if model.startswith(('call:', 'loop:', 'seq:')):
+            self.tool_model(model, data)
+            return
         if model == 'plain':
             body = json.dumps({'choices': [{'message': {'content': '整段回答'}}]}, ensure_ascii=False).encode('utf-8')
             self.send_response(200)
@@ -74,6 +86,11 @@ class FakeModel(BaseHTTPRequestHandler):
             pieces = ['要点一（文件 1：「甲甲', '甲」）。', '要点二（文件 1：「编造的话」）。']
         if model == 'notfound':
             pieces = ['所选文件中未找到。']
+        if model == 'md':
+            text = ('# 标题\n\n**加粗** 与 *斜体* 和 `代码`，见 [说明](https://example.com/a)\n\n'
+                    '- 甲\n  - 甲一\n- 乙\n\n1. 一\n2. 二\n\n> 引用\n\n---\n\n'
+                    '| 列一 | 列二 |\n| --- | ---: |\n| a | b |\n\n```\nx < y\n```\n\n<img src=x onerror=alert(1)>')
+            pieces = [text[i:i + 7] for i in range(0, len(text), 7)]
         for p in pieces:
             chunk = {'choices': [{'delta': {'content': p}}]}
             self.wfile.write(('data: %s\n\n' % json.dumps(chunk, ensure_ascii=False)).encode('utf-8'))
@@ -82,6 +99,40 @@ class FakeModel(BaseHTTPRequestHandler):
             time.sleep(30)
         self.wfile.write(b'data: [DONE]\n\n')
         self.wfile.flush()
+
+
+    def sse(self, chunks):
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/event-stream')
+        self.end_headers()
+        for delta in chunks:
+            chunk = {'choices': [{'delta': delta}]}
+            self.wfile.write(('data: %s\n\n' % json.dumps(chunk, ensure_ascii=False)).encode('utf-8'))
+            self.wfile.flush()
+        self.wfile.write(b'data: [DONE]\n\n')
+        self.wfile.flush()
+
+    def tool_model(self, model, data):
+        results = [m['content'] for m in data['messages'] if m.get('role') == 'tool']
+        if model.startswith('seq:'):
+            steps = json.loads(model[4:])
+            if data.get('tools') and len(results) < len(steps):
+                name, args = steps[len(results)]
+                self.sse([{'tool_calls': [{'index': 0, 'id': 'c%d' % len(results), 'type': 'function',
+                                           'function': {'name': name,
+                                                        'arguments': json.dumps(args, ensure_ascii=False)}}]}])
+            else:
+                self.sse([{'content': '结果：' + '|'.join(results)}])
+            return
+        mode, name, args = model.split(':', 2)
+        if data.get('tools') and (mode == 'loop' or not results):
+            half = len(args) // 2
+            self.sse([{'content': '先看一下。'},
+                      {'tool_calls': [{'index': 0, 'id': 'c%d' % len(results), 'type': 'function',
+                                       'function': {'name': name, 'arguments': args[:half]}}]},
+                      {'tool_calls': [{'index': 0, 'function': {'arguments': args[half:]}}]}])
+            return
+        self.sse([{'content': '结果：' + results[-1] if results and mode == 'call' else '停'}])
 
 
 def start():
