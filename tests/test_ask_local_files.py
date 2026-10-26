@@ -346,6 +346,7 @@ class TextTest(ServerCase):
 
     def test_broken_old_office(self):
         write(os.path.join(self.docs, '旧文件.wps'), 'x')
+        self.index.refresh(full=True, wait=True)
         code, r = self.call('/api/text?path=' + urllib.request.quote(os.path.join(self.docs, '旧文件.wps')))
         self.assertTrue(r['error'].startswith('读取失败：'))
         self.assertTrue(r['error'].endswith('请先另存为 docx、xlsx 或 pptx'))
@@ -503,6 +504,17 @@ class ExportTest(ServerCase):
             self.assertEqual((code, r['files'], r['skipped']), (200, 1, 1))
             self.assertIn('===== 文件 1：%s =====' % good, r['text'])
             self.assertEqual(self.call('/api/export', {'files': [bad]})[0], 400)
+
+    def test_only_indexed_paths(self):
+        # 在已添加的文件夹里、但还没进索引的文件，以及写法不同的同一路径，都要先刷新索引
+        fresh = os.path.join(self.docs, '新文件.txt')
+        write(fresh, 'x')
+        for path in (fresh, os.path.join(self.docs, '子目录', '..', '季度总结.txt')):
+            self.assertEqual(self.call('/api/export', {'files': [path]})[0], 400)
+            self.assertEqual(self.call('/api/text?path=' + urllib.request.quote(path))[0], 400)
+            self.assertEqual(self.call('/api/open-folder', {'path': path})[0], 400)
+        self.index.refresh(full=True, wait=True)
+        self.assertEqual(self.call('/api/export', {'files': [fresh]})[0], 200)
 
     def test_rejects_bad_requests(self):
         outside = os.path.join(self.root, 'x.txt')

@@ -286,6 +286,7 @@ class Snapshot:
 
     def __init__(self, entries):
         self.entries = entries      # [(路径, 显示名, 大小, 修改时间)]，按修改时间倒序
+        self.paths = {e[0]: e[0] for e in entries}      # 页面传来的路径只换成这里存的路径再使用
         lines = [e[1].lower() for e in entries]
         self.blob = '\n'.join(lines)
         self.starts = []
@@ -532,6 +533,15 @@ class FileIndex:
                 'files': shown, 'here': len(files), 'here_dedup': len(layer), 'dedup': dedup,
                 'tree': [entry_public(e, reasons) for e in readable[:TREE_SHOWN]], 'tree_total': len(readable),
                 'status': self.status()}
+
+    def resolve(self, path):
+        """页面传来的文件路径换成索引里存的同一路径；不在索引里、不在已添加的文件夹里或已不存在时返回 None。"""
+        with self.lock:
+            snap = self.snap
+        found = snap.paths.get(path) if isinstance(path, str) else None
+        if not found or not self.contains(found) or not os.path.isfile(found):
+            return None
+        return found
 
     def contains(self, path):
         """路径须在某个已添加的文件夹里（按真实路径判断，链接出去的不算）。"""
@@ -1569,14 +1579,14 @@ class Handler(BaseHTTPRequestHandler):
             dedup = arg('dedup')
             self.send_json(200, st.index.browse(arg('dir'), dedup == '1' if dedup else st.config.dedup))
         elif url.path == '/api/text':
-            path = arg('path')
-            if not path or not st.index.contains(path) or not os.path.isfile(path):
+            path = st.index.resolve(arg('path'))
+            if not path:
                 self.send_json(400, {'error': MISSING_FILE})
                 return
             try:
                 text, note = st.texts.get(path)
             except Exception as e:      # 转换器对损坏文件可能抛出任何异常
-                log.info('extract failed: %s (%s)', path, e)
+                log.info('extract failed: %r (%s)', path, e)
                 self.send_json(200, {'path': path, 'error': str(e) or e.__class__.__name__})
                 return
             out = {'path': path, 'chars': len(text), 'note': note}
@@ -1661,14 +1671,15 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(400, {'error': '请选 1 到 %d 个文件' % MAX_FILES})
             return
         got = []
-        for path in files:
-            if not isinstance(path, str) or not st.index.contains(path) or not os.path.isfile(path):
-                self.send_json(400, {'error': '%s：%s' % (MISSING_FILE, path)})
+        for asked in files:
+            path = st.index.resolve(asked)
+            if not path:
+                self.send_json(400, {'error': '%s：%s' % (MISSING_FILE, asked)})
                 return
             try:
                 got.append((path, st.texts.get(path)[0]))
             except Exception as e:      # 转换器对损坏文件可能抛出任何异常
-                log.info('extract failed: %s (%s)', path, e)
+                log.info('extract failed: %r (%s)', path, e)
         if not got:
             self.send_json(400, {'error': '已选文件都取不出文字'})
             return
@@ -1736,8 +1747,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def post_open_folder(self, data):
         """用文件管理器打开已索引文件所在的文件夹并尽量选中它；打不开时带上文件夹路径，页面让使用者自己去打开。"""
-        path = str(data.get('path') or '')
-        if not path or not self.state.index.contains(path):
+        path = self.state.index.resolve(data.get('path'))
+        if not path:
             self.send_json(400, {'error': MISSING_FILE})
             return
         folder = os.path.dirname(path)
@@ -1813,16 +1824,19 @@ class Handler(BaseHTTPRequestHandler):
         if not tg:
             self.send_json(400, {'error': NO_MODEL})
             return
-        texts = []
-        for path in files:
-            if not isinstance(path, str) or not st.index.contains(path) or not os.path.isfile(path):
-                self.send_json(400, {'error': '%s：%s' % (MISSING_FILE, path)})
+        texts, paths = [], []
+        for asked in files:
+            path = st.index.resolve(asked)
+            if not path:
+                self.send_json(400, {'error': '%s：%s' % (MISSING_FILE, asked)})
                 return
+            paths.append(path)
             try:
                 texts.append(st.texts.get(path)[0])
             except Exception as e:
                 self.send_json(400, {'error': '取不出文字：%s（%s）' % (path, e)})
                 return
+        files = paths       # 之后只用索引里存的路径
         # 字数上限管文件、skill 说明与对话的合计；截断只截文件，给 skill 和对话留出位置
         limit = st.config.char_limit
         files_chars, history_chars = sum(len(t) for t in texts), sum(len(m['content']) for m in history)
