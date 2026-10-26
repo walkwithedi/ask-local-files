@@ -39,6 +39,11 @@
   .icon { flex-shrink:0; vertical-align:-2px; }
   .folder { color:var(--folder) !important; }
   .folder .icon { margin-right:4px; }
+  button.reveal { padding:1px 6px; color:var(--folder); }
+  /* 本机没有可用模型：「问 AI」只留一行说明和「模型设置」，「找文件」占满宽度 */
+  #noAiNote { margin:4px 0 0; font-size:14px; color:var(--muted); }
+  .no-ai #askCard > :not(.card-head):not(#noAiNote):not(#optRow):not(#modelPanel),
+  .no-ai #askCard .card-head > button, .no-ai #skillRow, .no-ai #modelRow > :not(#modelSettings) { display:none; }
   :focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
   .ok { color:var(--ok); } .warn { color:var(--warn); } .bad { color:var(--bad); } .info { color:var(--muted); }
   .status { margin:8px 0 0; font-size:14px; }
@@ -126,6 +131,8 @@
     #chatWrap #chat:empty { display:block; }
     #askCard textarea { min-height:calc(6.4em + 16px); }
     main > footer { flex:0 0 auto; margin-top:4px; padding-top:6px; }
+    .no-ai .layout { grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(0,1fr) auto; }
+    .no-ai #askCard { flex:0 1 auto; max-height:50vh; }
   }
   pre, .msg-body { white-space:pre-wrap; word-break:break-word; }
   /* 回答按 Markdown 显示 */
@@ -255,6 +262,8 @@
     <ul id="picked" class="list"></ul>
     <div class="row" style="margin-top:6px">
       <button id="removeBad" type="button" hidden></button>
+      <button id="copyTexts" type="button" hidden>复制全部文字</button>
+      <button id="saveTexts" type="button" hidden>保存全部文字</button>
       <button id="clearPicked" class="danger" type="button" hidden>清空已选</button>
     </div>
     <div id="pickStatus" class="status info" aria-live="polite"></div>
@@ -269,6 +278,7 @@
       <button id="saveDocx" class="small" type="button">保存为 Word</button>
       <button id="clear" class="small danger" type="button">清空对话</button>
     </div>
+    <p id="noAiNote" hidden>本机没有可用的模型：可以找文件、预览，在「已选」里复制或保存取出的文字，带到能用 AI 的地方提问；要在这里问 AI，请在「模型设置」里填写接口。</p>
     <div id="chatStatus" class="status" aria-live="polite"></div>
     <div id="chatWrap"><div id="chat"></div></div>
     <div id="optRow" class="row">
@@ -322,7 +332,7 @@
   <div id="convFrames" hidden></div>
 
 
-  <footer><span id="ver">找文件问 AI v1.15</span>　关闭全部页面后服务自动退出；点「退出」立即结束，开着的页面一起结束。有回答正在生成（含 skill 脚本运行）时，服务等它结束再退出。对话不自动保存，退出即清空。</footer>
+  <footer><span id="ver">找文件问 AI v1.16</span>　关闭全部页面后服务自动退出；点「退出」立即结束，开着的页面一起结束。有回答正在生成（含 skill 脚本运行）时，服务等它结束再退出。对话不自动保存，退出即清空。</footer>
 </main>
 <script>
 'use strict';
@@ -586,6 +596,7 @@ function dupList(dups) {
     }
     const acts = el('span', 'acts');
     acts.appendChild(pv);
+    if (on || d.supported) acts.appendChild(revealBtn(d.path, d.rel));
     acts.appendChild(b);
     li.appendChild(acts);
     if (open) li.appendChild(previewNode(dupPreviews[d.path]));
@@ -695,32 +706,43 @@ function fileRow(r, withFolder) {
   h.setAttribute('aria-label', '从列表移除 ' + r.name);
   const acts = el('span', 'acts');
   acts.appendChild(h);
+  if (on || r.supported) acts.appendChild(revealBtn(r.path, r.name));
   acts.appendChild(b);
   li.appendChild(acts);
   if (open) { li.style.flexWrap = 'wrap'; li.appendChild(dupList(dups)); }
   return li;
 }
 
-// 读不了的文件（压缩包、缺 pdftotext 的 pdf 等）：「加入」换成「打开文件夹」，由使用者自己处理；
-// 打不开时写出所在文件夹的路径，给「复制路径」
+// 在文件管理器里打开文件所在的文件夹并尽量选中它；打不开时写出所在文件夹的路径，给「复制路径」
 let openFolderPath = '';
+function revealFile(path, b) {
+  b.disabled = true;
+  post('/api/open-folder', {path}).then(r => {
+    openFolderPath = r.folder;
+    $('openStatusRow').hidden = false;
+    $('copyFolder').hidden = true;
+    say('openStatus', r.selected ? '已打开文件夹并选中文件：' + path : '已打开文件夹，未能选中文件：' + r.folder, 'ok');
+  }).catch(e => {
+    openFolderPath = (e.data && e.data.folder) || '';
+    $('openStatusRow').hidden = false;
+    $('copyFolder').hidden = !openFolderPath;
+    say('openStatus', failText('打开文件夹', e.message, '') + (openFolderPath ? '请在文件管理器里打开：' + openFolderPath : RETRY), 'bad');
+  }).finally(() => { b.disabled = !alive; });
+}
+// 读不了的文件（压缩包、缺 pdftotext 的 pdf 等）：「加入」换成「打开文件夹」，由使用者自己处理
 function openFolderBtn(path, name) {
-  const b = btn('打开文件夹', 'small', () => {
-    b.disabled = true;
-    post('/api/open-folder', {path}).then(r => {
-      openFolderPath = r.folder;
-      $('openStatusRow').hidden = false;
-      $('copyFolder').hidden = true;
-      say('openStatus', '已打开文件夹：' + r.folder, 'ok');
-    }).catch(e => {
-      openFolderPath = (e.data && e.data.folder) || '';
-      $('openStatusRow').hidden = false;
-      $('copyFolder').hidden = !openFolderPath;
-      say('openStatus', failText('打开文件夹', e.message, '') + (openFolderPath ? '请在文件管理器里打开：' + openFolderPath : RETRY), 'bad');
-    }).finally(() => { b.disabled = !alive; });
-  });
+  const b = btn('打开文件夹', 'small', () => revealFile(path, b));
   b.dataset.act = 'open-folder';
   b.setAttribute('aria-label', '打开 ' + name + ' 所在的文件夹');
+  return b;
+}
+// 其余文件：一个文件夹图标按钮，打开所在文件夹并选中
+function revealBtn(path, name) {
+  const b = btn('', 'small reveal', () => revealFile(path, b));
+  b.appendChild(folderIcon());
+  b.dataset.act = 'reveal';
+  b.title = '在文件夹中显示 ' + name;
+  b.setAttribute('aria-label', '在文件夹中显示 ' + name);
   return b;
 }
 $('copyFolder').addEventListener('click', () => copyText(openFolderPath, $('copyFolder'), 'openStatus', '路径'));
@@ -1010,6 +1032,7 @@ function renderPicked() {
     rm.setAttribute('aria-label', '移除 ' + p.name);
     const acts = el('span', 'acts');
     acts.appendChild(pv);
+    acts.appendChild(revealBtn(p.path, p.name));
     acts.appendChild(rm);
     li.appendChild(acts);
     if (open) li.appendChild(previewNode(openPreviews[p.path]));
@@ -1021,6 +1044,7 @@ function renderPicked() {
   $('removeBad').hidden = !bad;
   $('removeBad').textContent = '移除取不出文字的文件（' + bad + ' 个）';
   $('clearPicked').hidden = !picked.length;
+  renderExportButtons();
   if (!picked.length) say('pickStatus', '');
   else if (bad) say('pickStatus', '有 ' + bad + ' 个文件取不出文字：请点「移除取不出文字的文件」后再发送。', 'bad');
   else if (loading) say('pickStatus', addedNote + '正在取文字' + (picked.length > 1 ? '（已完成 ' + (picked.length - loading) + ' / 共 ' + picked.length + ' 个）' : '') + '……', 'info');
@@ -1055,6 +1079,49 @@ function noticeLimit() {
     cutAction = null;
   }
 }
+
+// 带走文字：把已选文件取出的文字连同原文佐证要求拼成一份（与发给模型的相同，不带 skill），复制或保存后带走；
+// 没有模型的机器也能用
+let exporting = false;
+const EXPORT_BUTTONS = ['copyTexts', 'saveTexts'];
+function renderExportButtons() {
+  const loading = picked.some(p => p.loading), bad = picked.filter(p => p.error).length;
+  EXPORT_BUTTONS.forEach(id => { const b = $(id); b.hidden = !picked.length; b.disabled = exporting || loading || bad === picked.length; });
+}
+function exportText() {
+  const files = picked.filter(p => !p.error).map(p => p.path);
+  return post('/api/export', {files}).then(r => {
+    r.skipped += picked.length - files.length;
+    r.note = r.files + ' 个文件，共 ' + fmtNum(r.chars) + ' 字（含提问要求）' + (r.skipped ? '，跳过 ' + r.skipped + ' 个取不出文字的文件' : '');
+    return r;
+  });
+}
+function exportRun(action, work) {
+  exporting = true;
+  renderExportButtons();
+  say('pickStatus', '正在整理取出的文字……', 'info');
+  return work().catch(e => say('pickStatus', failText(action, e.message, RETRY), 'bad'))
+    .finally(() => { exporting = false; renderExportButtons(); });
+}
+$('copyTexts').addEventListener('click', () => exportRun('复制', () => exportText().then(r => {
+  const ok = () => say('pickStatus', '已复制：' + r.note + '。', 'ok');
+  const fallback = () => {
+    const t = document.createElement('textarea');
+    t.value = r.text; document.body.appendChild(t); t.select();
+    let done = false;
+    try { done = document.execCommand('copy'); } catch (e) { /* 视为复制失败 */ }
+    t.remove();
+    if (done) ok();
+    else say('pickStatus', '复制失败：浏览器不允许写剪贴板。请点「保存全部文字」，打开保存的文件后手动选中复制。', 'bad');
+  };
+  if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(r.text).then(ok, fallback);
+  fallback();
+})));
+$('saveTexts').addEventListener('click', () => exportRun('保存', () => exportText().then(r => {
+  const name = '找文件问AI-文字-' + stampNow() + '.md';
+  saveBlob(new Blob([r.text], {type: 'text/markdown;charset=utf-8'}), name);
+  say('pickStatus', '已保存为 ' + name + '（在浏览器的下载文件夹里）：' + r.note + '。', 'ok');
+})));
 
 $('removeBad').addEventListener('click', () => {
   if (!newChat()) return;
@@ -1842,6 +1909,9 @@ function applyState(s) {
   $('cModel').value = state.custom.model;
   $('cKey').placeholder = state.custom.has_key ? '已保存，留空则不改' : '';
   renderModels();
+  const noAi = !state.models.length;
+  document.body.classList.toggle('no-ai', noAi);
+  $('noAiNote').hidden = !noAi;
   renderPicked();
 }
 
@@ -1968,7 +2038,6 @@ api('/api/state').then(s => {
   renderFolders();
   renderChat();
   loadSkills(false);
-  if (!s.models.length) togglePanel($('modelSettings'), $('modelPanel'), true);
   if (!s.folders.length) {
     togglePanel($('manageFolders'), $('folderPanel'), true);
     $('folder').scrollIntoView({block: 'center'});
