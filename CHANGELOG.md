@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.16.0
+
+- Works without a model endpoint: when no model is configured, 问 AI shrinks to one line with 模型设置 and the file finder takes the full width; the model settings no longer open by themselves.
+- 复制全部文字 ("copy all text") and 保存全部文字 ("save all text") under 已选 carry the quoting rules and the full text of the picked files, the same system message the model would get (without skill instructions), to paste into an assistant elsewhere. Files without text are skipped and counted. Available with or without a model.
+- Every file in the lists and under 已选 has a folder icon button that opens its folder in the file manager with the file selected: `org.freedesktop.FileManager1.ShowItems` through `gdbus` or `dbus-send` first, then `peony --show-items`, `nautilus --select` or `caja --select`, and plain `xdg-open` or `gio open` as the last resort. 打开文件夹 on unreadable files selects the file the same way.
+- Paths sent by the page are replaced by the index's own copy before use; reading, asking, exporting and showing in the file manager accept only indexed files, so a file just added to a folder needs a refresh first.
+
 ## 1.15.0
 
 - Skills: choose a bundled skill or one of your own in the OpenCode format. The model can read the skill's reference files, run its `.py` or `.sh` scripts through function calls (60 seconds each, at most 5 reads or runs per question) and write long content into a per-question work folder for those scripts (at most 10 writes); files the scripts produce can be saved. With a skill, files and the question are optional.

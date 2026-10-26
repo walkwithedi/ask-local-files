@@ -59,7 +59,7 @@ from urllib.parse import parse_qs, urlsplit
 LOG_FORMAT = '%(asctime)s [%(levelname)s] %(name)s.%(funcName)s:%(lineno)d - %(message)s'
 log = logging.getLogger('ask_local_files')
 
-VERSION = '1.15'
+VERSION = '1.16'
 HERE = os.path.dirname(os.path.abspath(__file__))
 PAGE_FILE = os.path.join(HERE, 'ask_local_files.html')
 LOG_NAME = 'ask_local_files.log'
@@ -119,6 +119,15 @@ OLD_OFFICE_AS = {'.doc': '.doc', '.xls': '.xls', '.ppt': '.ppt', '.wps': '.doc',
 ARCHIVE_EXT = {'.zip', '.rar', '.7z', '.tar', '.gz', '.tgz', '.bz2', '.tbz2', '.xz', '.txz', '.zst', '.lz', '.cab'}
 ARCHIVE_REASON = '压缩包请先解压，再加入解压出的文件'
 OPENERS = (('xdg-open',), ('gio', 'open'))     # 打开文件夹用的命令，按顺序取第一个找得到的
+# 在文件管理器里打开所在文件夹并选中文件：先走标准 D-Bus 接口 FileManager1.ShowItems，再试各文件管理器的选中参数
+SHOW_ITEMS = (('gdbus', 'call', '--session', '--dest', 'org.freedesktop.FileManager1',
+               '--object-path', '/org/freedesktop/FileManager1', '--method', 'org.freedesktop.FileManager1.ShowItems',
+               "['{uri}']", ''),
+              ('dbus-send', '--session', '--print-reply', '--dest=org.freedesktop.FileManager1',
+               '/org/freedesktop/FileManager1', 'org.freedesktop.FileManager1.ShowItems',
+               'array:string:{uri}', 'string:'))
+SELECT_OPENERS = (('peony', '--show-items'), ('nautilus', '--select'), ('caja', '--select'))
+REVEAL_TIMEOUT = 5     # 等 D-Bus 调用返回的秒数
 FILE_URL_ERROR = '只支持本机 file:/// 地址。请改用以 / 开头的路径'
 # 副本标记：扩展名前的「 (2)」「（2）」「 - 副本」「_副本」「 copy」「 (copy)」等，标记后可再带序号；
 # 页面上的 sameNameKey 用同一个正则，两边须一致（tests/same_name_cases.json）
@@ -277,6 +286,7 @@ class Snapshot:
 
     def __init__(self, entries):
         self.entries = entries      # [(路径, 显示名, 大小, 修改时间)]，按修改时间倒序
+        self.paths = {e[0]: e[0] for e in entries}      # 页面传来的路径只换成这里存的路径再使用
         lines = [e[1].lower() for e in entries]
         self.blob = '\n'.join(lines)
         self.starts = []
@@ -523,6 +533,15 @@ class FileIndex:
                 'files': shown, 'here': len(files), 'here_dedup': len(layer), 'dedup': dedup,
                 'tree': [entry_public(e, reasons) for e in readable[:TREE_SHOWN]], 'tree_total': len(readable),
                 'status': self.status()}
+
+    def resolve(self, path):
+        """页面传来的文件路径换成索引里存的同一路径；不在索引里、不在已添加的文件夹里或已不存在时返回 None。"""
+        with self.lock:
+            snap = self.snap
+        found = snap.paths.get(path) if isinstance(path, str) else None
+        if not found or not self.contains(found) or not os.path.isfile(found):
+            return None
+        return found
 
     def contains(self, path):
         """路径须在某个已添加的文件夹里（按真实路径判断，链接出去的不算）。"""
@@ -1305,6 +1324,37 @@ def open_folder(folder):
     raise OSError('本机没有 xdg-open 或 gio，无法打开文件管理器')
 
 
+def reveal_file(path):
+    """打开文件所在的文件夹并尽量选中文件：先调 FileManager1.ShowItems（gdbus，没有时 dbus-send），
+    再试 SELECT_OPENERS，都不行时用 open_folder 只打开文件夹。返回是否已选中；连文件夹也打不开时抛 OSError。"""
+    uri = 'file://' + urllib.parse.quote(path)
+    for cmd in SHOW_ITEMS:
+        if not shutil.which(cmd[0]):
+            continue
+        try:
+            r = subprocess.run([a.replace('{uri}', uri) for a in cmd], stdin=subprocess.DEVNULL,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=REVEAL_TIMEOUT)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            log.info('%s failed: %s', cmd[0], e)
+            break
+        if r.returncode == 0:
+            return True
+        log.info('%s exited %d', cmd[0], r.returncode)
+        break       # 两种 D-Bus 命令调的是同一个接口，一个失败另一个也不会成
+    for cmd in SELECT_OPENERS:
+        if shutil.which(cmd[0]):
+            try:
+                proc = subprocess.Popen(list(cmd) + [uri], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                        stderr=subprocess.DEVNULL, start_new_session=True)
+            except OSError as e:
+                log.info('cannot start %s: %s', cmd[0], e)
+                continue
+            threading.Thread(target=proc.wait, daemon=True).start()     # 回收子进程
+            return True
+    open_folder(os.path.dirname(path))
+    return False
+
+
 def log_file_path():
     """日志放工具目录，不可写时放 ~/.cache/ask-local-files/。"""
     if os.access(HERE, os.W_OK):
@@ -1529,14 +1579,14 @@ class Handler(BaseHTTPRequestHandler):
             dedup = arg('dedup')
             self.send_json(200, st.index.browse(arg('dir'), dedup == '1' if dedup else st.config.dedup))
         elif url.path == '/api/text':
-            path = arg('path')
-            if not path or not st.index.contains(path) or not os.path.isfile(path):
+            path = st.index.resolve(arg('path'))
+            if not path:
                 self.send_json(400, {'error': MISSING_FILE})
                 return
             try:
                 text, note = st.texts.get(path)
             except Exception as e:      # 转换器对损坏文件可能抛出任何异常
-                log.info('extract failed: %s (%s)', path, e)
+                log.info('extract failed: %r (%s)', path, e)
                 self.send_json(200, {'path': path, 'error': str(e) or e.__class__.__name__})
                 return
             out = {'path': path, 'chars': len(text), 'note': note}
@@ -1588,6 +1638,8 @@ class Handler(BaseHTTPRequestHandler):
             self.post_open_folder(data)
         elif url.path == '/api/docx':
             self.post_docx(data)
+        elif url.path == '/api/export':
+            self.post_export(data)
         else:
             self.send_json(404, {'error': '没有这个地址'})
 
@@ -1609,6 +1661,30 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Cache-Control', 'no-store')
         self.end_headers()
         self.wfile.write(body)
+
+    def post_export(self, data):
+        """把已选文件取出的文字拼成与发给模型相同的系统消息（原文佐证要求加全部文件，不带 skill），供页面复制、保存。
+        取不出文字的文件跳过，写明个数；不受发送字数上限限制。"""
+        st = self.state
+        files = data.get('files')
+        if not isinstance(files, list) or not files or len(files) > MAX_FILES:
+            self.send_json(400, {'error': '请选 1 到 %d 个文件' % MAX_FILES})
+            return
+        got = []
+        for asked in files:
+            path = st.index.resolve(asked)
+            if not path:
+                self.send_json(400, {'error': '%s：%s' % (MISSING_FILE, asked)})
+                return
+            try:
+                got.append((path, st.texts.get(path)[0]))
+            except Exception as e:      # 转换器对损坏文件可能抛出任何异常
+                log.info('extract failed: %r (%s)', path, e)
+        if not got:
+            self.send_json(400, {'error': '已选文件都取不出文字'})
+            return
+        text = build_messages(got, [])[0]['content']
+        self.send_json(200, {'text': text, 'chars': len(text), 'files': len(got), 'skipped': len(files) - len(got)})
 
     def post_folders(self, data):
         cfg, idx = self.state.config, self.state.index
@@ -1670,9 +1746,9 @@ class Handler(BaseHTTPRequestHandler):
 
 
     def post_open_folder(self, data):
-        """用文件管理器打开已索引文件所在的文件夹；打不开时带上文件夹路径，页面让使用者自己去打开。"""
-        path = str(data.get('path') or '')
-        if not path or not self.state.index.contains(path):
+        """用文件管理器打开已索引文件所在的文件夹并尽量选中它；打不开时带上文件夹路径，页面让使用者自己去打开。"""
+        path = self.state.index.resolve(data.get('path'))
+        if not path:
             self.send_json(400, {'error': MISSING_FILE})
             return
         folder = os.path.dirname(path)
@@ -1680,12 +1756,12 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(400, {'error': MISSING_FILE})
             return
         try:
-            open_folder(folder)
+            selected = reveal_file(path)
         except OSError as e:
             log.info('cannot open folder %r: %s', folder, e)
             self.send_json(500, {'error': str(e), 'folder': folder})
             return
-        self.send_json(200, {'ok': True, 'folder': folder})
+        self.send_json(200, {'ok': True, 'folder': folder, 'selected': selected})
 
     def post_pick_folder(self, data):
         """弹出目录选择框，只把选中的路径交给页面，不添加、不保存；取消时 path 为 null。"""
@@ -1748,16 +1824,19 @@ class Handler(BaseHTTPRequestHandler):
         if not tg:
             self.send_json(400, {'error': NO_MODEL})
             return
-        texts = []
-        for path in files:
-            if not isinstance(path, str) or not st.index.contains(path) or not os.path.isfile(path):
-                self.send_json(400, {'error': '%s：%s' % (MISSING_FILE, path)})
+        texts, paths = [], []
+        for asked in files:
+            path = st.index.resolve(asked)
+            if not path:
+                self.send_json(400, {'error': '%s：%s' % (MISSING_FILE, asked)})
                 return
+            paths.append(path)
             try:
                 texts.append(st.texts.get(path)[0])
             except Exception as e:
                 self.send_json(400, {'error': '取不出文字：%s（%s）' % (path, e)})
                 return
+        files = paths       # 之后只用索引里存的路径
         # 字数上限管文件、skill 说明与对话的合计；截断只截文件，给 skill 和对话留出位置
         limit = st.config.char_limit
         files_chars, history_chars = sum(len(t) for t in texts), sum(len(m['content']) for m in history)

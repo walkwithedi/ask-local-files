@@ -346,6 +346,7 @@ class TextTest(ServerCase):
 
     def test_broken_old_office(self):
         write(os.path.join(self.docs, '旧文件.wps'), 'x')
+        self.index.refresh(full=True, wait=True)
         code, r = self.call('/api/text?path=' + urllib.request.quote(os.path.join(self.docs, '旧文件.wps')))
         self.assertTrue(r['error'].startswith('读取失败：'))
         self.assertTrue(r['error'].endswith('请先另存为 docx、xlsx 或 pptx'))
@@ -403,12 +404,54 @@ class SupportFlagTest(ServerCase):
 
 
 class OpenFolderTest(ServerCase):
+    @staticmethod
+    def which(*have):
+        return lambda c: '/usr/bin/' + c if c in have else None
+
+    def test_show_items_selects_file(self):
+        path = os.path.join(self.docs, '子目录', '会议记录.md')
+        with mock.patch.object(fa.shutil, 'which', side_effect=self.which('gdbus', 'xdg-open')), \
+                mock.patch.object(fa.subprocess, 'run', return_value=mock.Mock(returncode=0)) as run, \
+                mock.patch.object(fa.subprocess, 'Popen') as popen:
+            code, r = self.call('/api/open-folder', {'path': path})
+        self.assertEqual((code, r['selected']), (200, True))
+        cmd = run.call_args[0][0]
+        self.assertEqual(cmd[0], 'gdbus')
+        self.assertIn("['file://%s']" % urllib.parse.quote(path), cmd)
+        popen.assert_not_called()
+
+    def test_dbus_send_when_no_gdbus(self):
+        path = os.path.join(self.docs, '季度总结.txt')
+        with mock.patch.object(fa.shutil, 'which', side_effect=self.which('dbus-send')), \
+                mock.patch.object(fa.subprocess, 'run', return_value=mock.Mock(returncode=0)) as run:
+            self.assertTrue(self.call('/api/open-folder', {'path': path})[1]['selected'])
+        self.assertIn('array:string:file://' + urllib.parse.quote(path), run.call_args[0][0])
+
+    def test_falls_back_to_file_manager_select(self):
+        path = os.path.join(self.docs, '季度总结.txt')
+        with mock.patch.object(fa.shutil, 'which', side_effect=self.which('gdbus', 'dbus-send', 'nautilus', 'xdg-open')), \
+                mock.patch.object(fa.subprocess, 'run', return_value=mock.Mock(returncode=1)) as run, \
+                mock.patch.object(fa.subprocess, 'Popen') as popen:
+            code, r = self.call('/api/open-folder', {'path': path})
+        self.assertEqual((code, r['selected']), (200, True))
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(popen.call_args[0][0], ['nautilus', '--select', 'file://' + urllib.parse.quote(path)])
+
+    def test_dbus_timeout_falls_back_to_folder(self):
+        path = os.path.join(self.docs, '季度总结.txt')
+        with mock.patch.object(fa.shutil, 'which', side_effect=self.which('gdbus', 'xdg-open')), \
+                mock.patch.object(fa.subprocess, 'run', side_effect=fa.subprocess.TimeoutExpired('gdbus', 5)), \
+                mock.patch.object(fa.subprocess, 'Popen') as popen:
+            code, r = self.call('/api/open-folder', {'path': path})
+        self.assertEqual((code, r['selected']), (200, False))
+        self.assertEqual(popen.call_args[0][0], ['xdg-open', self.docs])
+
     def test_opens_containing_folder(self):
         path = os.path.join(self.docs, '子目录', '会议记录.md')
         with mock.patch.object(fa.shutil, 'which', side_effect=lambda c: '/usr/bin/' + c if c == 'gio' else None), \
                 mock.patch.object(fa.subprocess, 'Popen') as popen:
             code, r = self.call('/api/open-folder', {'path': path})
-        self.assertEqual((code, r['folder']), (200, os.path.join(self.docs, '子目录')))
+        self.assertEqual((code, r['folder'], r['selected']), (200, os.path.join(self.docs, '子目录'), False))
         self.assertEqual(popen.call_args[0][0], ['gio', 'open', os.path.join(self.docs, '子目录')])
 
     def test_no_opener(self):
@@ -427,6 +470,59 @@ class OpenFolderTest(ServerCase):
             self.assertEqual(self.call('/api/open-folder', {'path': ''})[0], 400)
         popen.assert_not_called()
 
+
+
+class ExportTest(ServerCase):
+    def test_same_as_model_system_message(self):
+        files = [os.path.join(self.docs, '季度总结.txt'), os.path.join(self.docs, '子目录', '会议记录.md')]
+        code, r = self.call('/api/export', {'files': files})
+        self.assertEqual(code, 200)
+        self.assertEqual((r['files'], r['skipped'], r['chars']), (2, 0, len(r['text'])))
+        self.assertTrue(r['text'].startswith(fa.CITE_RULE))
+        self.assertIn('使用者选了下面 2 个文件', r['text'])
+        self.assertIn('===== 文件 1：%s =====' % files[0], r['text'])
+        self.assertIn('===== 文件 2：%s =====' % files[1], r['text'])
+        self.assertIn('甲' * 100, r['text'])
+        self.assertNotIn('skill', r['text'])
+
+    def test_no_model_needed(self):
+        self.config.custom = {'base': '', 'model': '', 'key': ''}
+        with mock.patch.object(fa, 'opencode_config', return_value={}):
+            code, r = self.call('/api/export', {'files': [os.path.join(self.docs, '季度总结.txt')]})
+        self.assertEqual((code, r['files']), (200, 1))
+
+    def test_skips_unreadable(self):
+        good, bad = os.path.join(self.docs, '季度总结.txt'), os.path.join(self.docs, '资料包.zip')
+        real = self.st.texts.get
+
+        def get(path):
+            if path == bad:
+                raise ValueError('坏文件')
+            return real(path)
+        with mock.patch.object(self.st.texts, 'get', side_effect=get):
+            code, r = self.call('/api/export', {'files': [bad, good]})
+            self.assertEqual((code, r['files'], r['skipped']), (200, 1, 1))
+            self.assertIn('===== 文件 1：%s =====' % good, r['text'])
+            self.assertEqual(self.call('/api/export', {'files': [bad]})[0], 400)
+
+    def test_only_indexed_paths(self):
+        # 在已添加的文件夹里、但还没进索引的文件，以及写法不同的同一路径，都要先刷新索引
+        fresh = os.path.join(self.docs, '新文件.txt')
+        write(fresh, 'x')
+        for path in (fresh, os.path.join(self.docs, '子目录', '..', '季度总结.txt')):
+            self.assertEqual(self.call('/api/export', {'files': [path]})[0], 400)
+            self.assertEqual(self.call('/api/text?path=' + urllib.request.quote(path))[0], 400)
+            self.assertEqual(self.call('/api/open-folder', {'path': path})[0], 400)
+        self.index.refresh(full=True, wait=True)
+        self.assertEqual(self.call('/api/export', {'files': [fresh]})[0], 200)
+
+    def test_rejects_bad_requests(self):
+        outside = os.path.join(self.root, 'x.txt')
+        write(outside, 'x')
+        self.assertEqual(self.call('/api/export', {'files': [outside]})[0], 400)
+        self.assertEqual(self.call('/api/export', {'files': []})[0], 400)
+        self.assertEqual(self.call('/api/export', {'files': 'x'})[0], 400)
+        self.assertEqual(self.call('/api/export', {'files': [os.path.join(self.docs, '季度总结.txt')]}, token='bad')[0], 403)
 
 class FolderMergeTest(ServerCase):
     def test_parent_reports_merged_children(self):

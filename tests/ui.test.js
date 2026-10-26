@@ -300,11 +300,55 @@ test('缺少 pdftotext 的提醒常驻，发送后仍在', async t => {
   assert.ok(await page.isVisible('#banner'));
 });
 
-test('没有可用模型时展开模型设置，发送去向用 warn 样式', async t => {
-  const {page} = await launch(t, {model: null});
+test('没有可用模型时「问 AI」收成一行，不自动展开模型设置，找文件占满宽度', async t => {
+  const {page} = await launch(t, {model: null, width: 1600});
+  await page.locator('#noAiNote').waitFor();
+  assert.ok(await page.evaluate(() => document.body.classList.contains('no-ai')));
+  assert.ok(await page.isHidden('#modelPanel'));
+  for (const sel of ['#ask', '#send', '#chatWrap', '#skillRow', '#model', '#save']) assert.ok(await page.isHidden(sel), sel);
+  assert.ok(await page.isVisible('#modelSettings'));
+  const find = await box(page, '#findCard'), ask = await box(page, '#askCard');
+  assert.ok(find.width > 1400, '找文件宽度 ' + find.width);
+  assert.ok(ask.y >= find.y + find.height - 1, '问 AI 应在找文件下方');
+  await page.click('#modelSettings');
   await page.waitForSelector('#modelPanel', {state: 'visible'});
-  assert.match(await page.getAttribute('#dest', 'class'), /warn/);
-  assert.match(await page.textContent('#model option'), /「模型设置」/);
+  await page.fill('#cBase', modelBase);
+  await page.fill('#cModel', 'ok');
+  await page.fill('#cKey', 'k');
+  await page.click('#saveCustom');
+  await page.waitForFunction(() => !document.body.classList.contains('no-ai'));
+  assert.ok(await page.isHidden('#noAiNote'));
+  assert.ok(await page.isVisible('#ask'));
+});
+
+test('没有可用模型时 360px 宽度下没有横向滚动', async t => {
+  const {page} = await launch(t, {model: null, width: 360});
+  await pickByName(page, '季度总结');
+  await noHorizontalScroll(page);
+});
+
+test('「复制全部文字」带提问要求与全部文件，没有模型也能用', async t => {
+  const {page, docs} = await launch(t, {model: null});
+  assert.ok(await page.isHidden('#copyTexts'));
+  await pickByName(page, '季度总结');
+  await pickByName(page, '会议记录');
+  await page.click('#copyTexts');
+  await page.locator('#pickStatus', {hasText: '已复制：2 个文件'}).waitFor();
+  assert.match(await page.getAttribute('#pickStatus', 'class'), /\bok\b/);
+  const text = await page.evaluate(() => navigator.clipboard.readText());
+  assert.match(text, /^只依据下面这些文件/);
+  assert.ok(text.includes('===== 文件 1：' + path.join(docs, '季度总结.txt') + ' ====='));
+  assert.ok(text.includes('===== 文件 2：' + path.join(docs, '子目录', '会议记录.md') + ' ====='));
+  assert.ok(text.includes('甲'.repeat(100)));
+});
+
+test('「保存全部文字」存成 .md', async t => {
+  const {page} = await launch(t);
+  await pickByName(page, '季度总结');
+  const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#saveTexts')]);
+  const body = fs.readFileSync(await dl.path(), 'utf8');
+  assert.ok(body.includes('===== 文件 1：') && body.includes('甲'.repeat(100)));
+  await page.locator('#pickStatus').getByText(/^已保存为 找文件问AI-文字-\d{8}-\d{4}\.md（在浏览器的下载文件夹里）：1 个文件/).waitFor();
 });
 
 test('路径输入补全与常用位置', async t => {
@@ -371,6 +415,7 @@ test('字数上限写明范围和默认值，回车即保存', async t => {
 
 test('自定义接口没填齐时写明暂不可用，填齐后自动选中', async t => {
   const {page} = await launch(t, {model: null});
+  await page.click('#modelSettings');
   await page.fill('#cBase', 'http://127.0.0.1:9/v1');
   await page.fill('#cModel', 'ok');
   await page.click('#saveCustom');
@@ -492,16 +537,38 @@ function fakeOpenerBin(t) {
   return {bin, args: path.join(bin, 'args.txt')};
 }
 
-test('「打开文件夹」用 xdg-open 打开文件所在的文件夹', async t => {
+test('「打开文件夹」选不中文件时用 xdg-open 打开文件所在的文件夹', async t => {
   const {bin, args} = fakeOpenerBin(t);
-  const {page, docs} = await launch(t, {env: {PATH: bin + ':' + process.env.PATH, FAKE_OPEN_ARGS: args}});
+  const {page, docs} = await launch(t, {env: {PATH: bin, FAKE_OPEN_ARGS: args}});
   await page.fill('#q', '资料包');
   await page.getByRole('button', {name: '打开 资料包.zip 所在的文件夹'}).click();
-  await page.locator('#openStatus', {hasText: '已打开文件夹：' + docs}).waitFor();
+  await page.locator('#openStatus', {hasText: '已打开文件夹，未能选中文件：' + docs}).waitFor();
   assert.match(await page.getAttribute('#openStatus', 'class'), /\bok\b/);
   assert.ok(await page.isHidden('#copyFolder'));
   for (let i = 0; i < 50 && !fs.existsSync(args); i++) await new Promise(r => setTimeout(r, 100));
   assert.strictEqual(fs.readFileSync(args, 'utf8'), docs + '\n');
+});
+
+test('每个可读文件都有定位按钮，用文件管理器打开所在文件夹并选中', async t => {
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'ask-local-files-bin-'));
+  t.after(() => fs.rmSync(bin, {recursive: true, force: true}));
+  fs.symlinkSync(path.join(__dirname, 'fake_opener.sh'), path.join(bin, 'nautilus'));
+  const args = path.join(bin, 'args.txt');
+  const {page, docs} = await launch(t, {env: {PATH: bin, FAKE_OPEN_ARGS: args}});
+  await page.fill('#q', '');
+  const zip = page.locator('#results li', {hasText: '资料包.zip'});
+  await zip.waitFor();
+  assert.strictEqual(await zip.locator('[data-act="reveal"]').count(), 0);
+  const file = path.join(docs, '季度总结.txt');
+  await page.locator('#results li', {hasText: '季度总结'}).getByRole('button', {name: '在文件夹中显示 季度总结.txt'}).click();
+  await page.locator('#openStatus', {hasText: '已打开文件夹并选中文件：' + file}).waitFor();
+  for (let i = 0; i < 50 && !fs.existsSync(args); i++) await new Promise(r => setTimeout(r, 100));
+  assert.strictEqual(fs.readFileSync(args, 'utf8'), '--select\nfile://' + encodeURI(file) + '\n');
+  await pickByName(page, '季度总结');
+  await page.locator('#picked li', {hasText: '季度总结'}).getByRole('button', {name: '在文件夹中显示 季度总结.txt'}).waitFor();
+  await page.click('#tabBrowse');
+  await page.locator('#browseList button.dir').first().click();
+  await page.locator('#browseList li', {hasText: '季度总结'}).locator('[data-act="reveal"]').waitFor();
 });
 
 test('打不开文件夹时写出路径并可「复制路径」', async t => {
