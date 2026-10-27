@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import shutil
+import sqlite3
 import sys
 import tempfile
 import threading
@@ -36,6 +37,7 @@ _spec.loader.exec_module(fa)
 
 logging.disable(logging.WARNING)     # 拒绝访问等预期内的告警不打到测试输出
 MODEL_SERVER, MODEL_BASE = fake_model.start()
+fa.LOCAL_SERVERS = ()     # 默认不探测本机端口，LocalModelTest 里指向测试用的模型接口
 
 
 def write(path, text):
@@ -62,7 +64,8 @@ class ServerCase(unittest.TestCase):
         self.index = fa.FileIndex(self.config, os.path.join(self.root, 'index.json'))
         self.index.refresh(wait=True)
         self.server = fa.ThreadingHTTPServer(('127.0.0.1', 0), fa.Handler)
-        self.st = fa.WebState(self.server.server_address[1], 'tok', self.config, self.index)
+        self.memory = fa.ask_memory.Memory(os.path.join(self.root, 'memory', 'memory.sqlite'))
+        self.st = fa.WebState(self.server.server_address[1], 'tok', self.config, self.index, self.memory)
         fa.Handler.state = self.st
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.base = 'http://127.0.0.1:%d' % self.server.server_address[1]
@@ -70,6 +73,7 @@ class ServerCase(unittest.TestCase):
     def tearDown(self):
         self.server.shutdown()
         self.server.server_close()
+        self.memory.close()
         shutil.rmtree(self.root, ignore_errors=True)
 
     def call(self, path, body=None, token='tok', headers=None):
@@ -224,6 +228,45 @@ class BrowseTest(ServerCase):
         self.assertIn('error', self.browse(self.docs + '-其他'))
 
 
+class SortTest(ServerCase):
+    """搜索与浏览按 sort 排序，先排序再截取；不认识的取值按最新在前。"""
+
+    def setUp(self):
+        super().setUp()
+        for i, name in enumerate(['b.txt', 'C.txt', 'a.txt']):
+            path = os.path.join(self.docs, '排序', name)
+            write(path, 'x')
+            os.utime(path, (1700000000 + i * 100, 1700000000 + i * 100))
+        self.index.refresh(full=True, wait=True)
+
+    def names(self, path, sort):
+        return [x['name'] for x in self.call(path + '&sort=' + sort)[1][path.startswith('/api/search') and 'results' or 'files']]
+
+    def test_search_orders(self):
+        path = '/api/search?q=' + q('排序')
+        self.assertEqual(self.names(path, 'time_desc'), ['a.txt', 'C.txt', 'b.txt'])
+        self.assertEqual(self.names(path, 'time_asc'), ['b.txt', 'C.txt', 'a.txt'])
+        self.assertEqual(self.names(path, 'name_asc'), ['a.txt', 'b.txt', 'C.txt'])
+        self.assertEqual(self.names(path, 'name_desc'), ['C.txt', 'b.txt', 'a.txt'])
+        self.assertEqual(self.names(path, 'bogus'), ['a.txt', 'C.txt', 'b.txt'])
+
+    def test_browse_files_and_tree_sorted(self):
+        path = '/api/browse?dir=' + q(os.path.join(self.docs, '排序'))
+        self.assertEqual(self.names(path, 'name_asc'), ['a.txt', 'b.txt', 'C.txt'])
+        r = self.call(path + '&sort=time_asc')[1]
+        self.assertEqual([x['name'] for x in r['tree']], ['b.txt', 'C.txt', 'a.txt'])
+
+    def test_sort_before_limit(self):
+        for i in range(5):
+            write(os.path.join(self.docs, '大批', '%d.txt' % i), 'x')
+        self.index.refresh(full=True, wait=True)
+        found, total = self.index.snap.search(['大批'], set(), limit=2, order='name_desc')
+        self.assertEqual(total, 5)
+        self.assertEqual([os.path.basename(e[0]) for e in found], ['4.txt', '3.txt'])
+        found, total = self.index.snap.search(['大批'], {'md'}, limit=2, order='name_asc')
+        self.assertEqual((found, total), ([], 0))
+
+
 class PagesTest(ServerCase):
     def test_ping_reports_open_pages(self):
         self.assertEqual(self.call('/api/ping', {'page': 'a'})[1]['pages'], 1)
@@ -255,6 +298,46 @@ class OpenPageTest(unittest.TestCase):
 
     def test_falls_back_to_default_browser(self):
         with mock.patch.object(fa.shutil, 'which', self.which(set())), \
+                mock.patch.object(fa, 'desktop_dirs', return_value=[]), \
+                mock.patch.object(fa.subprocess, 'Popen') as popen, \
+                mock.patch.object(fa.webbrowser, 'open', return_value=True) as wb:
+            self.assertTrue(fa.open_page('http://x/'))
+        popen.assert_not_called()
+        wb.assert_called_once_with('http://x/')
+
+    def desktop_env(self, root):
+        return mock.patch.dict(os.environ, {'XDG_DATA_HOME': os.path.join(root, 'home'),
+                                            'XDG_DATA_DIRS': os.path.join(root, 'sys')})
+
+    def test_cn_browser_on_path_after_others(self):
+        with mock.patch.object(fa.shutil, 'which', self.which({'qaxbrowser-safe-stable', 'browser360-cn-stable'})), \
+                mock.patch.object(fa.subprocess, 'Popen') as popen:
+            fa.open_page('http://x/')
+        self.assertEqual(popen.call_args[0][0], ['/usr/bin/qaxbrowser-safe-stable', '--app=http://x/'])
+        with mock.patch.object(fa.shutil, 'which', self.which({'qaxbrowser-safe-stable', 'chromium'})), \
+                mock.patch.object(fa.subprocess, 'Popen') as popen:
+            fa.open_page('http://x/')
+        self.assertEqual(popen.call_args[0][0][0], '/usr/bin/chromium')
+
+    def test_browser_from_desktop_file(self):
+        root = tempfile.mkdtemp(dir=SANDBOX)
+        self.addCleanup(shutil.rmtree, root, True)
+        exe = os.path.join(root, 'qax', 'qaxbrowser')
+        write(exe, '#!/bin/sh\n')
+        os.chmod(exe, 0o700)
+        write(os.path.join(root, 'sys', 'applications', 'qaxbrowser-safe.desktop'),
+              '[Desktop Entry]\nName=x\nExec=env A=1 %s %%U\n[Desktop Action new]\nExec=/bin/false\n' % exe)
+        with self.desktop_env(root), mock.patch.object(fa.shutil, 'which', self.which(set())), \
+                mock.patch.object(fa.subprocess, 'Popen') as popen:
+            fa.open_page('http://x/')
+        self.assertEqual(popen.call_args[0][0], [exe, '--app=http://x/'])
+
+    def test_desktop_file_with_missing_program_skipped(self):
+        root = tempfile.mkdtemp(dir=SANDBOX)
+        self.addCleanup(shutil.rmtree, root, True)
+        write(os.path.join(root, 'home', 'applications', 'browser360-cn.desktop'),
+              '[Desktop Entry]\nExec=%s %%U\n' % os.path.join(root, 'gone'))
+        with self.desktop_env(root), mock.patch.object(fa.shutil, 'which', self.which(set())), \
                 mock.patch.object(fa.subprocess, 'Popen') as popen, \
                 mock.patch.object(fa.webbrowser, 'open', return_value=True) as wb:
             self.assertTrue(fa.open_page('http://x/'))
@@ -592,6 +675,121 @@ class TestModelTest(ServerCase):
         self.assertIn('AK', r['error'])
 
 
+def closed_port():
+    """一个当前没有程序监听的本机端口。"""
+    import socket
+    with socket.socket() as sk:
+        sk.bind(('127.0.0.1', 0))
+        return sk.getsockname()[1]
+
+
+class LocalModelTest(ServerCase):
+    """自动发现本机的 llama-server 与 Ollama，按上下文折算上限，不带 AK。"""
+
+    def setUp(self):
+        super().setUp()
+        self.port = MODEL_SERVER.server_address[1]
+        self.config.custom = {'base': '', 'model': '', 'key': ''}
+        self.config.model = ''
+        self.addCleanup(setattr, fake_model.FakeModel, 'serving', None)
+
+    def serve(self, kind, **local):
+        fake_model.FakeModel.serving = local
+        p = mock.patch.object(fa, 'LOCAL_SERVERS', ((kind, self.port, {'llama': 'llama-server'}.get(kind, 'Ollama')),))
+        p.start()
+        self.addCleanup(p.stop)
+
+    def models(self):
+        code, r = self.call('/api/local-models', {})
+        self.assertEqual(code, 200)
+        return r, {m['id']: m for m in r['models']}
+
+    def test_llama_reads_n_ctx(self):
+        self.serve('llama', models=['qwen'], props={'default_generation_settings': {'n_ctx': 8192}})
+        r, ms = self.models()
+        m = ms['local:llama/qwen']
+        self.assertEqual(r['found'], {'llama': 1})
+        self.assertEqual((m['limit'], m['loopback'], m['auth']), (6144, True, False))
+        self.assertIn('qwen（本机 llama-server）', m['label'])
+        self.assertIn('8192', m['limit_note'])
+        self.assertEqual(r['default'], 'local:llama/qwen')
+
+    def test_ollama_loaded_uses_running_context(self):
+        self.serve('ollama', models=['qwen2.5:3b'],
+                   ps={'models': [{'name': 'qwen2.5:3b', 'model': 'qwen2.5:3b', 'context_length': 16384}]})
+        m = self.models()[1]['local:ollama/qwen2.5:3b']
+        self.assertEqual(m['limit'], 12288)
+
+    def test_ollama_not_loaded_estimates(self):
+        self.serve('ollama', models=['qwen2.5:3b'], ps={'models': []})
+        with mock.patch.dict(os.environ, {'OLLAMA_CONTEXT_LENGTH': ''}):
+            m = self.models()[1]['local:ollama/qwen2.5:3b']
+        self.assertEqual(m['limit'], 3072)
+        self.assertIn('OLLAMA_CONTEXT_LENGTH', m['limit_note'])
+        with mock.patch.dict(os.environ, {'OLLAMA_CONTEXT_LENGTH': '8192'}):
+            self.assertEqual(self.models()[1]['local:ollama/qwen2.5:3b']['limit'], 6144)
+
+    def test_state_probes_on_page_open(self):
+        self.serve('llama', models=['qwen'])
+        code, s = self.call('/api/state')
+        m = {m['id']: m for m in s['models']}['local:llama/qwen']
+        self.assertEqual(m['limit'], 0)     # 读不到上下文时只按设置值
+
+    def test_nothing_running(self):
+        with mock.patch.object(fa, 'LOCAL_SERVERS', (('llama', closed_port(), 'llama-server'),)):
+            r, ms = self.models()
+        self.assertEqual((r['found'], ms), ({'llama': 0}, {}))
+        code, r = self.chat([{'role': 'user', 'content': '总结'}])
+        self.assertEqual(code, 400)
+        self.assertIn('重新查找', r['error'])
+
+    def test_chat_limit_follows_context_and_sends_no_key(self):
+        self.serve('llama', models=['ok'], props={'default_generation_settings': {'n_ctx': 100}})
+        self.models()
+        body = {'files': [os.path.join(self.docs, '季度总结.txt')], 'messages': [{'role': 'user', 'content': '总结'}],
+                'model': 'local:llama/ok'}
+        code, r = self.call('/api/chat', body)
+        self.assertEqual((code, r['error'], r['limit']), (413, 'too_long', 75))
+        self.serve('llama', models=['ok'], props={'default_generation_settings': {'n_ctx': 8192}})
+        self.models()
+        code, raw = self.call('/api/chat', body)
+        self.assertIn('你好，', raw)
+        self.assertIsNone(fake_model.FakeModel.auth)
+
+    def test_stopped_service_says_so(self):
+        self.st.local_models.found = {'local:llama/ok': {
+            'base': 'http://127.0.0.1:%d/v1' % closed_port(), 'key': '', 'model': 'ok', 'headers': {},
+            'label': 'ok（本机 llama-server）', 'host': '127.0.0.1', 'discovered': True, 'ctx': 0, 'ctx_note': ''}}
+        code, lines = self.chat([{'role': 'user', 'content': '总结'}], model='local:llama/ok')
+        self.assertEqual(lines[-1]['error'], fa.LOCAL_DOWN)
+
+
+class NoKeyTest(ServerCase):
+    """自定义接口不填 AK 也可选用，不发 Authorization；填了照常发。"""
+
+    def test_custom_without_key(self):
+        self.config.custom['key'] = ''
+        code, s = self.call('/api/state')
+        m = {m['id']: m for m in s['models']}['custom']
+        self.assertFalse(m['auth'])
+        code, lines = self.chat([{'role': 'user', 'content': '总结'}])
+        self.assertTrue(lines[-1].get('done'))
+        self.assertIsNone(fake_model.FakeModel.auth)
+
+    def test_custom_with_key(self):
+        self.chat([{'role': 'user', 'content': '总结'}])
+        self.assertEqual(fake_model.FakeModel.auth, 'Bearer k')
+
+    def test_timeout_by_host(self):
+        self.assertEqual(fa.model_timeout({'base': 'http://127.0.0.1:8080/v1'}), fa.LOCAL_TIMEOUT)
+        self.assertEqual(fa.model_timeout({'base': 'http://localhost:11434/v1'}), fa.LOCAL_TIMEOUT)
+        self.assertEqual(fa.model_timeout({'base': 'https://api.example.com/v1'}), fa.TIMEOUT)
+
+    def test_local_tool_error_mentions_jinja(self):
+        self.assertIn('--jinja', fa.http_error_text(400, 'tools not supported', True, True))
+        self.assertNotIn('--jinja', fa.http_error_text(400, 'tools not supported', True, False))
+
+
 class HistoryLimitTest(ServerCase):
     history = [{'role': 'user', 'content': '问' * 10}, {'role': 'assistant', 'content': '答' * 10},
                {'role': 'user', 'content': '追' * 10}]
@@ -685,6 +883,121 @@ class CiteTest(ServerCase):
         code, lines = self.chat([{'role': 'user', 'content': '总结'}], truncate=True)
         self.assertTrue(lines[0]['truncated'])
         self.assertEqual(len(lines[-1]['missing']), 1)
+
+
+class MemoryChatTest(ServerCase):
+    model = 'memo'
+
+    def setUp(self):
+        super().setUp()
+        self.plan = os.path.join(self.docs, '项目计划.txt')
+        write(self.plan, '项目计划\n\n第一阶段在三月底完成验收。\n\n预算另行说明。')
+        self.index.refresh(wait=True)
+
+    def ask(self, question, files=(), memory=True):
+        """不带默认文件的提问，返回 (状态码, 各行或错误)。"""
+        code, raw = self.call('/api/chat', {'files': list(files), 'messages': [{'role': 'user', 'content': question}],
+                                            'model': 'custom', 'memory': memory})
+        if code != 200:
+            return code, raw
+        return code, [json.loads(line) for line in raw.splitlines() if line.strip()]
+
+    def sent(self):
+        return json.loads(urllib.request.urlopen(MODEL_BASE + '/last').read())['messages'][0]['content']
+
+    def test_remember_then_recall_without_files(self):
+        code, lines = self.ask('第一阶段什么时候验收', [self.plan])
+        self.assertEqual(code, 200)
+        done = lines[-1]
+        self.assertEqual(done['remembered'], 1)
+        self.assertTrue(done['answer_id'])
+        self.assertEqual(lines[0]['memory']['files'], [])      # 选中的文件不再从记忆里重复给
+        code, r = self.call('/api/memory')
+        self.assertEqual(r['stats']['facts'], 1)
+        self.assertEqual(r['facts'][0]['conclusion'], '第一阶段三月底验收')
+
+        code, lines = self.ask('第一阶段验收')
+        self.assertEqual(code, 200)
+        mem = lines[0]['memory']
+        self.assertEqual((mem['facts'], mem['files'][0]['n'], mem['files'][0]['path']), (1, 1, self.plan))
+        text = self.sent()
+        self.assertIn('来自记忆', text)
+        self.assertIn('第一阶段三月底验收（原文：「第一阶段在三月底完成验收」）', text)
+        self.assertIn(fa.MEMORY_NOTE, text)
+        self.assertEqual(lines[-1]['missing'], [])
+        self.assertEqual(self.call('/api/memory')[1]['facts'][0]['count'], 2)
+
+    def test_memory_after_selected_files(self):
+        self.ask('第一阶段什么时候验收', [self.plan])
+        code, lines = self.ask('第一阶段验收', [os.path.join(self.docs, '季度总结.txt')])
+        self.assertEqual(lines[0]['memory']['files'][0]['n'], 2)
+        self.assertIn('===== 文件 2：%s（来自记忆，节选）=====' % self.plan, self.sent())
+
+    def test_no_files_and_nothing_found(self):
+        code, r = self.ask('毫不相干的问题')
+        self.assertEqual((code, r['error']), (400, fa.NO_MEMORY_HIT))
+
+    def test_use_memory_unchecked(self):
+        self.ask('第一阶段什么时候验收', [self.plan])
+        code, r = self.ask('第一阶段验收', memory=False)
+        self.assertEqual(code, 400)
+        code, lines = self.ask('第一阶段验收', [os.path.join(self.docs, '季度总结.txt')], memory=False)
+        self.assertEqual(lines[0]['memory']['files'], [])
+        self.assertNotIn('来自记忆', self.sent())
+
+    def test_memory_switched_off(self):
+        self.call('/api/settings', {'memory': False})
+        code, lines = self.ask('第一阶段什么时候验收', [self.plan])
+        self.assertEqual((lines[-1]['remembered'], lines[-1]['answer_id']), (0, ''))
+        self.assertEqual(self.call('/api/state')[1]['memory_stats']['files'], 0)
+        self.assertEqual(self.ask('第一阶段验收')[0], 400)
+        self.assertFalse(fa.Config(self.config.path).memory)
+
+    def test_wrong(self):
+        lines = self.ask('第一阶段什么时候验收', [self.plan])[1]
+        code, r = self.call('/api/memory', {'action': 'wrong', 'answer_id': lines[-1]['answer_id']})
+        self.assertEqual((code, r['count'], r['stats']['facts']), (200, 1, 0))
+        lines = self.ask('第一阶段什么时候验收', [self.plan])[1]
+        self.assertEqual(lines[-1]['remembered'], 0)
+
+    def test_changed_file(self):
+        self.ask('第一阶段什么时候验收', [self.plan])
+        write(self.plan, '项目计划\n\n第一阶段推迟到五月完成验收。')
+        st = os.stat(self.plan)
+        os.utime(self.plan, ns=(st.st_atime_ns, st.st_mtime_ns + 10 ** 9))
+        code, lines = self.ask('第一阶段验收')
+        self.assertEqual(lines[0]['memory']['facts'], 0)
+        self.assertIn('第一阶段推迟到五月完成验收。', self.sent())
+        self.assertEqual(len(lines[-1]['missing']), 1)
+
+    def test_manage(self):
+        self.ask('第一阶段什么时候验收', [self.plan])
+        r = self.call('/api/memory?q=' + q('三月'))[1]
+        self.assertEqual(len(r['facts']), 1)
+        self.assertEqual(self.call('/api/memory', {'action': 'fact', 'id': r['facts'][0]['id']})[1]['count'], 1)
+        self.assertEqual(self.call('/api/memory', {'action': 'file', 'path': self.plan})[1]['stats']['files'], 0)
+        self.ask('第一阶段什么时候验收', [self.plan])
+        self.assertEqual(self.call('/api/memory', {'action': 'clear'})[1]['stats'], self.memory.stats())
+        self.assertEqual(self.memory.stats()['files'], 0)
+        self.assertEqual(self.call('/api/memory', {'action': 'nope'})[0], 400)
+        self.assertEqual(self.call('/api/memory', {'action': 'fact', 'id': True})[0], 400)
+
+    def test_settings_and_notice(self):
+        s = self.call('/api/state')[1]
+        self.assertEqual((s['memory'], s['use_memory'], s['memory_notice']), (True, True, False))
+        self.call('/api/settings', {'use_memory': False, 'memory_notice': True})
+        c = fa.Config(self.config.path)
+        self.assertEqual((c.memory, c.use_memory, c.memory_notice), (True, False, True))
+
+    def test_broken_memory_does_not_stop_chat(self):
+        def broken(*a, **k):
+            raise sqlite3.OperationalError('disk I/O error')
+        with mock.patch.object(self.memory, 'remember_file', broken), \
+                mock.patch.object(self.memory, 'recall', broken), \
+                mock.patch.object(self.memory, 'remember_answer', broken):
+            code, lines = self.ask('第一阶段什么时候验收', [self.plan])
+        self.assertEqual(code, 200)
+        self.assertEqual(lines[-1]['remembered'], 0)
 
 
 class CheckQuotesTest(unittest.TestCase):

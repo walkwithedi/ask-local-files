@@ -40,10 +40,17 @@
   .folder { color:var(--folder) !important; }
   .folder .icon { margin-right:4px; }
   button.reveal { padding:1px 6px; color:var(--folder); }
-  /* 本机没有可用模型：「问 AI」只留一行说明和「模型设置」，「找文件」占满宽度 */
+  /* 本机没有可用模型：「问 AI」只留一行说明和「模型设置」，与「已选」对调位置 */
   #noAiNote { margin:4px 0 0; font-size:14px; color:var(--muted); }
-  .no-ai #askCard > :not(.card-head):not(#noAiNote):not(#optRow):not(#modelPanel),
-  .no-ai #askCard .card-head > button, .no-ai #skillRow, .no-ai #modelRow > :not(#modelSettings) { display:none; }
+  .no-ai #askBody > :not(#noAiNote):not(#optRow):not(#localStatus):not(#modelPanel),
+  .no-ai #askCard .card-head > button, .no-ai #skillRow, .no-ai #modelRow > :not(#modelSettings):not(#findLocal) { display:none; }
+  /* 各模块点标题收起，收起时标题旁写一行摘要 */
+  h2 button.fold { display:inline-flex; align-items:center; gap:6px; border:none; background:none; color:inherit; padding:0; font:inherit; font-weight:bold; text-align:left; }
+  h2 button.fold .arrow { color:var(--muted); font-size:15px; width:1em; text-align:center; }
+  .card.folded > .card-head { margin:0; }
+  .card.folded > .fold-body { display:none !important; }
+  .card:not(.folded) .fold-sum { display:none; }
+  .fold-sum { margin:0; min-width:0; word-break:break-all; }
   :focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
   .ok { color:var(--ok); } .warn { color:var(--warn); } .bad { color:var(--bad); } .info { color:var(--muted); }
   .status { margin:8px 0 0; font-size:14px; }
@@ -71,6 +78,11 @@
   .tabs { display:flex; gap:4px; border-bottom:1px solid var(--line); margin:0 0 8px; }
   .tabs [role=tab] { border:none; border-bottom:2px solid transparent; border-radius:0; background:none; color:var(--muted); padding:4px 12px; }
   .tabs [role=tab][aria-selected=true] { color:var(--text); border-bottom-color:var(--accent); font-weight:bold; }
+  .tabs-row { display:flex; flex-wrap:wrap; align-items:center; gap:4px 8px; border-bottom:1px solid var(--line); margin:0 0 8px; }
+  .tabs-row .tabs { border-bottom:none; margin:0 0 -1px; }
+  .sort-by { margin-left:auto; display:inline-flex; gap:4px; align-items:center; font-size:13px; color:var(--muted); }
+  .sort-by select { padding:2px 6px; font-size:13px; }
+  #pickStatus { white-space:pre-wrap; overflow-wrap:anywhere; }
   #crumbs { display:flex; flex-wrap:wrap; align-items:center; gap:2px; font-size:14px; }
   #crumbs .sep { color:var(--muted); }
   #crumbs [aria-current] { font-weight:bold; padding:2px 4px; word-break:break-all; }
@@ -81,8 +93,11 @@
   .dedup { display:inline-flex; gap:4px; align-items:center; font-size:13px; color:var(--muted); margin-top:6px; }
   .pickrow { flex-wrap:nowrap; }
   .pickrow input { flex:1 1 auto; width:auto; min-width:0; }
-  .card-head { display:flex; align-items:center; gap:8px; margin:0 0 10px; }
-  .card-head h2 { margin:0; flex:1 1 auto; }
+  .card-head { display:flex; flex-wrap:wrap; align-items:center; gap:4px 8px; margin:0 0 10px; }
+  .card-head h2 { margin:0; flex:0 0 auto; }
+  .card-head .fold-sum { flex:1 1 0; min-width:8em; }
+  .card-head .push { margin-left:auto; }
+  .card-head .hint { margin:0; }
   .status-row { display:flex; flex-wrap:wrap; gap:4px 10px; align-items:baseline; margin-top:8px; }
   .status-row .status { margin:0; flex:1 1 200px; }
   button.link { border:none; background:none; color:var(--accent); padding:2px 4px; font-size:13px; }
@@ -99,6 +114,11 @@
   #skillSel { max-width:100%; }
   .tools { margin:0 0 6px; font-size:13px; }
   .tools details { border-left:3px solid var(--line); padding:2px 0 2px 8px; margin:4px 0; }
+  .memo { border-left:3px solid var(--accent); padding:2px 0 2px 8px; margin:4px 0; font-size:13px; }
+  .memo summary { cursor:pointer; color:var(--muted); font-weight:normal; }
+  .memo ul { margin:4px 0; padding-left:1.2em; }
+  .memo li, #memPanel li .grow { word-break:break-word; }
+  .mem-h { margin:10px 0 0; font-size:14px; }
   .tools summary { cursor:pointer; color:var(--muted); word-break:break-all; }
   .tools .bad { color:var(--bad); }
   .tools .row { margin-top:4px; }
@@ -112,27 +132,33 @@
     .embed main { padding:4px 0; }
     .layout { flex:1 1 auto; min-height:0; display:grid; grid-template-columns:minmax(300px,3fr) minmax(0,7fr); gap:0 16px; }
     #convFrames { flex:1 1 auto; min-height:0; height:auto; }
-    /* 左栏不整体滚动：标签、状态、路径固定在上，结果列表占满剩余高度、只有这一条滚动条；已选最高约四成，自己滚动 */
+    /* 左栏不整体滚动：标签、状态、路径固定在上，结果列表占满剩余高度、只有这一条滚动条；已选最高约四成，自己滚动。
+       每栏第一个展开的大模块（带 fill）占满本栏剩余高度；一栏的模块全部收起时，这一栏只占标题行，另一栏占满宽度 */
     .col-left { min-height:0; display:flex; flex-direction:column; overflow:hidden; padding-right:4px; }
-    #findCard { flex:1 1 0; min-height:180px; display:flex; flex-direction:column; overflow:hidden; }
-    #findBody { flex:1 1 auto; min-height:0; display:flex; flex-direction:column; }
-    #findBody > * { flex:0 0 auto; }
+    .col-left > .card, .col-right > .card { flex:0 0 auto; min-height:0; display:flex; flex-direction:column; overflow:hidden; }
+    .col-left > .card.fill, .col-right > .card.fill { flex:1 1 0; min-height:180px; }
+    .layout .fold-body { flex:1 1 auto; min-height:0; display:flex; flex-direction:column; }
+    .layout .fold-body > * { flex:0 0 auto; }
+    .layout.left-folded, .layout.right-folded { grid-template-columns:minmax(0,1fr); }
+    .layout.left-folded { grid-template-rows:auto minmax(0,1fr); }
+    .layout.right-folded { grid-template-rows:minmax(0,1fr) auto; }
+    .layout.left-folded.right-folded { grid-template-rows:auto auto; }
+    .layout.left-folded .col-left, .layout.right-folded .col-right { padding-right:0; }
     #findBody > #folderPanel { flex:0 1 auto; min-height:60px; overflow-y:auto; }
     #findBody > #searchPane, #findBody > #browsePane { flex:1 1 auto; min-height:0; display:flex; flex-direction:column; }
     #searchPane > *, #browsePane > * { flex:0 0 auto; }
     #results, #browseList { flex:1 1 auto; min-height:60px; max-height:none; }
-    #pickedCard { flex:0 0 auto; min-height:0; max-height:40%; display:flex; flex-direction:column; }
-    #pickedCard > * { flex:0 0 auto; }
+    #pickedCard:not(.fill) { max-height:40%; }
     #picked { flex:1 1 auto; min-height:0; overflow-y:auto; }
     .col-right { min-height:0; display:flex; flex-direction:column; }
-    #askCard { flex:1 1 auto; min-height:0; display:flex; flex-direction:column; overflow-y:auto; }
+    #askCard { overflow-y:auto; }
+    #askCard:not(.fill) { max-height:50%; }
+    #pickedCard.folded, #askCard.folded { max-height:none; }
     #chatWrap { flex:1 1 auto; min-height:160px; display:flex; flex-direction:column; }
     #chat { flex:1 1 auto; min-height:0; max-height:none; }
     #chatWrap #chat:empty { display:block; }
     #askCard textarea { min-height:calc(6.4em + 16px); }
     main > footer { flex:0 0 auto; margin-top:4px; padding-top:6px; }
-    .no-ai .layout { grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(0,1fr) auto; }
-    .no-ai #askCard { flex:0 1 auto; max-height:50vh; }
   }
   pre, .msg-body { white-space:pre-wrap; word-break:break-word; }
   /* 回答按 Markdown 显示 */
@@ -200,17 +226,24 @@
   <div id="convMain" class="layout">
   <div class="col-left">
   <section class="card" id="findCard" aria-labelledby="h-find">
-    <h2 id="h-find">找文件</h2>
-    <div id="findCollapsed" class="row" hidden>
-      <span id="findSummary" class="grow"></span>
-      <button id="reselect" type="button">改选文件</button>
+    <div class="card-head">
+      <h2 id="h-find"><button id="foldFind" class="fold" type="button" aria-expanded="true" aria-controls="findBody"><span class="arrow" aria-hidden="true">▾</span>找文件</button></h2>
+      <span id="findSummary" class="fold-sum hint"></span>
     </div>
-    <div id="findBody">
-      <div class="tabs" role="tablist" aria-label="找文件的方式">
-        <button id="tabBrowse" type="button" role="tab" aria-selected="true" aria-controls="browsePane">浏览文件夹</button>
-        <button id="tabSearch" type="button" role="tab" aria-selected="false" aria-controls="searchPane" tabindex="-1">搜索</button>
+    <div id="findBody" class="fold-body">
+      <div class="tabs-row">
+        <div class="tabs" role="tablist" aria-label="找文件的方式">
+          <button id="tabSearch" type="button" role="tab" aria-selected="true" aria-controls="searchPane">搜索</button>
+          <button id="tabBrowse" type="button" role="tab" aria-selected="false" aria-controls="browsePane" tabindex="-1">浏览文件夹</button>
+        </div>
+        <label class="sort-by">排序<select id="sortBy">
+          <option value="time_desc">最新在前</option>
+          <option value="time_asc">最旧在前</option>
+          <option value="name_asc">名称 A→Z</option>
+          <option value="name_desc">名称 Z→A</option>
+        </select></label>
       </div>
-      <div id="searchRow" class="row" hidden>
+      <div id="searchRow" class="row">
         <input id="q" type="text" placeholder="文件名或路径里的字，空格分开多个关键字，回车加入第一个结果" autocomplete="off" aria-label="关键字">
         <input id="ext" type="text" placeholder="扩展名，如 docx pdf" autocomplete="off" aria-label="扩展名">
       </div>
@@ -236,20 +269,24 @@
         <div id="places" class="row hint" style="margin-top:6px"></div>
         <div id="folderStatus" class="status" aria-live="polite"></div>
       </div>
-      <div id="searchPane" role="tabpanel" aria-labelledby="tabSearch" hidden>
+      <div id="searchPane" role="tabpanel" aria-labelledby="tabSearch">
         <label class="dedup"><input id="dedupSearch" type="checkbox" checked>按文件名去重</label>
         <label class="dedup" style="margin-left:12px"><input id="regex" type="checkbox">正则表达式</label>
         <div id="addAllRow" class="row" style="margin-top:6px" hidden>
           <button id="addAll" class="small" type="button"></button>
+          <button id="addTop10" class="small" type="button" data-n="10"></button>
+          <button id="addTop30" class="small" type="button" data-n="30"></button>
           <span id="addAllHint" class="hint" style="margin:0"></span>
         </div>
         <ul id="results" class="list"></ul>
       </div>
-      <div id="browsePane" role="tabpanel" aria-labelledby="tabBrowse">
+      <div id="browsePane" role="tabpanel" aria-labelledby="tabBrowse" hidden>
         <label class="dedup"><input id="dedupBrowse" type="checkbox" checked>按文件名去重</label>
         <nav id="crumbs" aria-label="当前文件夹" style="margin-top:6px"></nav>
         <div id="browseAddRow" class="row" style="margin-top:6px" hidden>
           <button id="browseAdd" class="small" type="button"></button>
+          <button id="browseTop10" class="small" type="button" data-n="10"></button>
+          <button id="browseTop30" class="small" type="button" data-n="30"></button>
           <span id="browseAddHint" class="hint" style="margin:0"></span>
         </div>
         <ul id="browseList" class="list"></ul>
@@ -258,27 +295,35 @@
   </section>
 
   <section class="card" id="pickedCard" aria-labelledby="h-picked">
-    <h2 id="h-picked">已选 <span id="pickCount" class="hint"></span></h2>
+    <div class="card-head">
+      <h2 id="h-picked"><button id="foldPicked" class="fold" type="button" aria-expanded="true" aria-controls="pickedBody"><span class="arrow" aria-hidden="true">▾</span>已选</button></h2>
+      <span id="pickCount" class="hint"></span>
+    </div>
+    <div id="pickedBody" class="fold-body">
     <ul id="picked" class="list"></ul>
     <div class="row" style="margin-top:6px">
       <button id="removeBad" type="button" hidden></button>
       <button id="copyTexts" type="button" hidden>复制全部文字</button>
+      <button id="copyPaths" type="button" hidden>复制已选择的文件路径</button>
       <button id="saveTexts" type="button" hidden>保存全部文字</button>
       <button id="clearPicked" class="danger" type="button" hidden>清空已选</button>
     </div>
     <div id="pickStatus" class="status info" aria-live="polite"></div>
+    </div>
   </section>
   </div>
 
   <div class="col-right">
   <section class="card" id="askCard" aria-labelledby="h-ask">
     <div class="card-head">
-      <h2 id="h-ask">问 AI</h2>
-      <button id="save" class="small" type="button">保存对话</button>
+      <h2 id="h-ask"><button id="foldAsk" class="fold" type="button" aria-expanded="true" aria-controls="askBody"><span class="arrow" aria-hidden="true">▾</span>问 AI</button></h2>
+      <span id="askSummary" class="fold-sum hint"></span>
+      <button id="save" class="small push" type="button">保存对话</button>
       <button id="saveDocx" class="small" type="button">保存为 Word</button>
       <button id="clear" class="small danger" type="button">清空对话</button>
     </div>
-    <p id="noAiNote" hidden>本机没有可用的模型：可以找文件、预览，在「已选」里复制或保存取出的文字，带到能用 AI 的地方提问；要在这里问 AI，请在「模型设置」里填写接口。</p>
+    <div id="askBody" class="fold-body">
+    <p id="noAiNote" hidden>本机没有可用的模型：可以找文件、预览，在「已选」里复制或保存取出的文字，带到能用 AI 的地方提问；要在这里问 AI，请在「模型设置」里填写接口，或启动本机的 llama-server、Ollama 后点「重新查找」。</p>
     <div id="chatStatus" class="status" aria-live="polite"></div>
     <div id="chatWrap"><div id="chat"></div></div>
     <div id="optRow" class="row">
@@ -286,13 +331,16 @@
       <label for="model" class="hint" style="margin:0">模型</label>
       <select id="model"></select>
       <button id="modelSettings" class="toggle" type="button" aria-expanded="false" aria-controls="modelPanel"><svg class="icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false"><g fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="8" cy="8" r="2.2"/><circle cx="8" cy="8" r="4.6"/><path d="M8 1.2v2.2M8 12.6v2.2M1.2 8h2.2M12.6 8h2.2M3.2 3.2l1.5 1.5M11.3 11.3l1.5 1.5M3.2 12.8l1.5-1.5M11.3 4.7l1.5-1.5"/></g></svg>模型设置<span class="arrow" aria-hidden="true">▸</span></button>
+      <button id="findLocal" class="link" type="button">重新查找</button>
     </div>
     <div id="skillRow" class="row">
       <label for="skillSel" class="hint" style="margin:0">skill</label>
       <select id="skillSel"><option value="">不用 skill</option></select>
       <button id="skillReload" class="link" type="button">重新读取</button>
     </div>
+    <label id="useMemRow" class="dedup" style="margin-top:0"><input id="useMemory" type="checkbox" checked>参考记忆</label>
     </div>
+    <div id="localStatus" class="status" aria-live="polite"></div>
     <div id="skillHint" class="hint" aria-live="polite"></div>
     <div id="dest" class="hint"></div>
     <div id="modelPanel" class="panel" hidden>
@@ -301,9 +349,9 @@
         <input id="limit" type="number" min="1000" max="2000000" step="1000" aria-label="发送字数上限">
         <button id="saveLimit" type="button" aria-label="保存字数上限">保存</button>
       </div>
-      <p class="hint">范围 1,000 到 2,000,000，默认 100,000，回车即保存。选中文件和对话的文字合计超过上限时先不发送。按所用模型能接受的长度设置。</p>
+      <p class="hint">范围 1,000 到 2,000,000，默认 100,000，回车即保存。选中文件和对话的文字合计超过上限时先不发送。按所用模型能接受的长度设置；本机模型另按其上下文折算（1 token 计 1 字，留四分之一给回答），取两者中较小的。</p>
       <h3 style="margin-top:12px">自定义模型接口</h3>
-      <p class="hint">优先读 OpenCode 配置（~/.config/opencode/opencode.json）里的模型；没有或想另用一个时在这里填 OpenAI 兼容接口。AK 只存在本机设置文件里（权限 600），不会显示在页面上。</p>
+      <p class="hint">优先读 OpenCode 配置（~/.config/opencode/opencode.json）里的模型，并自动查找本机运行中的 llama-server（端口 8080）和 Ollama（端口 11434）；没有或想另用一个时在这里填 OpenAI 兼容接口。接口不需要鉴权时 AK 可以不填。AK 只存在本机设置文件里（权限 600），不会显示在页面上。</p>
       <div class="grid">
         <label for="cBase">接口地址</label><input id="cBase" type="text" placeholder="https://api.example.com/v1" autocomplete="off">
         <label for="cModel">模型名</label><input id="cModel" type="text" autocomplete="off">
@@ -315,6 +363,24 @@
         <button id="testModel" type="button">测试连接</button>
       </div>
       <div id="settingsStatus" class="status" aria-live="polite"></div>
+      <h3 style="margin-top:12px">记忆</h3>
+      <label class="dedup"><input id="memoryOn" type="checkbox" checked>记住提问时选过的文件和核对通过的结论</label>
+      <p class="hint">记忆存在本机的 ~/.local/share/ask-local-files/memory.sqlite（权限 600，只有你能读）。勾选「参考记忆」时，提问会按问题从记忆里找出相关的以前结论和原文段落，排在已选文件之后一起发给模型；文件改了按新内容复核，文件不在了就忘掉。关掉后不再记入、也不再参考，已记住的保留，可在下面清空。</p>
+      <div class="row">
+        <span id="memStats" class="hint" style="margin:0"></span>
+        <button id="memView" class="toggle" type="button" aria-expanded="false" aria-controls="memPanel">查看记忆<span class="arrow" aria-hidden="true">▸</span></button>
+      </div>
+      <div id="memPanel" hidden>
+        <div class="row" style="margin-top:6px">
+          <input id="memQ" type="text" placeholder="搜索结论、原句或文件路径" autocomplete="off" aria-label="搜索记忆" style="flex:1 1 200px">
+          <button id="memClear" class="small danger" type="button">清空记忆</button>
+        </div>
+        <h4 class="mem-h">结论</h4>
+        <ul id="memFacts" class="list"></ul>
+        <h4 class="mem-h">文件</h4>
+        <ul id="memFiles" class="list"></ul>
+      </div>
+      <div id="memStatus" class="status" aria-live="polite"></div>
     </div>
     <textarea id="ask" aria-label="要问的内容" placeholder="写下要 AI 做什么，例如：总结这几份文件的要点；把第 2 份改写成一则通知；这几份材料的说法有什么不同"></textarea>
     <div class="row" style="margin-top:8px">
@@ -326,13 +392,14 @@
       <div id="askStatus" class="status" aria-live="polite"></div>
       <button id="sendCut" type="button" hidden>仍然发送（按比例截断每个文件）</button>
     </div>
+    </div>
   </section>
   </div>
   </div>
   <div id="convFrames" hidden></div>
 
 
-  <footer><span id="ver">找文件问 AI v1.16</span>　关闭全部页面后服务自动退出；点「退出」立即结束，开着的页面一起结束。有回答正在生成（含 skill 脚本运行）时，服务等它结束再退出。对话不自动保存，退出即清空。</footer>
+  <footer><span id="ver">找文件问 AI v2.1</span>　关闭全部页面后服务自动退出；点「退出」立即结束，开着的页面一起结束。有回答正在生成（含 skill 脚本运行）时，服务等它结束再退出。对话不自动保存，退出即清空；记忆存在本机，可在「模型设置」里关闭或清空。</footer>
 </main>
 <script>
 'use strict';
@@ -347,8 +414,18 @@ let results = [], picked = [], chat = [], busy = false, controller = null, searc
 let savedLen = 0;      // 上次「保存对话」时的条数，用来判断有没有未保存的问答
 let skills = [], skillsDir = '';
 let resultsKey = '', indexNote = ['', 'info'], openPreviews = {}, overShown = false, searchComplete = false, addedNote = '';
-let findMode = 'browse', browseDir = '', browse = null, browseKey = '', skillOpen = false;
+let findMode = 'search', browseDir = '', browse = null, browseKey = '', skillOpen = false;
 let rawResults = [], hiddenSearch = new Set(), hiddenBrowse = new Set(), regexOn = false, dedupOn = true, openDups = {}, dupPreviews = {}, listVer = 0, addedKind = 'ok', cutAction = null;
+// 找文件停在哪个标签、按什么排序，记在本浏览器；读不到时停在「搜索」、最新在前
+const FIND_KEY = 'ask-local-files.find';
+const SORT_LEAD = {time_desc: '最近修改的', time_asc: '最早修改的', name_asc: '按名称排在前面的', name_desc: '按名称排在前面的'};
+const TOPS = [10, 30];      // 「加入前 N 个」
+let findPrefs = {mode: 'search', sort: 'time_desc'};
+try { Object.assign(findPrefs, JSON.parse(localStorage.getItem(FIND_KEY) || '{}')); } catch (e) { /* 读不到时按默认 */ }
+if (findPrefs.mode !== 'browse') findPrefs.mode = 'search';
+if (!SORT_LEAD[findPrefs.sort]) findPrefs.sort = 'time_desc';
+function saveFindPrefs() { try { localStorage.setItem(FIND_KEY, JSON.stringify(findPrefs)); } catch (e) { /* 存不了时只在本页有效 */ } }
+function sortArg() { return '&sort=' + findPrefs.sort; }
 const EMPTY_ASK = '请按所选 skill 的说明处理已选文件。';   // 选了 skill、没写问题时代为提问，与服务端一致
 const CONTINUE_ASK = '继续：从上一条回答的断处接着写，不要重复已写的内容。';
 
@@ -457,7 +534,7 @@ function indexText(ix) {
 
 function search() {
   const q = $('q').value.trim(), ext = $('ext').value.trim();
-  return api('/api/search?q=' + encodeURIComponent(q) + '&ext=' + encodeURIComponent(ext) + (regexOn ? '&re=1' : '')).then(r => {
+  return api('/api/search?q=' + encodeURIComponent(q) + '&ext=' + encodeURIComponent(ext) + (regexOn ? '&re=1' : '') + sortArg()).then(r => {
     rawResults = r.results;
     const all = dedupOn ? dedupList(rawResults) : rawResults.slice();
     results = all.filter(x => !hiddenSearch.has(x.path));
@@ -465,8 +542,8 @@ function search() {
     renderResults();
     let s = indexText(r.status);
     if (state && state.folders.length) {
-      s += q || ext ? '。找到 ' + fmtNum(r.total) + ' 个' : '。下面是最近修改的文件';
-      if (r.total > r.results.length) s += '，显示最近修改的 ' + r.results.length + ' 个';
+      s += q || ext ? '。找到 ' + fmtNum(r.total) + ' 个' : findPrefs.sort === 'time_desc' ? '。下面是最近修改的文件' : '。下面是全部文件';
+      if (r.total > r.results.length) s += '，显示' + SORT_LEAD[findPrefs.sort] + ' ' + r.results.length + ' 个';
       if (all.length < rawResults.length) s += '（去重后 ' + fmtNum(all.length) + ' 个）';
       if (results.length < all.length) s += '，已从列表移除 ' + (all.length - results.length) + ' 个';
     }
@@ -623,15 +700,36 @@ function restoreFocus(ul, f) {
 // 服务端找到的都已返回、列表里（去重与从列表移除之后）少于选取上限时，给「全部加入」；
 // 只算列表里读得了且还没加入（去重时含同名）的
 function addable() { const keys = pickedKeys(); return results.filter(r => r.supported && !isPicked(r.path) && !keys.has(sameNameKey(r.name))); }
+// 可加入的多于 N 个时给「加入前 N 个」，按列表当前的先后取；超过已选还能加的个数时不可点。
+// 返回 [有不可点的, 有可点的]
+function renderTops(prefix, n, room) {
+  TOPS.forEach(k => {
+    const b = $(prefix + k);
+    b.hidden = n <= k;
+    b.textContent = '加入前 ' + k + ' 个';
+    b.disabled = k > room || !alive;
+  });
+  return [TOPS.some(k => n > k && k > room), TOPS.some(k => n > k && k <= room)];
+}
 function renderAddAll() {
   const n = addable().length, room = maxFiles - picked.length;
-  const show = searchComplete && results.length < maxFiles && n > 0;
-  $('addAllRow').hidden = !show;
-  if (!show) return;
+  const all = searchComplete && results.length < maxFiles && n > 0;
+  const over = renderTops('addTop', n, room)[0] || (all && n > room);
+  $('addAllRow').hidden = !all && n <= TOPS[0];
+  $('addAll').hidden = !all;
   $('addAll').textContent = '全部加入（' + n + ' 个）';
   $('addAll').disabled = n > room || !alive;
-  $('addAllHint').textContent = n > room ? '已选还能加 ' + room + ' 个，请先在「已选」里移除几个。' : '';
+  $('addAllHint').textContent = over ? '已选还能加 ' + room + ' 个，请先在「已选」里移除几个。' : '';
 }
+TOPS.forEach(k => $('addTop' + k).addEventListener('click', () => {
+  const todo = addable().slice(0, k);
+  if (todo.length < k || k > maxFiles - picked.length) return;
+  if (!newChat()) return;
+  todo.forEach(r => pick(r, true));
+  addedNote = '已加入列表里的前 ' + k + ' 个。';
+  addedKind = 'ok';
+  renderPicked();
+}));
 $('addAll').addEventListener('click', () => {
   const todo = addable(), skipped = results.filter(r => !r.supported).length;
   const same = results.filter(r => r.supported && !isPicked(r.path)).length - todo.length;
@@ -800,6 +898,7 @@ $('refresh').addEventListener('click', () => {
 
 function setFindMode(mode, focus) {
   findMode = mode;
+  if (findPrefs.mode !== mode) { findPrefs.mode = mode; saveFindPrefs(); }
   const on = mode === 'browse';
   $('tabSearch').setAttribute('aria-selected', String(!on));
   $('tabBrowse').setAttribute('aria-selected', String(on));
@@ -816,8 +915,14 @@ $('tabBrowse').addEventListener('click', () => setFindMode('browse'));
 $('tabSearch').parentNode.addEventListener('keydown', ev => {
   if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(ev.key)) return;
   ev.preventDefault();
-  const next = ev.key === 'Home' ? 'browse' : ev.key === 'End' ? 'search' : findMode === 'search' ? 'browse' : 'search';
+  const next = ev.key === 'Home' ? 'search' : ev.key === 'End' ? 'browse' : findMode === 'search' ? 'browse' : 'search';
   setFindMode(next, true);
+});
+$('sortBy').value = findPrefs.sort;
+$('sortBy').addEventListener('change', () => {
+  findPrefs.sort = $('sortBy').value;
+  saveFindPrefs();
+  refreshFind();
 });
 
 function openBrowse(dir) {
@@ -829,7 +934,7 @@ function openBrowse(dir) {
 function findFocus() { (findMode === 'search' ? $('q') : $('tabBrowse')).focus(); }
 
 function loadBrowse(dir) {
-  return api('/api/browse?dir=' + encodeURIComponent(dir) + '&dedup=' + (dedupOn ? 1 : 0)).then(r => {
+  return api('/api/browse?dir=' + encodeURIComponent(dir) + '&dedup=' + (dedupOn ? 1 : 0) + sortArg()).then(r => {
     if (findMode !== 'browse') return;
     if (r.error) {
       browseDir = '';
@@ -847,7 +952,7 @@ function loadBrowse(dir) {
     let s = indexText(r.status);
     if (state && state.folders.length) {
       s += r.dir ? '。本层 ' + fmtNum(r.here) + ' 个文件' + (r.here_dedup < r.here ? '（去重后 ' + fmtNum(r.here_dedup) + ' 个）' : '') +
-        '、' + r.dirs.length + ' 个子文件夹' + (r.here_dedup > listed ? '，列出最近修改的 ' + listed + ' 个' : '') +
+        '、' + r.dirs.length + ' 个子文件夹' + (r.here_dedup > listed ? '，列出' + SORT_LEAD[findPrefs.sort] + ' ' + listed + ' 个' : '') +
         (listed > r.files.length ? '，已从列表移除 ' + (listed - r.files.length) + ' 个' : '')
         : '。已添加 ' + r.dirs.length + ' 个文件夹，点文件夹逐层查看';
     }
@@ -874,10 +979,21 @@ function renderBrowseAdd() {
   const n = browseTodo().n, room = maxFiles - picked.length;
   $('browseAddRow').hidden = !n;
   if (!n) return;
+  const fits = renderTops('browseTop', n, room)[1];
   $('browseAdd').textContent = '全部加入（' + n + ' 个，含子文件夹）';
   $('browseAdd').disabled = n > room || !alive;
-  $('browseAddHint').textContent = n > room ? '超过已选还能加的 ' + room + ' 个：请进入子文件夹分批加入，或先在「已选」里移除几个。' : '';
+  $('browseAddHint').textContent = n > room ? '超过已选还能加的 ' + room + ' 个：请' + (fits ? '点「加入前 N 个」、' : '') + '进入子文件夹分批加入，或先在「已选」里移除几个。' : '';
 }
+// 含子文件夹，按当前排序取前 N 个
+TOPS.forEach(k => $('browseTop' + k).addEventListener('click', () => {
+  const todo = browseTodo().todo.slice(0, k);
+  if (todo.length < k || k > maxFiles - picked.length) return;
+  if (!newChat()) return;
+  todo.forEach(r => pick(r, true));
+  addedNote = '已加入本文件夹（含子文件夹）里的前 ' + k + ' 个。';
+  addedKind = 'ok';
+  renderPicked();
+}));
 $('browseAdd').addEventListener('click', () => {
   const {todo, n, same} = browseTodo();
   if (!n || n !== todo.length || n > maxFiles - picked.length) return;
@@ -951,7 +1067,7 @@ function newChat() {
   cutAction = null;
   savedLen = 0;
   renderChat();
-  layoutFind();
+  layoutCards();
   say('chatStatus', '文件清单已改动，已开始新对话。', 'info');
   return true;
 }
@@ -1053,23 +1169,34 @@ function renderPicked() {
   renderDest();
   renderResults();
   showFindStatus();
-  layoutFind();
+  layoutCards();
+}
+
+// 当前模型的发送字数上限：设置值，本机模型另按上下文折算，取较小的
+function limitNow() {
+  const m = currentModel();
+  return m && m.limit && m.limit < charLimit ? m.limit : charLimit;
+}
+// 超限时调高上限的办法：受本机模型上下文所限时要调大上下文
+function raiseAdvice() {
+  return limitNow() < charLimit ? '调大本机模型的上下文后点「重新查找」' : '在「模型设置」里调高上限';
 }
 
 // 文件与对话合计超过上限时，在发送区写明办法并给出「仍然发送」；不再超限时收回
 function noticeLimit() {
   if (busy) return;
+  const charLimit = limitNow();
   const fixed = historyChars() + skillChars(), total = totalChars() + fixed;
   const ready = picked.length && !picked.some(p => p.loading || p.error);
   if (fixed >= charLimit) {
     say('askStatus', (skillChars() ? '对话 ' + fmtNum(historyChars()) + ' 字加 skill 说明 ' + fmtNum(skillChars()) + ' 字'
         : '对话已有 ' + fmtNum(historyChars()) + ' 字') + '，达到上限 ' + fmtNum(charLimit) +
-        ' 字：请先「保存对话」，再点「清空对话」开始新对话，或在「模型设置」里调高上限。', 'warn');
+        ' 字：请先「保存对话」，再点「清空对话」开始新对话，或' + raiseAdvice() + '。', 'warn');
     $('sendCut').hidden = true;
     overShown = true;
   } else if (ready && total > charLimit) {
     say('askStatus', '合计 ' + fmtNum(total) + ' 字，超过上限 ' + fmtNum(charLimit) + ' 字 ' + fmtNum(total - charLimit) +
-        ' 字：可以移除几个文件、在「模型设置」里调高上限，或点「仍然发送」按比例截断每个文件。', 'warn');
+        ' 字：可以移除几个文件、' + raiseAdvice() + '，或点「仍然发送」按比例截断每个文件。', 'warn');
     $('sendCut').hidden = false;
     overShown = true;
   } else if (overShown) {
@@ -1085,6 +1212,7 @@ function noticeLimit() {
 let exporting = false;
 const EXPORT_BUTTONS = ['copyTexts', 'saveTexts'];
 function renderExportButtons() {
+  $('copyPaths').hidden = !picked.length;
   const loading = picked.some(p => p.loading), bad = picked.filter(p => p.error).length;
   EXPORT_BUTTONS.forEach(id => { const b = $(id); b.hidden = !picked.length; b.disabled = exporting || loading || bad === picked.length; });
 }
@@ -1117,6 +1245,22 @@ $('copyTexts').addEventListener('click', () => exportRun('复制', () => exportT
   if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(r.text).then(ok, fallback);
   fallback();
 })));
+// 已选文件的完整路径一行一个，交给 OpenCode 等智能体直接处理文件
+$('copyPaths').addEventListener('click', () => {
+  const text = picked.map(p => p.path).join('\n'), n = picked.length;
+  const ok = () => say('pickStatus', '已复制 ' + n + ' 个已选择的文件路径，可以粘贴给「问 AI」里的 OpenCode 等智能体，让它直接处理这些文件。', 'ok');
+  const fallback = () => {
+    const t = document.createElement('textarea');
+    t.value = text; document.body.appendChild(t); t.select();
+    let done = false;
+    try { done = document.execCommand('copy'); } catch (e) { /* 视为复制失败 */ }
+    t.remove();
+    if (done) ok();
+    else say('pickStatus', '复制失败：浏览器不允许写剪贴板。请手动选中下面的路径复制：\n' + text, 'bad');
+  };
+  if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(text).then(ok, fallback);
+  fallback();
+});
 $('saveTexts').addEventListener('click', () => exportRun('保存', () => exportText().then(r => {
   const name = '找文件问AI-文字-' + stampNow() + '.md';
   saveBlob(new Blob([r.text], {type: 'text/markdown;charset=utf-8'}), name);
@@ -1189,9 +1333,10 @@ function renderDest() {
   const m = currentModel();
   $('dest').className = m ? 'hint' : 'hint warn';
   $('dest').textContent = m
-    ? '将发送到：' + m.host + '，模型 ' + m.label + '，' + picked.length + ' 个文件' + (currentSkill() ? '，skill ' + currentSkill().label : '') +
-      '；文件 ' + fmtNum(totalChars()) + ' 字' + (currentSkill() ? ' + skill ' + fmtNum(skillChars()) + ' 字' : '') + ' + 对话 ' + fmtNum(historyChars()) + ' 字'
-    : '没有可用的模型：OpenCode 配置里找不到带接口地址和 AK 的模型，请在「模型设置」里填写自定义接口。';
+    ? '将发送到：' + m.host + (m.auth || m.loopback ? '' : '（未鉴权）') + '，模型 ' + m.label + '，' + picked.length + ' 个文件' + (currentSkill() ? '，skill ' + currentSkill().label : '') + (memoryActive() ? '，参考记忆' : '') +
+      '；文件 ' + fmtNum(totalChars()) + ' 字' + (currentSkill() ? ' + skill ' + fmtNum(skillChars()) + ' 字' : '') + ' + 对话 ' + fmtNum(historyChars()) + ' 字' +
+      (m.limit && m.limit < charLimit ? '；发送上限 ' + fmtNum(m.limit) + ' 字（' + m.limit_note + '）' : '')
+    : '没有可用的模型：OpenCode 配置里找不到带接口地址和 AK 的模型，本机也没有运行中的 llama-server 或 Ollama；请在「模型设置」里填写自定义接口，或启动本机模型服务后点「重新查找」。';
 }
 
 // ---------------- skill
@@ -1348,6 +1493,8 @@ function toolsNode(m) {
 
 $('model').addEventListener('change', () => {
   renderDest();
+  noticeLimit();     // 本机模型的上限可能不同
+  layoutCards();
   post('/api/settings', {model: $('model').value}).catch(() => {});
 });
 
@@ -1365,9 +1512,15 @@ function renderChat() {
       const w = btn('保存为 Word', 'small', () => saveDocx(m.content, i > 0 ? chat[i - 1].content.trim().slice(0, 30) : '', w));
       w.setAttribute('aria-label', '把这条回答保存为 Word');
       who.appendChild(w);
+      if (m.answerId && !m.wrong) {
+        const x = btn('不对', 'small', () => forgetAnswer(m, x));
+        x.setAttribute('aria-label', '这条回答不对：忘掉它记住的结论');
+        who.appendChild(x);
+      }
     }
     d.appendChild(who);
     if (m.tools && m.tools.length) d.appendChild(toolsNode(m));
+    if (m.memory && m.memory.files.length) d.appendChild(memoryNode(m.memory));
     const body = m.role === 'assistant' ? mdBody(m) : el('div', 'msg-body', m.content);
     d.appendChild(body);
     if (m.partial) d.appendChild(el('div', 'partial', '（回答不完整）'));
@@ -1378,6 +1531,7 @@ function renderChat() {
       const c = btn('复制', 'small', () => copyText(m.content, c));
       c.setAttribute('aria-label', '复制这条回答');
       foot.appendChild(c);
+      if (m.answerId) foot.appendChild(el('span', 'hint', m.wrong ? '已忘掉这条回答记住的结论' : '已记住 ' + m.remembered + ' 条结论'));
       // 只在最后一条回答不完整时给「继续」「重新生成」；发了新问题后旧的只留标记
       if (m.partial && i === chat.length - 1) {
         const go = btn('继续', 'small resume', () => run({kind: 'continue'}));
@@ -1395,7 +1549,7 @@ function renderChat() {
   });
   box.scrollTop = box.scrollHeight;
   renderDest();
-  layoutFind();
+  layoutCards();
 }
 
 function setBusy(on) {
@@ -1411,6 +1565,114 @@ function setBusy(on) {
   $('skillReload').disabled = on || !alive;
   document.querySelectorAll('#chat button.resume').forEach(b => { b.disabled = on || !alive; });
 }
+
+// ---------------- 记忆
+
+function memoryActive() { return !!state && state.memory && $('useMemory').checked; }
+function memoryTitle(mem) { return '参考了记忆：' + mem.facts + ' 条结论、' + mem.paras + ' 段原文'; }
+
+// 回答上方可展开的一行：用到了哪些记忆，出处可打开所在文件夹
+function memoryNode(mem) {
+  const d = el('details', 'memo');
+  d.appendChild(el('summary', '', memoryTitle(mem)));
+  mem.files.forEach(f => {
+    const row = el('div', 'row');
+    row.appendChild(el('span', 'grow', '文件 ' + f.n + '：' + f.path + '（' + f.paras + ' 段原文）'));
+    row.appendChild(revealBtn(f.path, f.path.split('/').pop()));
+    d.appendChild(row);
+    if (f.facts.length) {
+      const ul = el('ul');
+      f.facts.forEach(x => ul.appendChild(el('li', '', x.conclusion + '（原文：「' + x.quote + '」）')));
+      d.appendChild(ul);
+    }
+  });
+  return d;
+}
+
+// 「不对」：忘掉这条回答记住的结论，之后不再记入；不弹窗
+function forgetAnswer(m, b) {
+  b.disabled = true;
+  post('/api/memory', {action: 'wrong', answer_id: m.answerId}).then(r => {
+    m.wrong = true;
+    renderChat();
+    say('chatStatus', '已忘掉这条回答记住的 ' + r.count + ' 条结论，之后不再记入。', 'ok');
+    showMemStats(r.stats);
+  }).catch(e => { b.disabled = !alive; say('chatStatus', failText('忘掉', e.message, RETRY), 'bad'); });
+}
+
+function showMemStats(st) {
+  if (!st) return;
+  state.memory_stats = st;
+  $('memStats').textContent = st.error ? '读不了记忆：' + st.error : '已记住 ' + fmtNum(st.files) + ' 个文件、' + fmtNum(st.facts) +
+    ' 条结论，约 ' + fmtSize(st.bytes) + '（上限 ' + fmtSize(st.max_bytes) + '，超出时先忘掉最久没用的文件）';
+}
+function refreshMemStats() {
+  api('/api/memory?q=' + encodeURIComponent($('memQ').value.trim())).then(r => {
+    showMemStats(r.stats);
+    if (!$('memPanel').hidden) renderMemory(r);
+  }).catch(() => {});
+}
+
+function renderMemory(r) {
+  const facts = $('memFacts'), files = $('memFiles');
+  facts.textContent = '';
+  files.textContent = '';
+  const q = $('memQ').value.trim();
+  if (!r.facts.length) facts.appendChild(el('li', 'meta', q ? '没有含「' + q + '」的结论。' : '还没有记住结论。'));
+  r.facts.forEach(f => {
+    const li = el('li');
+    const g = el('div', 'grow');
+    g.appendChild(el('div', '', f.conclusion));
+    g.appendChild(el('div', 'hint', '「' + f.quote + '」 · ' + f.path + (f.count > 1 ? ' · 得出 ' + f.count + ' 次' : '')));
+    li.appendChild(g);
+    const x = btn('删除', 'small', () => memAction({action: 'fact', id: f.id}, x, '已删除这条结论。'));
+    x.setAttribute('aria-label', '删除这条结论');
+    li.appendChild(x);
+    facts.appendChild(li);
+  });
+  if (!r.files.length) files.appendChild(el('li', 'meta', q ? '没有路径含「' + q + '」的文件。' : '还没有记住文件。'));
+  r.files.forEach(f => {
+    const li = el('li');
+    const g = el('div', 'grow');
+    g.appendChild(el('div', 'name', f.path));
+    g.appendChild(el('div', 'hint', f.facts + ' 条结论 · ' + fmtSize(f.bytes)));
+    li.appendChild(g);
+    const x = btn('忘掉', 'small', () => memAction({action: 'file', path: f.path}, x, '已忘掉这个文件及其 ' + f.facts + ' 条结论。'));
+    x.setAttribute('aria-label', '忘掉这个文件及其结论');
+    li.appendChild(x);
+    files.appendChild(li);
+  });
+}
+
+function memAction(body, b, done) {
+  b.disabled = true;
+  return post('/api/memory', body).then(r => {
+    say('memStatus', done, 'ok');
+    showMemStats(r.stats);
+    refreshMemStats();
+  }).catch(e => { b.disabled = !alive; say('memStatus', failText('操作', e.message, RETRY), 'bad'); });
+}
+
+$('memView').addEventListener('click', () => {
+  togglePanel($('memView'), $('memPanel'));
+  if (!$('memPanel').hidden) refreshMemStats();
+});
+let memTimer = 0;
+$('memQ').addEventListener('input', () => { clearTimeout(memTimer); memTimer = setTimeout(refreshMemStats, 250); });
+// 「清空」类操作直接清，不弹确认
+$('memClear').addEventListener('click', () => memAction({action: 'clear'}, $('memClear'), '记忆已清空。')
+  .then(() => { $('memClear').disabled = !alive; }));
+$('memoryOn').addEventListener('change', () => {
+  const on = $('memoryOn').checked;
+  post('/api/settings', {memory: on}).then(r => {
+    applyState(r);
+    say('memStatus', on ? '已打开记忆。' : '已关闭记忆：不再记入、也不再参考，已记住的保留。', 'ok');
+  }).catch(e => { $('memoryOn').checked = !on; say('memStatus', failText('保存', e.message, RETRY), 'bad'); });
+});
+$('useMemory').addEventListener('change', () => {
+  renderDest();
+  post('/api/settings', {use_memory: $('useMemory').checked}).catch(() => {});
+});
 
 // ---------------- 原文佐证
 
@@ -1541,18 +1803,59 @@ function renderMarkdown(text) {
   return root;
 }
 
-// ---------------- 布局：窄屏开始对话后收起找文件
+// ---------------- 布局：各模块点标题收起，收起状态记在本浏览器；窄屏开始对话后自动收起找文件（不记）；
+// 没有模型时「问 AI」只有一行，与「已选」对调：左栏找文件、问 AI，右栏已选
 
 const narrow = window.matchMedia('(max-width: 899px)');
-let findOpen = false;
-function layoutFind() {
-  const fold = narrow.matches && chat.length > 0 && !findOpen;
-  $('findBody').hidden = fold;
-  $('findCollapsed').hidden = !fold;
-  $('findSummary').textContent = '已选 ' + picked.length + ' 个文件，共 ' + fmtNum(totalChars()) + ' 字';
+const FOLD_KEY = 'ask-local-files.fold';
+const FOLDS = {find: 'findCard', picked: 'pickedCard', ask: 'askCard'};
+let folds = {}, findOpen = false;
+try { Object.assign(folds, JSON.parse(localStorage.getItem(FOLD_KEY) || '{}')); } catch (e) { /* 读不到时按默认 */ }
+
+function isFolded(k) {
+  return !!folds[k] || (k === 'find' && narrow.matches && chat.length > 0 && !findOpen);
 }
-narrow.addEventListener('change', layoutFind);
-$('reselect').addEventListener('click', () => { findOpen = true; layoutFind(); findFocus(); });
+function noAi() { return !!state && !state.models.length; }
+
+function layoutCards() {
+  Object.keys(FOLDS).forEach(k => {
+    const card = $(FOLDS[k]), f = isFolded(k), b = card.querySelector('button.fold');
+    card.classList.toggle('folded', f);
+    b.setAttribute('aria-expanded', String(!f));
+    b.querySelector('.arrow').textContent = f ? '▸' : '▾';
+  });
+  // 电脑屏幕上每栏第一个展开的模块占满本栏剩余高度（没有模型时的「问 AI」除外）；一栏全部收起时让出宽度
+  [['col-left', 'left-folded'], ['col-right', 'right-folded']].forEach(([col, cls]) => {
+    const cards = Array.from(document.querySelectorAll('.' + col + ' > .card'));
+    const fill = cards.find(c => !c.classList.contains('folded') && !(c.id === 'askCard' && noAi()));
+    cards.forEach(c => c.classList.toggle('fill', c === fill));
+    $('convMain').classList.toggle(cls, cards.every(c => c.classList.contains('folded')));
+  });
+  $('findSummary').textContent = '已选 ' + picked.length + ' 个文件，共 ' + fmtNum(totalChars()) + ' 字';
+  const m = currentModel(), n = rounds();
+  $('askSummary').textContent = m ? m.label + (n ? '，' + n + ' 轮问答' : '') : noAi() ? '没有可用的模型' : '';
+}
+
+Object.keys(FOLDS).forEach(k => $(FOLDS[k]).querySelector('button.fold').addEventListener('click', () => {
+  const was = isFolded(k);
+  folds[k] = !was;
+  if (k === 'find') findOpen = was;
+  try { localStorage.setItem(FOLD_KEY, JSON.stringify(folds)); } catch (e) { /* 存不了时只在本页有效 */ }
+  layoutCards();
+}));
+narrow.addEventListener('change', layoutCards);
+layoutCards();
+
+// 有无模型变化时把「问 AI」「已选」放进对应的栏，保留焦点
+function placeCards() {
+  const left = document.querySelector('.col-left'), right = document.querySelector('.col-right');
+  const [a, b] = noAi() ? [left, right] : [right, left];
+  if ($('askCard').parentNode === a) return;
+  const f = document.activeElement;
+  a.appendChild($('askCard'));
+  b.appendChild($('pickedCard'));
+  if (f && f !== document.activeElement && f.isConnected) f.focus();
+}
 
 function togglePanel(b, panel, open) {
   open = open === undefined ? panel.hidden : open;
@@ -1562,7 +1865,26 @@ function togglePanel(b, panel, open) {
   if (arrow) arrow.textContent = open ? '▾' : '▸';
 }
 $('manageFolders').addEventListener('click', () => togglePanel($('manageFolders'), $('folderPanel')));
-$('modelSettings').addEventListener('click', () => togglePanel($('modelSettings'), $('modelPanel')));
+$('modelSettings').addEventListener('click', () => {
+  togglePanel($('modelSettings'), $('modelPanel'));
+  if (!$('modelPanel').hidden) findLocal(false);
+});
+
+// 重新探测本机的 llama-server 与 Ollama；shout 为使用者点了「重新查找」，写明找到了什么
+function findLocal(shout) {
+  $('findLocal').disabled = true;
+  if (shout) say('localStatus', '正在查找本机模型服务……', 'info');
+  return post('/api/local-models').then(r => {
+    applyState(r);
+    if (!shout) return;
+    const got = r.servers.filter(s => r.found[s.kind]).map(s => s.name + ' ' + r.found[s.kind] + ' 个');
+    if (got.length) say('localStatus', '找到本机模型：' + got.join('、') + '，已列进「模型」。', 'ok');
+    else say('localStatus', '本机没有找到运行中的 ' + r.servers.map(s => s.name + '（端口 ' + s.port + '）').join('或 ') +
+             '：请先启动模型服务，再点「重新查找」。', 'warn');
+  }).catch(e => { if (shout) say('localStatus', failText('查找', e.message, RETRY), 'bad'); })
+    .then(() => { $('findLocal').disabled = !alive; });
+}
+$('findLocal').addEventListener('click', () => findLocal(true));
 
 // action.kind：send 发送输入框里的问题；continue 新增一轮「继续」提问，不完整回答留在历史里；
 // regen 用原问题重新请求，新回答换掉最后那条不完整回答，没拿到内容时放回原来的
@@ -1574,22 +1896,24 @@ function run(action, truncate) {
   cutAction = null;
   const skill = currentSkill(), last = chat[chat.length - 1];
   if (kind !== 'send' && !(last && last.partial)) return;
-  if (!picked.length && !skill) { say('askStatus', '还没有选文件：先在「找文件」里加入要用的文件，或选一个 skill。', 'warn'); return; }
+  if (!picked.length && !skill && !memoryActive()) { say('askStatus', '还没有选文件：先在「找文件」里加入要用的文件、选一个 skill，或勾选「参考记忆」。', 'warn'); return; }
   if (picked.some(p => p.loading)) { say('askStatus', '还在取文字，请稍等。', 'warn'); return; }
   if (picked.some(p => p.error)) { say('askStatus', '有文件取不出文字：请先在「已选」里点「移除取不出文字的文件」。', 'bad'); return; }
   if (kind === 'send' && !typed && !skill) { say('askStatus', '请先写下要 AI 做什么；选了 skill 时可以不写。', 'warn'); $('ask').focus(); return; }
+  const useMem = memoryActive();
   const q = kind === 'continue' ? CONTINUE_ASK : typed || EMPTY_ASK;
-  if (!currentModel()) { say('askStatus', '发送失败：没有可用的模型。请在「模型设置」里填写自定义接口。', 'bad'); return; }
+  if (!currentModel()) { say('askStatus', '发送失败：没有可用的模型。请在「模型设置」里填写自定义接口，或启动本机模型服务后点「重新查找」。', 'bad'); return; }
   const history = (kind === 'regen' ? chat.slice(0, -1) : chat).map(m => ({role: m.role, content: m.content}))
     .concat(kind === 'regen' ? [] : [{role: 'user', content: q}]);
   const answer = {role: 'assistant', content: '', streaming: true, model: currentModel().label, skill: skill ? skill.label : '', tools: []};
   setBusy(true);
   // 等待期间每秒更新已等待时间；phase 为当前阶段的文字
-  const t0 = Date.now();
+  const t0 = Date.now(), local = currentModel().loopback;
   let phase = ['正在发送……', 'info'];
   const tick = () => {
     const sec = Math.round((Date.now() - t0) / 1000);
-    say('askStatus', phase[0] + '已等待 ' + sec + ' 秒' + (sec >= 30 ? '，模型仍在处理，不想等可点「停止」' : '') + '。', phase[1]);
+    const slow = local ? '，本机模型正在读取文件，纯 CPU 可能要几分钟，不想等可点「停止」' : '，模型仍在处理，不想等可点「停止」';
+    say('askStatus', phase[0] + '已等待 ' + sec + ' 秒' + (sec >= 30 ? slow : '') + '。', phase[1]);
   };
   answer.onStart = cut => { phase = cut ? ['生成中（已按比例截断每个文件）……', 'warn'] : ['生成中……', 'info']; tick(); };
   answer.onTool = t => { phase = t ? [({read: '正在读取 ', write: '正在写入 '}[t.kind] || '正在运行 ') + t.name + '……', 'info'] : ['生成中……', 'info']; tick(); };
@@ -1601,7 +1925,7 @@ function run(action, truncate) {
     method: 'POST', signal: controller.signal,
     headers: {'X-Token': TOKEN, 'Content-Type': 'application/json'},
     body: JSON.stringify({files: picked.map(p => p.path), messages: history, model: $('model').value, truncate: !!truncate,
-                          skill: skill ? skill.name : ''})
+                          skill: skill ? skill.name : '', memory: useMem})
   }).then(r => {
     if (!r.ok) {
       answer.stopTimer();
@@ -1609,13 +1933,13 @@ function run(action, truncate) {
         if (r.status === 413 && j.error === 'too_long') {
           say('askStatus', '先不发送：合计 ' + fmtNum(j.total) + ' 字（文件 ' + fmtNum(j.files) + ' 字' +
               (j.skill ? ' + skill ' + fmtNum(j.skill) + ' 字' : '') + ' + 对话 ' + fmtNum(j.history) + ' 字），超过上限 ' + fmtNum(j.limit) + ' 字 ' + fmtNum(j.total - j.limit) +
-              ' 字：可以移除几个文件、在「模型设置」里调高上限，或点「仍然发送」按比例截断每个文件。', 'warn');
+              ' 字：可以移除几个文件、' + raiseAdvice() + '，或点「仍然发送」按比例截断每个文件。', 'warn');
           $('sendCut').hidden = false;
           overShown = true;
           cutAction = action;
         } else if (r.status === 413 && j.error === 'history_too_long') {
           say('askStatus', '先不发送：对话已有 ' + fmtNum(j.history) + ' 字' + (j.skill ? '，skill 说明 ' + fmtNum(j.skill) + ' 字' : '') + '，达到上限 ' + fmtNum(j.limit) +
-              ' 字：请先「保存对话」，再点「清空对话」开始新对话，或在「模型设置」里调高上限。', 'warn');
+              ' 字：请先「保存对话」，再点「清空对话」开始新对话，或' + raiseAdvice() + '。', 'warn');
         } else {
           say('askStatus', failText('发送', j.error || ('HTTP ' + r.status), '请检查后重试。'), 'bad');
         }
@@ -1654,7 +1978,7 @@ function readStream(r, answer) {
     if (!line.trim()) return;
     let m;
     try { m = JSON.parse(line); } catch (e) { return; }
-    if (m.start) { cut = m.truncated; answer.onStart(cut); }
+    if (m.start) { cut = m.truncated; answer.memory = m.memory; answer.onStart(cut); }
     if (m.t) {
       answer.content += m.t;
       // 逐字到达时每帧最多重绘一次 Markdown
@@ -1685,6 +2009,9 @@ function readStream(r, answer) {
       answer.done = true;
       answer.missing = m.missing || [];
       answer.uncited = !!m.uncited;
+      answer.answerId = m.answer_id || '';
+      answer.remembered = m.remembered || 0;
+      if (answer.remembered) refreshMemStats();
       answer.stopTimer();
       say('askStatus', cut ? '回答完成（发送时已按比例截断每个文件）。' : '回答完成。', cut ? 'warn' : 'ok');
     }
@@ -1749,6 +2076,13 @@ function chatMarkdown(stamp) {
   if (!picked.length) lines.push('（未选文件）');
   chat.forEach(m => {
     lines.push('', m.role === 'user' ? '## 问' : '## 答' + (m.model ? '（' + m.model + (m.skill ? '，skill ' + m.skill : '') + '）' : ''));
+    if (m.memory && m.memory.files.length) {
+      lines.push('', memoryTitle(m.memory));
+      m.memory.files.forEach(f => {
+        lines.push('', '- 文件 ' + f.n + '：' + f.path + '（' + f.paras + ' 段原文）');
+        f.facts.forEach(x => lines.push('  - ' + x.conclusion + '（原文：「' + x.quote + '」）'));
+      });
+    }
     (m.tools || []).forEach(t => {
       lines.push('', toolTitle(t));
       if (t.output) lines.push('', '```', t.output, '```');
@@ -1881,9 +2215,9 @@ function saveCustom(clearKey) {
       renderDest();
       post('/api/settings', {model: 'custom'}).catch(() => {});
     }
-    if (clearKey) say('settingsStatus', '已清除 AK，自定义接口暂不可用。', 'ok');
+    if (clearKey) say('settingsStatus', '已清除 AK，之后向自定义接口发请求不带 AK。', 'ok');
     else if (usable) say('settingsStatus', '已保存，已选用自定义接口。', 'ok');
-    else say('settingsStatus', '已保存。自定义接口暂不可用：填齐接口地址、模型名和 AK 后才可选用。', 'warn');
+    else say('settingsStatus', '已保存。自定义接口暂不可用：填齐接口地址和模型名后才可选用。', 'warn');
   }).catch(e => say('settingsStatus', failText('保存', e.message, '请检查输入后重试；仍失败时' + RETRY), 'bad'));
 }
 $('saveCustom').addEventListener('click', () => saveCustom(false));
@@ -1897,7 +2231,7 @@ $('testModel').addEventListener('click', () => {
     .then(() => { $('testModel').disabled = !alive; });
 });
 $('clearKey').addEventListener('click', () => {
-  if (confirm('清除本工具设置里保存的 AK？清除后自定义接口不可用，OpenCode 的配置不受影响。')) saveCustom(true);
+  if (confirm('清除本工具设置里保存的 AK？清除后向自定义接口发请求不带 AK，需要鉴权的接口会拒绝；OpenCode 的配置不受影响。')) saveCustom(true);
 });
 
 
@@ -1908,10 +2242,14 @@ function applyState(s) {
   $('cBase').value = state.custom.base;
   $('cModel').value = state.custom.model;
   $('cKey').placeholder = state.custom.has_key ? '已保存，留空则不改' : '';
+  $('memoryOn').checked = state.memory;
+  $('useMemory').checked = state.use_memory;
+  $('useMemRow').hidden = !state.memory;
+  showMemStats(state.memory_stats);
   renderModels();
-  const noAi = !state.models.length;
-  document.body.classList.toggle('no-ai', noAi);
-  $('noAiNote').hidden = !noAi;
+  document.body.classList.toggle('no-ai', noAi());
+  $('noAiNote').hidden = !noAi();
+  placeCards();
   renderPicked();
 }
 
@@ -1984,12 +2322,9 @@ $('newConv').addEventListener('click', () => {
   showConv(id);
 });
 
+// 直接关闭，不确认：正在生成的回答随之停止，未保存的问答随之清空
 function closeConv(id) {
-  const c = convs.find(x => x.id === id), a = frameConv(c), st = a ? a.state() : {};
-  const parts = [];
-  if (st.busy) parts.push('回答正在生成，关闭会停止生成。');
-  if (st.unsaved) parts.push(st.rounds + ' 轮问答未保存，关闭后清空，可先点「保存对话」。');
-  if (parts.length && !confirm('关闭「对话 ' + id + '」？\n' + parts.join('\n'))) return;
+  const c = convs.find(x => x.id === id), a = frameConv(c);
   // 替标签通知服务它已关闭；标签自己的关页通知可能来不及发出
   if (a && navigator.sendBeacon) navigator.sendBeacon('/api/bye', new Blob([JSON.stringify({t: TOKEN, page: a.page})], {type: 'text/plain'}));
   const i = convs.indexOf(c);
@@ -2047,8 +2382,12 @@ api('/api/state').then(s => {
   if (!s.doc2kb) miss.push('缺少同目录的 doc2kb_core.py，读不了 docx、xlsx、pptx、doc、xls、ppt、pdf，请重新解压完整的工具目录');
   else if (!s.pdftotext) miss.push('本机没有 pdftotext，读不了 pdf；需要时请安装 poppler-utils');
   if (miss.length) { $('banner').textContent = miss.join('；') + '。'; $('banner').hidden = false; }
+  if (s.memory && !s.memory_notice && !EMBED) {
+    say('askStatus', '记忆已默认打开：提问时选过的文件和核对通过的结论会记在本机，之后提问时自动参考；可在「模型设置」里关闭、查看或清空。', 'info');
+    post('/api/settings', {memory_notice: true}).catch(() => {});
+  }
   loadDirs().then(r => renderPlaces(r.places)).catch(() => {});
-  return setFindMode('browse');
+  return setFindMode(findPrefs.mode);
 }).catch(e => say('findStatus', failText('读取状态', e.message, '请关闭本页，重新双击「双击运行」。'), 'bad'));
 
 </script>

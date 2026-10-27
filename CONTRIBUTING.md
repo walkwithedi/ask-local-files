@@ -6,7 +6,7 @@ Thanks for helping.
 
 1. Open an issue first and describe the problem before writing code. Reading bugs are most useful with a small, fictional sample file that shows them.
 2. Fork the repository, make a branch, and open a pull request against main. The template lists the checks; CI runs them again.
-3. The tool's code (ask_local_files.py, ask_local_files.html, the desktop entry and tests/) is exported from the maintainer's master copy. An accepted change is ported there and comes back with the next export, which then replaces these files; the pull request is closed with a note once that is done. Repository files (README, workflows, scripts/) are edited here directly.
+3. The tool's code (ask_local_files.py, ask_memory.py, ask_local_files.html, the desktop entry and tests/) is exported from the maintainer's master copy. An accepted change is ported there and comes back with the next export, which then replaces these files; the pull request is closed with a note once that is done. Repository files (README, workflows, scripts/) are edited here directly.
 
 ## Rules
 
