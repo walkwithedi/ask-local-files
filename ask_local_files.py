@@ -1895,7 +1895,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(400, {'error': '不认识的记忆操作'})
                 return
         except (sqlite3.Error, OSError) as e:
-            log.warning('memory: %s failed: %s', action, e)
+            # 页面传来的取值只记已知的几种，异常文字去掉换行，免得伪造日志行
+            act = {'wrong': 'wrong', 'fact': 'fact', 'file': 'file', 'clear': 'clear'}.get(action, '?')
+            log.warning('memory: %s failed: %s', act, str(e).replace('\r', ' ').replace('\n', ' '))
             self.send_json(500, {'error': '记忆写不进去（%s）' % e})
             return
         self.send_json(200, {'ok': True, 'count': n, 'stats': self.memory_stats()})

@@ -324,7 +324,7 @@ class OpenPageTest(unittest.TestCase):
         self.addCleanup(shutil.rmtree, root, True)
         exe = os.path.join(root, 'qax', 'qaxbrowser')
         write(exe, '#!/bin/sh\n')
-        os.chmod(exe, 0o755)
+        os.chmod(exe, 0o700)
         write(os.path.join(root, 'sys', 'applications', 'qaxbrowser-safe.desktop'),
               '[Desktop Entry]\nName=x\nExec=env A=1 %s %%U\n[Desktop Action new]\nExec=/bin/false\n' % exe)
         with self.desktop_env(root), mock.patch.object(fa.shutil, 'which', self.which(set())), \
