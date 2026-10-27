@@ -20,8 +20,8 @@ import sys
 log = logging.getLogger("check_repo")
 LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s.%(funcName)s:%(lineno)d - %(message)s"
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-TOOL_SCRIPTS = ["ask_local_files.py", "doc2kb_core.py"]
-LOCAL_MODULES = {"doc2kb_core"}
+TOOL_SCRIPTS = ["ask_local_files.py", "ask_memory.py", "doc2kb_core.py"]
+LOCAL_MODULES = {"ask_memory", "doc2kb_core"}
 PAGE = "ask_local_files.html"
 
 

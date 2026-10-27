@@ -13,7 +13,7 @@ ask_local_files  --  找文件问 AI
       ~/.cache/ask-local-files/index.json，启动即可搜索，后台只重扫修改时间变了的文件夹。
     - 取文字：txt、md、csv 等纯文本直接读取；docx、xlsx、pptx、eml、pdf 和旧版 doc、xls、ppt
       （wps、et、dps 按同类格式试读）用同目录的 doc2kb_core.py 转换（pdf 需要 pdftotext）。
-      文字开头加上文件的路径、文件名、修改时间和作者。取出的文字只留在内存里。
+      文字开头加上文件的路径、文件名、修改时间和作者。
     - 读不了的文件（压缩包等）在列表里给「打开文件夹」，用 xdg-open 或 gio 打开所在文件夹。
     - 问 AI：把选中文件的文字和对话发给 OpenAI 兼容的 /chat/completions 接口，流式返回。
       指令要求每个结论附原文摘句、文件里没有的写明未找到；回答结束后核对摘句是否真在原文里。
@@ -23,6 +23,9 @@ ask_local_files  --  找文件问 AI
     - skill：可选一个 OpenCode 格式的 skill（工具目录 skills/ 里预装的，或 ~/.config/opencode/skills/
       里自建的），正文并进系统消息；模型可用函数调用读 skill 目录里的文件、运行其中的 .py/.sh 脚本
       （自动运行，单次 60 秒，每问最多 5 次），脚本写进临时输出目录的文件可在页面上保存。
+    - 记忆（ask_memory.py，默认开，设置里可关）：提问时选过的文件按段落存进本机 SQLite 记忆
+      （~/.local/share/ask-local-files/memory.sqlite，权限 600），回答里核对通过的摘句连同结论记下；
+      之后提问时按关键字检索记忆，结论与原文段落排在已选文件之后一起发给模型，取用前按文件当前内容复核。
     - 文件夹输入框接受 file:/// 地址；可由本机服务弹出系统的目录选择框（zenity、kdialog 或 tkinter）。
     - 按文件名去重：同名（不区分大小写，去掉一个副本标记后相同也算）只列修改时间最新的一个。
 
@@ -44,6 +47,7 @@ import shlex
 import shutil
 import signal
 import socket
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -59,15 +63,18 @@ from urllib.parse import parse_qs, urlsplit
 LOG_FORMAT = '%(asctime)s [%(levelname)s] %(name)s.%(funcName)s:%(lineno)d - %(message)s'
 log = logging.getLogger('ask_local_files')
 
-VERSION = '1.16'
+VERSION = '2.1'
 HERE = os.path.dirname(os.path.abspath(__file__))
 PAGE_FILE = os.path.join(HERE, 'ask_local_files.html')
 LOG_NAME = 'ask_local_files.log'
 HOME = os.path.expanduser('~')
 XDG_CONFIG = os.environ.get('XDG_CONFIG_HOME') or os.path.join(HOME, '.config')
 XDG_CACHE = os.environ.get('XDG_CACHE_HOME') or os.path.join(HOME, '.cache')
+XDG_DATA = os.environ.get('XDG_DATA_HOME') or os.path.join(HOME, '.local', 'share')
 CONFIG_FILE = os.path.join(XDG_CONFIG, 'ask-local-files', 'config.json')
 CACHE_FILE = os.path.join(XDG_CACHE, 'ask-local-files', 'index.json')
+MEMORY_FILE = os.path.join(XDG_DATA, 'ask-local-files', 'memory.sqlite')
+MEMORY_SHARE = 3        # 选了文件时，记忆至多占发送字数上限（扣除 skill 与对话后）的几分之一
 OPENCODE_DIR = os.path.join(XDG_CONFIG, 'opencode')
 USER_SKILLS = os.path.join(OPENCODE_DIR, 'skills')
 BUNDLED_SKILLS = os.path.join(HERE, 'skills')
@@ -82,6 +89,8 @@ CHECK_EVERY = 30        # 搜索时至多每多少秒校验一次文件夹变化
 PUBLISH_EVERY = 2.0     # 首次扫描时每多少秒放出一次部分结果
 RESULT_LIMIT = 300
 MAX_FILES = 50          # 一次最多选几个文件
+SORTS = ('time_desc', 'time_asc', 'name_asc', 'name_desc')     # 找文件列表的排序，页面下拉框的取值
+DEFAULT_SORT = 'time_desc'
 TREE_SHOWN = MAX_FILES * 2 + 1      # 浏览时交给页面的「全部加入」候选最多几个
 DEFAULT_CHAR_LIMIT = 100000
 PREVIEW_CHARS = 20000
@@ -91,7 +100,15 @@ PLACES = (('家目录', ('',)), ('文档', ('文档', 'Documents')), ('桌面', 
           ('下载', ('下载', 'Downloads')))
 MAX_TEXT_BYTES = 20 * 1024 * 1024   # 纯文本文件最多读这么多字节
 TIMEOUT = 120           # 模型接口最多静默多少秒
+LOCAL_TIMEOUT = 900     # 本机地址的模型接口最多静默多少秒：纯 CPU 读长文件要先算完整段输入才出字
 TEST_TIMEOUT = 30       # 测试连接最多等多少秒
+LOOPBACK = {'127.0.0.1', 'localhost', '::1'}
+# 自动发现的本机模型服务：(类型, 端口, 名称)，探测各自的 /v1/models
+LOCAL_SERVERS = (('llama', 8080, 'llama-server'), ('ollama', 11434, 'Ollama'))
+PROBE_TIMEOUT = 1.5     # 探测本机模型服务最多等多少秒
+OLLAMA_DEFAULT_CTX = 4096   # Ollama 模型未加载时按这个上下文估算，环境变量 OLLAMA_CONTEXT_LENGTH 优先
+CTX_SHARE = 0.75        # 上下文（token，按 1 字计）留四分之一给回答，其余作为发送字数上限
+LOCAL_DOWN = '本机模型服务没有运行：请先启动 llama-server 或 Ollama，再点「重新查找」'
 SKILL_MAX_CHARS = 50000     # SKILL.md 超过这么多字不可选
 SKILL_LIST_MAX = 100        # 每个 skill 最多列出几个脚本、几个参考文件
 SCRIPT_TIMEOUT = 60         # skill 脚本单次最多运行多少秒
@@ -134,11 +151,21 @@ FILE_URL_ERROR = '只支持本机 file:/// 地址。请改用以 / 开头的路�
 COPY_NUM = r' ?(?:\([0-9]+\)|（[0-9]+）)'
 COPY_MARK_RE = re.compile(r'^(.+?)(?:' + COPY_NUM + r'|(?: - 副本|-副本|_副本| \(副本\)|副本| - copy| \(copy\)| copy)(?:'
                           + COPY_NUM + r')?)$')
-NO_MODEL = '没有可用的模型：OpenCode 配置里找不到带接口地址和 AK 的模型，请在「模型设置」里填写自定义接口'
+NO_MODEL = ('没有可用的模型：OpenCode 配置里找不到带接口地址和 AK 的模型，本机也没有运行中的 llama-server 或 Ollama；'
+            '请在「模型设置」里填写自定义接口，或启动本机模型服务后点「重新查找」')
 MISSING_FILE = '文件已不存在或不在已添加的文件夹里，请点「刷新」后重新搜索'
-# 能以应用窗口模式（--app=网址，不显示地址栏）打开的 Chromium 系浏览器，按顺序取第一个找得到的
+# 能以应用窗口模式（--app=网址，不显示地址栏）打开的 Chromium 系浏览器，按顺序取第一个找得到的；
+# 国产浏览器（奇安信、360、统信）排在后面
 APP_BROWSERS = ('chromium', 'chromium-browser', 'google-chrome', 'google-chrome-stable',
-                'microsoft-edge', 'microsoft-edge-stable', 'brave-browser')
+                'microsoft-edge', 'microsoft-edge-stable', 'brave-browser',
+                'qaxbrowser-safe-stable', 'qaxbrowser-safe', 'qaxbrowser',
+                'browser360-cn-stable', 'browser360-cn', 'browser360', 'deepin-browser', 'uos-browser')
+# 上面的命令都不在 PATH 里时，按这些桌面文件的 Exec 找浏览器程序（装在自带目录、不进 PATH 的浏览器）
+APP_DESKTOP_FILES = ('qaxbrowser-safe.desktop', 'qaxbrowser.desktop', 'browser360-cn.desktop',
+                     'com.360.browser-stable.desktop', 'browser360.desktop', 'deepin-browser.desktop',
+                     'uos-browser.desktop')
+
+import ask_memory   # noqa: E402  同目录的记忆模块
 
 try:
     import doc2kb_core
@@ -184,15 +211,20 @@ class Config:
         self.model = str(data.get('model') or '')
         self.dedup = data.get('dedup') is not False     # 按文件名去重，默认开
         self.regex = data.get('regex') is True          # 搜索框按正则表达式，默认关
+        self.memory = data.get('memory') is not False   # 记忆总开关，默认开
+        self.use_memory = data.get('use_memory') is not False   # 「问 AI」里的「参考记忆」，默认开
+        self.memory_notice = data.get('memory_notice') is True  # 已提示过记忆默认打开
 
     def save(self):
         write_private(self.path, {'folders': self.folders, 'char_limit': self.char_limit, 'dedup': self.dedup,
-                                  'regex': self.regex,
+                                  'regex': self.regex, 'memory': self.memory, 'use_memory': self.use_memory,
+                                  'memory_notice': self.memory_notice,
                                   'custom': self.custom, 'model': self.model})
 
     def public(self):
         return {'folders': list(self.folders), 'char_limit': self.char_limit, 'model': self.model, 'dedup': self.dedup,
-                'regex': self.regex,
+                'regex': self.regex, 'memory': self.memory, 'use_memory': self.use_memory,
+                'memory_notice': self.memory_notice,
                 'custom': {'base': self.custom['base'], 'model': self.custom['model'],
                            'has_key': bool(self.custom['key'])},
                 }
@@ -295,8 +327,8 @@ class Snapshot:
             self.starts.append(pos)
             pos += len(line) + 1
 
-    def search(self, words, exts, limit=RESULT_LIMIT, regex=None):
-        """(命中条目, 命中总数)。没有关键字时按扩展名列出最近修改的文件。
+    def search(self, words, exts, limit=RESULT_LIMIT, regex=None, order=DEFAULT_SORT):
+        """(命中条目, 命中总数)，命中条目按 order 排序后取前 limit 个。没有关键字时按扩展名列出全部文件。
         给了 regex（已编译的正则）时不用 words，逐行对显示路径 re.search。"""
         words = [w.lower() for w in words if w]
         if regex is not None:
@@ -318,10 +350,13 @@ class Snapshot:
             pool = (self.entries[i] for i in hits)      # starts 有序，hits 仍按修改时间倒序
         else:
             pool = iter(self.entries)
+        if exts:
+            pool = (e for e in pool if os.path.splitext(e[0])[1].lower().lstrip('.') in exts)
+        if order != DEFAULT_SORT:
+            hits = sort_entries(list(pool), order)
+            return hits[:limit], len(hits)
         out, total = [], 0
         for e in pool:
-            if exts and os.path.splitext(e[0])[1].lower().lstrip('.') not in exts:
-                continue
             total += 1
             if len(out) < limit:
                 out.append(e)
@@ -486,19 +521,19 @@ class FileIndex:
             return None
         return [mtime, files, subs]
 
-    def search(self, query, exts, regex=False):
-        """regex 时整个 query 作为一个不区分大小写的正则，写错时抛 re.error。"""
+    def search(self, query, exts, regex=False, order=DEFAULT_SORT):
+        """regex 时整个 query 作为一个不区分大小写的正则，写错时抛 re.error。order 见 SORTS。"""
         self.maybe_refresh()
         words = query.split()
         pattern = re.compile(query.strip(), re.IGNORECASE) if regex and query.strip() else None
         exts = {x.lower().lstrip('.') for x in re.split(r'[\s,，、;；]+', exts or '') if x.strip('. ')}
-        found, total = self.snap.search(words, exts, regex=pattern)
+        found, total = self.snap.search(words, exts, regex=pattern, order=order)
         reasons = {}
         return {'results': [entry_public(e, reasons) for e in found], 'total': total, 'status': self.status()}
 
-    def browse(self, folder, dedup=False):
+    def browse(self, folder, dedup=False, order=DEFAULT_SORT):
         """按文件夹逐层浏览。folder 为空时列出已添加的文件夹；否则须是已添加的文件夹或其中的子文件夹。
-        dedup 时本层文件与含子文件夹的清单各自按文件名去重（含子文件夹时跨层），每个文件带其余同名文件 dups。
+        本层文件与含子文件夹的清单都按 order（见 SORTS）排序后再去重、截取。dedup 时本层文件与含子文件夹的清单各自按文件名去重（含子文件夹时跨层），每个文件带其余同名文件 dups。
         tree 为「全部加入」用的可读文件，最多 TREE_SHOWN 个：已选最多 MAX_FILES 个，扣掉已选的同名后
         仍能判断能否全部加入、算出个数。"""
         self.maybe_refresh()
@@ -518,6 +553,7 @@ class FileIndex:
                 cur = os.path.join(cur, part)
                 crumbs.append({'path': cur, 'name': part})
         subs, files, tree = snap.browse(folder)
+        files, tree = sort_entries(files, order), sort_entries(tree, order)
         reasons = {}
         layer = dedup_entries(files) if dedup else [(e, []) for e in files]
         kept = [e for e, _ in dedup_entries(tree)] if dedup else tree
@@ -551,6 +587,21 @@ class FileIndex:
             if real == r or real.startswith(r.rstrip(os.sep) + os.sep):
                 return True
         return False
+
+
+def sort_entries(entries, order):
+    """按 order 排序：time_desc 最新在前（索引本来的顺序），time_asc 最旧在前，name_asc、name_desc 按文件名
+    （不区分大小写，同名再按路径）。"""
+    if order == 'time_asc':
+        return sorted(entries, key=lambda e: (e[3], e[0]))
+    if order in ('name_asc', 'name_desc'):
+        return sorted(entries, key=lambda e: (os.path.basename(e[0]).lower(), e[0]), reverse=order == 'name_desc')
+    return list(entries)
+
+
+def sort_arg(value):
+    """页面传来的排序取值，不认识的按默认。"""
+    return value if value in SORTS else DEFAULT_SORT
 
 
 def same_name_key(name):
@@ -1012,9 +1063,116 @@ def host_of(base):
     return urllib.parse.urlsplit(base).netloc or base
 
 
-def model_targets(config):
+def is_loopback(base):
+    try:
+        return (urllib.parse.urlsplit(base).hostname or '') in LOOPBACK
+    except ValueError:
+        return False
+
+
+# 本机地址的接口不走 http_proxy 等环境变量里的代理
+DIRECT = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+def open_url(req, timeout):
+    return (DIRECT.open if is_loopback(req.full_url) else urllib.request.urlopen)(req, timeout=timeout)
+
+
+def get_json(url, timeout=PROBE_TIMEOUT):
+    """GET 一个 JSON 接口；连不上、出错或不是 JSON 时返回 None。"""
+    try:
+        with open_url(urllib.request.Request(url, headers={'Accept': 'application/json'}), timeout) as r:
+            return json.loads(r.read(1024 * 1024))
+    except (OSError, ValueError):
+        return None
+
+
+def positive_int(value):
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else 0
+
+
+def llama_ctx(root):
+    """llama-server 每个槽位的上下文（/props 的 n_ctx），读不到时为 0。"""
+    props = get_json(root + '/props')
+    if not isinstance(props, dict):
+        return 0
+    gen = props.get('default_generation_settings')
+    return positive_int(gen.get('n_ctx')) if isinstance(gen, dict) and gen.get('n_ctx') else \
+        positive_int(props.get('n_ctx'))
+
+
+def ollama_ctx(root):
+    """Ollama 已加载模型的上下文 {模型名: token 数}（/api/ps 的 context_length）。"""
+    ps = get_json(root + '/api/ps')
+    out = {}
+    for m in (ps.get('models') if isinstance(ps, dict) and isinstance(ps.get('models'), list) else []):
+        if isinstance(m, dict) and positive_int(m.get('context_length')):
+            for k in ('name', 'model'):
+                if isinstance(m.get(k), str):
+                    out[m[k]] = m['context_length']
+    return out
+
+
+def discover_local(servers=None):
+    """探测本机的 llama-server 与 Ollama，返回 {id: 模型接口}，id 为 local:类型/模型。
+    每项另带 ctx（上下文 token 数，读不到为 0）与 ctx_note（上下文从哪来）。"""
+    out = {}
+    for kind, port, name in servers or LOCAL_SERVERS:
+        root = 'http://127.0.0.1:%d' % port
+        listed = get_json(root + '/v1/models')
+        data = listed.get('data') if isinstance(listed, dict) else None
+        ids = [m['id'] for m in data if isinstance(m, dict) and isinstance(m.get('id'), str) and m['id']] \
+            if isinstance(data, list) else []
+        if not ids:
+            continue
+        if kind == 'llama':
+            n = llama_ctx(root)
+            ctxs = {i: (n, '本机 llama-server 上下文 %d token' % n if n else '') for i in ids}
+        else:
+            loaded = ollama_ctx(root)
+            env = positive_int(int(os.environ['OLLAMA_CONTEXT_LENGTH'])) \
+                if os.environ.get('OLLAMA_CONTEXT_LENGTH', '').isdigit() else 0
+            guess = env or OLLAMA_DEFAULT_CTX
+            ctxs = {i: (loaded[i], '本机 Ollama 上下文 %d token' % loaded[i]) if i in loaded else
+                    (guess, 'Ollama 模型尚未加载，按上下文 %d token 估算；需要更长时启动 Ollama 前设置 '
+                            'OLLAMA_CONTEXT_LENGTH，加载后点「重新查找」' % guess) for i in ids}
+        for i in ids:
+            out['local:%s/%s' % (kind, i)] = {
+                'base': root + '/v1', 'key': '', 'model': i, 'headers': {}, 'label': '%s（本机 %s）' % (i, name),
+                'host': '127.0.0.1:%d' % port, 'discovered': True, 'ctx': ctxs[i][0], 'ctx_note': ctxs[i][1]}
+    log.info('local models: %s', ', '.join(out) or '-')
+    return out
+
+
+class LocalModels:
+    """最近一次探测到的本机模型；打开页面、展开「模型设置」或点「重新查找」时重新探测。"""
+
+    def __init__(self, servers=None):
+        self.servers = servers
+        self.lock = threading.Lock()
+        self.found = {}
+
+    def refresh(self):
+        found = discover_local(self.servers)
+        with self.lock:
+            self.found = found
+        return found
+
+    def get(self):
+        with self.lock:
+            return dict(self.found)
+
+
+def model_limit(config, tg):
+    """这个模型的发送字数上限：设置值与「上下文 × CTX_SHARE」中较小的。"""
+    ctx = tg.get('ctx') or 0
+    return min(config.char_limit, int(ctx * CTX_SHARE)) if ctx else config.char_limit
+
+
+def model_targets(config, local=None):
     """可用的模型：{id: {base, key, model, headers, label, host}}，以及默认 id。
-    OpenCode 配置里每个服务商的每个模型一项（id 为 oc:服务商/模型），设置里填齐的自定义接口一项（custom）。"""
+    OpenCode 配置里每个服务商的每个模型一项（id 为 oc:服务商/模型），探测到的本机模型各一项（local:类型/模型），
+    设置里填了接口地址和模型名的自定义接口一项（custom，AK 可不填）。"""
     out, default = {}, ''
     conf = opencode_config()
     provs = conf.get('provider') if isinstance(conf.get('provider'), dict) else {}
@@ -1036,8 +1194,10 @@ def model_targets(config):
     mid = conf.get('model')
     if isinstance(mid, str) and 'oc:' + mid in out:
         default = 'oc:' + mid
+    if local is not None:
+        out.update(local.get())
     c = config.custom
-    if c['base'] and c['model'] and c['key']:
+    if c['base'] and c['model']:
         out['custom'] = {'base': c['base'].rstrip('/'), 'key': c['key'], 'model': c['model'], 'headers': {},
                          'label': '%s（自定义）' % c['model'], 'host': host_of(c['base'])}
     if config.model in out:
@@ -1053,6 +1213,9 @@ CITE_RULE = ('只依据下面这些文件的文字回答，不用常识或文件
              '太长时只摘最关键的一句。所选文件中找不到依据的内容，直接写「' + NOT_FOUND + '」，不要推测。')
 CITE_RE = re.compile(r'文件\s*(\d+)\s*[:：]\s*「([^「」]+)」')
 SCRIPT_NOTE = '（脚本输出）'
+MEMORY_NOTE = ('标「来自记忆」的文件是以前提问时用过的文件的节选，按这次的问题从本机记忆里找出，已按文件当前内容复核；'
+               '其中「以前的结论」只是线索，引用时照样写（文件 N：「原文摘句」），摘句从该文件「原文节选」里逐字照抄。')
+NO_MEMORY_HIT = '没有选文件，记忆里也没有相关内容：请先在「找文件」里加入要用的文件，或选一个 skill'
 SKILL_INTRO = ('使用者选用了 skill「%s」，下面是它的说明，按说明完成使用者的要求。'
                '说明里提到的 skill 目录文件用 read_skill_file 读取，脚本用 run_script 运行，要交给脚本的长内容先用 '
                + WRITE_TOOL + ' 写进工作目录（只能用这几个工具，'
@@ -1066,17 +1229,46 @@ def skill_prompt(skill):
     return SKILL_INTRO % skill['name'] + '\n\n===== skill 说明 =====\n' + skill['body']
 
 
-def build_messages(files, history, skill=None):
-    """files: [(路径, 文字)]；history: [{role, content}]，最后一条是使用者的新问题；skill 为所选 skill。"""
+def memory_text(block):
+    """记忆里一个文件的原文节选：摘句按它核对。"""
+    return '\n\n'.join(block['paras'])
+
+
+def memory_part(n, block):
+    lines = ['===== 文件 %d：%s（来自记忆，节选）=====' % (n, block['path'])]
+    if block['facts']:
+        lines.append('以前的结论（只作线索）：')
+        lines += ['- %s（原文：「%s」）' % (f['conclusion'], f['quote']) for f in block['facts']]
+        lines.append('')
+    lines.append('原文节选：')
+    return '\n'.join(lines) + '\n' + memory_text(block)
+
+
+def build_messages(files, history, skill=None, memory=()):
+    """files: [(路径, 文字)]；history: [{role, content}]，最后一条是使用者的新问题；skill 为所选 skill；
+    memory: 从记忆里找出的 [{'path', 'facts', 'paras'}]，编号接在已选文件之后。"""
     parts = [skill_prompt(skill)] if skill else []
+    if files or memory:
+        parts.append(CITE_RULE + (SKILL_CITE_NOTE if skill else ''))
     if files:
-        parts += [CITE_RULE + (SKILL_CITE_NOTE if skill else ''),
-                  '使用者选了下面 %d 个文件，以下是从中取出的文字。' % len(files)]
+        parts.append('使用者选了下面 %d 个文件，以下是从中取出的文字。' % len(files))
     else:
         parts.append('使用者没有选文件。')
+    if memory:
+        parts.append(MEMORY_NOTE)
     for i, (path, text) in enumerate(files, 1):
         parts.append('===== 文件 %d：%s =====\n%s' % (i, path, text))
+    for i, block in enumerate(memory, len(files) + 1):
+        parts.append(memory_part(i, block))
     return [{'role': 'system', 'content': '\n\n'.join(parts)}] + history
+
+
+def memory_public(memory, first):
+    """页面上「参考了记忆」的说明：用到的结论与段落及其出处。"""
+    return {'facts': sum(len(b['facts']) for b in memory), 'paras': sum(len(b['paras']) for b in memory),
+            'files': [{'n': i, 'path': b['path'], 'paras': len(b['paras']),
+                       'facts': [{'conclusion': f['conclusion'], 'quote': f['quote']} for f in b['facts']]}
+                      for i, b in enumerate(memory, first)]}
 
 
 def check_quotes(answer, texts):
@@ -1105,11 +1297,12 @@ def fit_texts(texts, limit):
     return out, True
 
 
-def http_error_text(code, detail, tools=False):
-    """把接口的 HTTP 错误写成「原因：下一步怎么做」。"""
+def http_error_text(code, detail, tools=False, local=False):
+    """把接口的 HTTP 错误写成「原因：下一步怎么做」；local 为本机地址的接口。"""
     if tools and code in (400, 404, 422, 500, 501) and re.search(r'tool|function', detail, re.I):
-        return ('此模型不支持 skill 工具（函数调用，HTTP %d）：请改选不带脚本和参考文件的 skill，'
-                '或换一个支持函数调用的模型' % code)
+        return ('此模型不支持 skill 工具（函数调用，HTTP %d）：请改用「不用 skill」或不带脚本和参考文件的 skill，'
+                '或换一个支持函数调用的模型' % code) + ('；本机 llama-server 须加 --jinja 启动才支持函数调用'
+                                                     if local else '')
     if code in (401, 403):
         return '接口拒绝了请求（HTTP %d），多半是 AK 无效或过期：请检查 OpenCode 配置或「模型设置」里的 AK' % code
     if code == 404:
@@ -1121,30 +1314,41 @@ def http_error_text(code, detail, tools=False):
     return '接口返回 HTTP %d%s' % (code, '：' + detail if detail else '')
 
 
-def stream_chat(tg, msgs, timeout=TIMEOUT, tools=None):
+def model_timeout(tg):
+    return LOCAL_TIMEOUT if is_loopback(tg['base']) else TIMEOUT
+
+
+def stream_chat(tg, msgs, timeout=None, tools=None):
     """从 OpenAI 兼容接口逐段取回答（逐段产出 str）；接口不流式时整段返回。给了 tools 且模型要调用时，
-    最后产出一个列表 [{'id', 'name', 'arguments'}]。出错抛 ModelError，写明原因。"""
+    最后产出一个列表 [{'id', 'name', 'arguments'}]。出错抛 ModelError，写明原因。
+    timeout 默认按接口地址取：本机 LOCAL_TIMEOUT，其他 TIMEOUT。没有 AK 时不发 Authorization。"""
+    timeout = timeout or model_timeout(tg)
     req_body = {'model': tg['model'], 'messages': msgs, 'stream': True}
     if tools:
         req_body['tools'] = tools
     body = json.dumps(req_body).encode('utf-8')
-    headers = {'Content-Type': 'application/json', 'Accept': 'text/event-stream',
-               'Authorization': 'Bearer ' + tg['key']}
+    headers = {'Content-Type': 'application/json', 'Accept': 'text/event-stream'}
+    if tg['key']:
+        headers['Authorization'] = 'Bearer ' + tg['key']
     headers.update(tg['headers'])
     req = urllib.request.Request(tg['base'] + '/chat/completions', data=body, method='POST', headers=headers)
     try:
-        r = urllib.request.urlopen(req, timeout=timeout)
+        r = open_url(req, timeout)
     except urllib.error.HTTPError as e:
         try:
             detail = ' '.join(e.read(300).decode('utf-8', 'replace').split())
         except OSError:
             detail = ''
-        raise ModelError(http_error_text(e.code, detail, bool(tools)))
+        raise ModelError(http_error_text(e.code, detail, bool(tools), is_loopback(tg['base'])))
     except (socket.timeout, TimeoutError):
         raise ModelError('接口 %d 秒没有响应' % timeout)
     except urllib.error.URLError as e:
+        if tg.get('discovered') and not isinstance(e.reason, (socket.timeout, TimeoutError)):
+            raise ModelError(LOCAL_DOWN)
         raise ModelError('连不上接口：%s' % e.reason)
     except OSError as e:
+        if tg.get('discovered'):
+            raise ModelError(LOCAL_DOWN)
         raise ModelError('连不上接口：%s' % e)
     try:
         with r:
@@ -1365,13 +1569,14 @@ def log_file_path():
 
 
 class WebState:
-    def __init__(self, port, token, config, index):
+    def __init__(self, port, token, config, index, memory=None):
         self.port = port
         self.token = token
         self.origin = 'http://127.0.0.1:%d' % port
         self.config = config
         self.index = index
         self.texts = TextCache()
+        self.memory = memory or ask_memory.Memory(MEMORY_FILE)     # 用到时才打开库文件
         self.started = time.monotonic()
         self.lock = threading.Lock()
         self.pages = {}         # 页面编号 -> (最近一次心跳时间, 所在窗口编号)
@@ -1382,6 +1587,7 @@ class WebState:
         self.out_root = None    # skill 脚本输出的临时目录，退出时删除
         self.outputs = {}       # 输出文件编号 -> (路径, 文件名)
         self.picker = FolderPicker(detect_picker())
+        self.local_models = LocalModels()
 
     def ping(self, page, shell=None):
         """登记心跳，返回当前开着的窗口数：同一窗口里各标签的页面（shell 相同）算一个。"""
@@ -1471,9 +1677,12 @@ def tell_user(msg):
             log.debug('%s failed: %s', cmd[0], e)
 
 
-def models_public(config):
-    targets, default = model_targets(config)
-    return {'models': [{'id': k, 'label': v['label'], 'host': v['host']} for k, v in targets.items()],
+def models_public(config, local=None):
+    """页面用的模型清单：loopback 为本机地址（等待更久），auth 为是否带 AK，limit 为按上下文折算的字数上限。"""
+    targets, default = model_targets(config, local)
+    return {'models': [{'id': k, 'label': v['label'], 'host': v['host'], 'loopback': is_loopback(v['base']),
+                        'auth': bool(v['key']), 'limit': int(v['ctx'] * CTX_SHARE) if v.get('ctx') else 0,
+                        'limit_note': v.get('ctx_note') or ''} for k, v in targets.items()],
             'default': default}
 
 
@@ -1544,14 +1753,25 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
         elif url.path == '/api/state':
+            st.local_models.refresh()
             out = st.config.public()
-            out.update(models_public(st.config))
+            out.update(models_public(st.config, st.local_models))
             out.update({'index': st.index.status(), 'version': VERSION, 'max_files': MAX_FILES,
                         'picker': bool(st.picker.kind),
                         'pdftotext': bool(shutil.which('pdftotext')), 'doc2kb': doc2kb_core is not None})
+            out['memory_stats'] = self.memory_stats()
             self.send_json(200, out)
         elif url.path == '/api/dirs':
             self.send_json(200, {'dirs': list_dirs(arg('prefix')), 'places': common_places()})
+        elif url.path == '/api/memory':
+            try:
+                out = st.memory.listing(arg('q').strip()[:200])
+            except (sqlite3.Error, OSError) as e:
+                log.warning('memory: listing failed: %s', e)
+                self.send_json(500, {'error': '读不了记忆（%s）' % e})
+                return
+            out['stats'] = self.memory_stats()
+            self.send_json(200, out)
         elif url.path == '/api/skills':
             skills, problems = load_skills()
             self.send_json(200, {'skills': skills_public(skills), 'problems': problems, 'user_dir': USER_SKILLS})
@@ -1572,12 +1792,12 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
         elif url.path == '/api/search':
             try:
-                self.send_json(200, st.index.search(arg('q'), arg('ext'), arg('re') == '1'))
+                self.send_json(200, st.index.search(arg('q'), arg('ext'), arg('re') == '1', sort_arg(arg('sort'))))
             except re.error as e:
                 self.send_json(400, {'error': '正则表达式有误：%s' % e})
         elif url.path == '/api/browse':
             dedup = arg('dedup')
-            self.send_json(200, st.index.browse(arg('dir'), dedup == '1' if dedup else st.config.dedup))
+            self.send_json(200, st.index.browse(arg('dir'), dedup == '1' if dedup else st.config.dedup, sort_arg(arg('sort'))))
         elif url.path == '/api/text':
             path = st.index.resolve(arg('path'))
             if not path:
@@ -1630,8 +1850,16 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(200, {'ok': True, 'started': started, 'index': st.index.status()})
         elif url.path == '/api/chat':
             self.post_chat(data)
+        elif url.path == '/api/memory':
+            self.post_memory(data)
         elif url.path == '/api/test-model':
             self.post_test_model(data)
+        elif url.path == '/api/local-models':
+            found = st.local_models.refresh()
+            out = models_public(st.config, st.local_models)
+            out['found'] = {k: sum(1 for i in found if i.startswith('local:%s/' % k)) for k, _, _ in LOCAL_SERVERS}
+            out['servers'] = [{'kind': k, 'port': p, 'name': n} for k, p, n in LOCAL_SERVERS]
+            self.send_json(200, out)
         elif url.path == '/api/pick-folder':
             self.post_pick_folder(data)
         elif url.path == '/api/open-folder':
@@ -1642,6 +1870,35 @@ class Handler(BaseHTTPRequestHandler):
             self.post_export(data)
         else:
             self.send_json(404, {'error': '没有这个地址'})
+
+    def memory_stats(self):
+        try:
+            return self.state.memory.stats()
+        except (sqlite3.Error, OSError) as e:
+            log.warning('memory: stats failed: %s', e)
+            return {'files': 0, 'facts': 0, 'bytes': 0, 'max_bytes': ask_memory.MAX_BYTES, 'error': str(e)}
+
+    def post_memory(self, data):
+        """记忆的管理：「不对」（wrong）、删一条结论（fact）、忘掉一个文件（file）、清空（clear）。"""
+        mem, action = self.state.memory, data.get('action')
+        try:
+            if action == 'wrong' and isinstance(data.get('answer_id'), str) and data['answer_id']:
+                n = mem.wrong(data['answer_id'])
+            elif action == 'fact' and isinstance(data.get('id'), int) and not isinstance(data['id'], bool):
+                n = int(mem.forget_fact(data['id']))
+            elif action == 'file' and isinstance(data.get('path'), str):
+                n = int(mem.forget_file(data['path']))
+            elif action == 'clear':
+                mem.clear()
+                n = 0
+            else:
+                self.send_json(400, {'error': '不认识的记忆操作'})
+                return
+        except (sqlite3.Error, OSError) as e:
+            log.warning('memory: %s failed: %s', action, e)
+            self.send_json(500, {'error': '记忆写不进去（%s）' % e})
+            return
+        self.send_json(200, {'ok': True, 'count': n, 'stats': self.memory_stats()})
 
     def post_docx(self, data):
         """「保存为 Word」：把页面发来的 Markdown 转成 docx 返回，不落盘。"""
@@ -1739,9 +1996,12 @@ class Handler(BaseHTTPRequestHandler):
                 cfg.dedup = bool(data['dedup'])
             if 'regex' in data:
                 cfg.regex = bool(data['regex'])
+            for k in ('memory', 'use_memory', 'memory_notice'):
+                if k in data:
+                    setattr(cfg, k, bool(data[k]))
             cfg.save()
         out = cfg.public()
-        out.update(models_public(cfg))
+        out.update(models_public(cfg, self.state.local_models))
         self.send_json(200, out)
 
 
@@ -1779,14 +2039,16 @@ class Handler(BaseHTTPRequestHandler):
 
     def post_test_model(self, data):
         """向所选模型发一条极短的请求，拿到第一段回答即算连通。"""
-        targets, default = model_targets(self.state.config)
+        targets, default = model_targets(self.state.config, self.state.local_models)
         tg = targets.get(data.get('model') or default)
         if not tg:
             self.send_json(200, {'ok': False, 'error': NO_MODEL})
             return
         reply = ''
         try:
-            for piece in stream_chat(tg, [{'role': 'user', 'content': '请只回复「好」。'}], timeout=TEST_TIMEOUT):
+            # 本机模型第一次请求要先加载模型，测试连接也按普通接口的时限等
+            for piece in stream_chat(tg, [{'role': 'user', 'content': '请只回复「好」。'}],
+                                     timeout=TIMEOUT if is_loopback(tg['base']) else TEST_TIMEOUT):
                 reply = piece
                 break
         except ModelError as e:
@@ -1806,7 +2068,8 @@ class Handler(BaseHTTPRequestHandler):
             if skill['too_long']:
                 self.send_json(400, {'error': 'skill「%s」的说明超过 %d 字，不能选用' % (skill['name'], SKILL_MAX_CHARS)})
                 return
-        if not isinstance(files, list) or len(files) > MAX_FILES or (not files and not skill):
+        use_mem = st.config.memory and data.get('memory') is True
+        if not isinstance(files, list) or len(files) > MAX_FILES or (not files and not skill and not use_mem):
             self.send_json(400, {'error': '请选 1 到 %d 个文件' % MAX_FILES})
             return
         if not isinstance(history, list) or not history or not all(
@@ -1819,7 +2082,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(400, {'error': '请先写下要问的内容'})
                 return
             history[-1]['content'] = EMPTY_ASK
-        targets, default = model_targets(st.config)
+        targets, default = model_targets(st.config, st.local_models)
         tg = targets.get(data.get('model') or default)
         if not tg:
             self.send_json(400, {'error': NO_MODEL})
@@ -1837,8 +2100,10 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(400, {'error': '取不出文字：%s（%s）' % (path, e)})
                 return
         files = paths       # 之后只用索引里存的路径
+        if st.config.memory:
+            self.remember_files(paths, texts)
         # 字数上限管文件、skill 说明与对话的合计；截断只截文件，给 skill 和对话留出位置
-        limit = st.config.char_limit
+        limit = model_limit(st.config, tg)
         files_chars, history_chars = sum(len(t) for t in texts), sum(len(m['content']) for m in history)
         skill_chars = len(skill['body']) if skill else 0
         fixed = history_chars + skill_chars
@@ -1851,13 +2116,33 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(413, {'error': 'too_long', 'total': total, 'files': files_chars,
                                  'history': history_chars, 'skill': skill_chars, 'limit': limit})
             return
+        # 记忆：没选文件时可用全部余量；选了文件时至多占余量的 1/MEMORY_SHARE，且只用文件用不完的部分，
+        # 不因记忆而要求截断；已在截断时照样给记忆留出这一份
+        room = limit - fixed
+        if not files:
+            budget = room
+        elif data.get('truncate'):
+            budget = room // MEMORY_SHARE
+        else:
+            budget = min(room // MEMORY_SHARE, room - files_chars)
+        # 按最近两问检索：追问（如「那第二阶段呢」）与「继续」也能带上前一问的关键字
+        asks = [m['content'] for m in history if m['role'] == 'user'][-2:]
+        memory = self.recall('\n'.join(reversed(asks)), paths, budget) if use_mem else []
+        mem_chars = sum(len(memory_part(i, b)) for i, b in enumerate(memory, 1))
+        while memory and mem_chars > (room - files_chars if files and not data.get('truncate') else room):
+            # 估算预算时没算每个文件的标题行：放不下时从最不相关的文件起去掉
+            mem_chars -= len(memory_part(len(memory), memory.pop()))
+        if not files and not skill and not memory:
+            self.send_json(400, {'error': NO_MEMORY_HIT})
+            return
+        mem_texts = [memory_text(b) for b in memory]
         full = texts
-        texts, cut = fit_texts(texts, limit - fixed)
+        texts, cut = fit_texts(texts, room - mem_chars)
         msgs = build_messages(list(zip(files, texts)), [{'role': m['role'], 'content': m['content']}
-                                                       for m in history], skill)
+                                                       for m in history], skill, memory)
         tools = skill_tools(skill) if skill else None
-        log.info('chat: %d files, %d chars, model %s, host %s, skill %s, tools %s', len(files), total,
-                 tg['model'], tg['host'], skill['name'] if skill else '-', bool(tools))
+        log.info('chat: %d files, %d chars, %d from memory, model %s, host %s, skill %s, tools %s', len(files),
+                 total, mem_chars, tg['model'], tg['host'], skill['name'] if skill else '-', bool(tools))
         self.send_response(200)
         self.send_header('Content-Type', 'application/x-ndjson; charset=utf-8')
         self.send_header('Cache-Control', 'no-store')
@@ -1868,7 +2153,7 @@ class Handler(BaseHTTPRequestHandler):
                             self.wfile.flush())
         try:
             emit({'start': True, 'truncated': cut, 'model': tg['model'], 'host': tg['host'],
-                  'skill': skill['name'] if skill else ''})
+                  'skill': skill['name'] if skill else '', 'memory': memory_public(memory, len(files) + 1)})
             pieces, used, writes = [], 0, 0
             if skill and skill['scripts']:
                 work = st.new_work_dir()
@@ -1904,14 +2189,20 @@ class Handler(BaseHTTPRequestHandler):
                 if used >= MAX_TOOL_CALLS:
                     msgs.append({'role': 'user', 'content': TOOL_LIMIT_NOTE})
             answer = ''.join(pieces)
-            if files:
-                count, missing = check_quotes(answer, full)
+            if files or memory:
+                count, missing = check_quotes(answer, full + mem_texts)
                 uncited = count == 0 and NOT_FOUND not in answer and not (skill and SCRIPT_NOTE in answer)
             else:
                 count, missing, uncited = 0, [], False
-            log.info('answer: %d quotes, %d not found in files, %d tool calls, %d writes',
-                     count, len(missing), used, writes)
-            emit({'done': True, 'quotes': count, 'missing': missing, 'uncited': uncited})
+            answer_id, kept = '', 0
+            if st.config.memory and count > len(missing):
+                answer_id = secrets.token_urlsafe(9)
+                sources = dict(enumerate(files + [b['path'] for b in memory], 1))
+                kept = self.remember_answer(answer_id, history[-1]['content'], answer, sources, missing)
+            log.info('answer: %d quotes, %d not found in files, %d remembered, %d tool calls, %d writes',
+                     count, len(missing), kept, used, writes)
+            emit({'done': True, 'quotes': count, 'missing': missing, 'uncited': uncited,
+                  'answer_id': answer_id if kept else '', 'remembered': kept})
         except ModelError as e:
             log.warning('chat failed: %s', e)
             try:
@@ -1924,6 +2215,29 @@ class Handler(BaseHTTPRequestHandler):
             if work:
                 shutil.rmtree(work, ignore_errors=True)
             st.chat_end()
+
+    # 记忆出错（库文件损坏、磁盘满等）只记日志，不影响提问
+    def remember_files(self, paths, texts):
+        for path, text in zip(paths, texts):
+            try:
+                self.state.memory.remember_file(path, os.stat(path), text)
+            except (sqlite3.Error, OSError) as e:
+                log.warning('memory: cannot remember %s: %s', path, e)
+                return
+
+    def recall(self, question, exclude, budget):
+        try:
+            return self.state.memory.recall(question, exclude, budget, lambda p: self.state.texts.get(p)[0])
+        except (sqlite3.Error, OSError) as e:
+            log.warning('memory: recall failed: %s', e)
+            return []
+
+    def remember_answer(self, answer_id, question, answer, sources, missing):
+        try:
+            return self.state.memory.remember_answer(answer_id, question, answer, sources, missing)
+        except (sqlite3.Error, OSError) as e:
+            log.warning('memory: cannot remember answer: %s', e)
+            return 0
 
     def client_gone(self):
         """页面断开（点了「停止」或关了页面）时返回 True。"""
@@ -2009,12 +2323,52 @@ def watchdog(server, st, interval=2):
     server.shutdown()
 
 
+def desktop_dirs():
+    """XDG 应用目录：XDG_DATA_HOME 与 XDG_DATA_DIRS 下的 applications。"""
+    home = os.environ.get('XDG_DATA_HOME') or os.path.join(HOME, '.local', 'share')
+    dirs = os.environ.get('XDG_DATA_DIRS') or '/usr/local/share:/usr/share'
+    return [os.path.join(d, 'applications') for d in [home] + dirs.split(':') if d]
+
+
+def desktop_exec(path):
+    """桌面文件 [Desktop Entry] 里 Exec 的程序：绝对路径或 PATH 里的命令，存在且可执行时返回完整路径。"""
+    try:
+        with open(path, encoding='utf-8', errors='replace') as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return None
+    entry = False
+    for line in lines:
+        line = line.strip()
+        if line.startswith('['):
+            entry = line == '[Desktop Entry]'
+        elif entry and line.startswith('Exec='):
+            try:
+                words = shlex.split(line[5:])
+            except ValueError:
+                return None
+            while words and (words[0] == 'env' or '=' in words[0]):     # env 变量=值 程序 ……
+                words = words[1:]
+            if not words:
+                return None
+            exe = words[0] if os.path.isabs(words[0]) else shutil.which(words[0])
+            return exe if exe and os.path.isfile(exe) and os.access(exe, os.X_OK) else None
+    return None
+
+
 def find_app_browser():
-    """返回第一个找得到的 Chromium 系浏览器路径，没有时返回 None。"""
+    """返回第一个找得到的 Chromium 系浏览器路径：先按 APP_BROWSERS 在 PATH 里找，再按 APP_DESKTOP_FILES 的 Exec 找；
+    都没有时返回 None。"""
     for name in APP_BROWSERS:
         path = shutil.which(name)
         if path:
             return path
+    for d in desktop_dirs():
+        for name in APP_DESKTOP_FILES:
+            exe = desktop_exec(os.path.join(d, name))
+            if exe:
+                log.info('browser from %s', os.path.join(d, name))
+                return exe
     return None
 
 
@@ -2029,6 +2383,8 @@ def open_page(url, app=True):
             return True
         except OSError as e:
             log.warning('app window failed with %s: %s', exe, e)
+    elif app:
+        log.info('no Chromium-family browser found, using the default browser')
     return webbrowser.open(url)
 
 

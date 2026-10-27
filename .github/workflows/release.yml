@@ -48,9 +48,9 @@ jobs:
           TAG: ${{ steps.decide.outputs.tag }}
         run: |
           mkdir -p dist
-          # the tool only: the server, the page, the converter copy, the bundled skills, the desktop entry, docs and licence
+          # the tool only: the server, the memory module, the page, the converter copy, the bundled skills, the desktop entry, docs and licence
           git archive --format=zip --prefix=ask-local-files/ -o "dist/ask-local-files-${TAG}.zip" HEAD \
-            ask_local_files.py ask_local_files.html doc2kb_core.py skills 双击运行.desktop README.md README.zh-CN.md LICENSE CHANGELOG.md VERSION DOC2KB_VERSION
+            ask_local_files.py ask_memory.py ask_local_files.html doc2kb_core.py skills 双击运行.desktop README.md README.zh-CN.md LICENSE CHANGELOG.md VERSION DOC2KB_VERSION
       - name: Publish
         if: steps.decide.outputs.run == 'true'
         env:

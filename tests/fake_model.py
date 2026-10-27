@@ -9,6 +9,7 @@
     long      流式返回 200 行（测对话区滚动）
     cite      回答带两条摘句：一条在「季度总结.txt」原文里，一条不在
     notfound  回答「所选文件中未找到」
+    memo      回答带一条摘句「第一阶段在三月底完成验收」，引自文件 1（测记忆）
     err401 / err404 / err429 / err500   返回对应状态码
     toolong   返回 400，内容含 context length exceeded
     call:<工具名>:<JSON 参数>   请求带 tools 且还没有工具结果时流式返回一次工具调用（参数分两段发），
@@ -17,7 +18,10 @@
     seq:<JSON 列表>   列表每项为 [工具名, 参数对象]，按已有工具结果数依次调用下一个；
               用完或请求不带 tools 时回答「结果：」加全部工具结果（以「|」分隔）
     notools   请求带 tools 时返回 400（tools not supported）
-GET /last 返回最近一次请求的 JSON 正文。
+GET /last 返回最近一次请求的 JSON 正文（其他 GET 路径同样返回，除非设了 serving）。
+FakeModel.auth 为最近一次请求的 Authorization 头（没有时为 None）。
+FakeModel.serving 设为 {'models': [...], 'props': {...}, 'ps': {...}} 时模拟本机模型服务：
+    GET /v1/models 列出 models，/props（llama-server）与 /api/ps（Ollama）返回对应内容，没给的返回 404。
 
 单独运行时监听 127.0.0.1 的随机端口，把端口号打印到标准输出第一行。
 """
@@ -31,11 +35,23 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 class FakeModel(BaseHTTPRequestHandler):
     last = {}
+    auth = None
+    serving = None
 
     def log_message(self, fmt, *args):
         pass
 
     def do_GET(self):
+        local = FakeModel.serving
+        if local is not None:
+            path = self.path.split('?')[0]
+            if path == '/v1/models':
+                self.error(200, json.dumps({'data': [{'id': m} for m in local.get('models') or []]}))
+            elif path in ('/props', '/api/ps') and local.get(path.strip('/').split('/')[-1]) is not None:
+                self.error(200, json.dumps(local[path.strip('/').split('/')[-1]]))
+            else:
+                self.error(404, '{"error":"not found"}')
+            return
         body = json.dumps(FakeModel.last, ensure_ascii=False).encode('utf-8')
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
@@ -55,6 +71,7 @@ class FakeModel(BaseHTTPRequestHandler):
         n = int(self.headers.get('Content-Length') or 0)
         data = json.loads(self.rfile.read(n).decode('utf-8'))
         FakeModel.last = data
+        FakeModel.auth = self.headers.get('Authorization')
         model = data.get('model', '')
         if model.startswith('err'):
             self.error(int(model[3:]), '{"error":{"message":"fake error"}}')
@@ -86,6 +103,8 @@ class FakeModel(BaseHTTPRequestHandler):
             pieces = ['要点一（文件 1：「甲甲', '甲」）。', '要点二（文件 1：「编造的话」）。']
         if model == 'notfound':
             pieces = ['所选文件中未找到。']
+        if model == 'memo':
+            pieces = ['第一阶段三月底验收（文件 1：「第一阶段', '在三月底完成验收」）。']
         if model == 'md':
             text = ('# 标题\n\n**加粗** 与 *斜体* 和 `代码`，见 [说明](https://example.com/a)\n\n'
                     '- 甲\n  - 甲一\n- 乙\n\n1. 一\n2. 二\n\n> 引用\n\n---\n\n'

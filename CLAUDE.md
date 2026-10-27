@@ -12,7 +12,7 @@ This repository is public: code, history, commit e-mails, issues, pull requests 
 
 ## Layout and rules
 
-- The tool's code (ask_local_files.py, ask_local_files.html, 双击运行.desktop, tests/) is exported from the maintainer's master copy and replaced by each export. Do not change it here: describe the change to the user so it can be made in the master copy, and only README files, CHANGELOG.md, VERSION, scripts/ and the repository configuration are edited here.
+- The tool's code (ask_local_files.py, ask_memory.py, ask_local_files.html, 双击运行.desktop, tests/) is exported from the maintainer's master copy and replaced by each export. Do not change it here: describe the change to the user so it can be made in the master copy, and only README files, CHANGELOG.md, VERSION, scripts/ and the repository configuration are edited here.
 - doc2kb_core.py is an unchanged copy of the walkwithedi/doc2kb release named in DOC2KB_VERSION; scripts/check_doc2kb.py and CI compare it with that release. Never edit it here.
 - Python 3 standard library only; the page loads nothing from the network; at run time the tool contacts only the model endpoint the user configured. scripts/check_repo.py enforces the imports and the page.
 - Scripts log to stderr in the format the others use and take --log-level.

@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.1.0
+
+- Find files: 搜索 now comes before 浏览文件夹, and the page opens on the tab used last. A new 排序 ("sort") menu offers newest first (default), oldest first, name A→Z and name Z→A for both tabs; search and browse sort on the server before the 300-entry limit, and the choice is remembered in the browser.
+- 加入前 10 个 and 加入前 30 个 ("add the first 10 / 30") next to 全部加入 take files in the chosen order, subfolders included on the browse tab, and are disabled when fewer places are left.
+- 复制已选择的文件路径 under 已选 copies the full paths of the picked files, one per line, for an agent such as OpenCode to work on; failures show the paths for copying by hand.
+- Closing a conversation tab no longer asks; quitting still does.
+- Memory (`ask_memory.py`): files picked for questions and conclusions whose quotes passed the check are kept in `~/.local/share/ask-local-files/memory.sqlite` and consulted for later questions, re-checked against the files' current content; questions may be asked without picking files. 参考记忆, 不对 and 查看记忆 / 清空记忆 under 模型设置 control it. On by default, so extracted text of picked files is now written to disk unless memory is turned off.
+- Local models: llama-server on port 8080 and Ollama on port 11434 are found automatically and listed with their models; their context sets the character limit, and 重新查找 looks again. Endpoints on this computer wait up to 900 seconds and bypass proxies. The custom endpoint's API key may be left empty.
+- 找文件, 已选 and 问 AI fold to one line by clicking their title, with a summary, remembered in the browser; on narrow screens 找文件 folds itself once a conversation starts.
+- Double-clicking also opens Qianxin, 360 and UOS Chromium-based browsers as app windows, found through their desktop files when not on PATH.
+
 ## 1.16.0
 
 - Works without a model endpoint: when no model is configured, 问 AI shrinks to one line with 模型设置 and the file finder takes the full width; the model settings no longer open by themselves.
