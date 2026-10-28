@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.2.0
+
+- Memory is easier to reach: 记忆设置 ("memory settings") next to 参考记忆, the 已记住 N 条结论 ("N conclusions kept") line under an answer, and a 记忆设置 button in the first-run notice open 模型设置, scroll to its 记忆 section and move focus there; the line under an answer also opens 查看记忆. The entry next to 参考记忆 hides with it when memory is off.
+- The page header now mentions memory and where to manage it.
+
 ## 2.1.0
 
 - Find files: 搜索 now comes before 浏览文件夹, and the page opens on the tab used last. A new 排序 ("sort") menu offers newest first (default), oldest first, name A→Z and name Z→A for both tabs; search and browse sort on the server before the 300-entry limit, and the choice is remembered in the browser.

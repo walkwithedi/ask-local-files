@@ -90,6 +90,7 @@
   .meta button.link { padding:0; text-align:left; word-break:break-all; }
   ul.list ul.dups { flex-basis:100%; min-width:0; margin:2px 0 0 1.2em; }
   ul.list ul.dups li { padding:3px 0; }
+  .mem-row { display:inline-flex; gap:4px; align-items:center; }
   .dedup { display:inline-flex; gap:4px; align-items:center; font-size:13px; color:var(--muted); margin-top:6px; }
   .pickrow { flex-wrap:nowrap; }
   .pickrow input { flex:1 1 auto; width:auto; min-width:0; }
@@ -215,7 +216,7 @@
       <button id="quit" type="button">退出</button>
     </div>
   </header>
-  <p class="sub">逐层浏览或按文件名找出文件交给 AI，或选用 skill 让 AI 运行脚本处理；点「＋ 新对话」可在新标签里并行。支持 Word（docx）、Excel（xlsx、xlsm）、PowerPoint（pptx）、旧版 doc、xls、ppt（wps、et、dps 按同类格式试读）、PDF、邮件（eml）、网页（html、htm）、纯文本与代码文件；压缩包等读不了的文件可点「打开文件夹」自己处理。</p>
+  <p class="sub">逐层浏览或按文件名找出文件交给 AI，或选用 skill 让 AI 运行脚本处理；点「＋ 新对话」可在新标签里并行。支持 Word（docx）、Excel（xlsx、xlsm）、PowerPoint（pptx）、旧版 doc、xls、ppt（wps、et、dps 按同类格式试读）、PDF、邮件（eml）、网页（html、htm）、纯文本与代码文件；压缩包等读不了的文件可点「打开文件夹」自己处理。勾选「参考记忆」时参考本机记住的文件和结论，可在「记忆设置」里查看或清空。</p>
   <div id="closed">服务已退出，可关闭本页。需要再用时重新双击「双击运行」。</div>
   <div id="banner" class="banner" role="status" hidden></div>
   <div id="convBar" hidden>
@@ -338,7 +339,7 @@
       <select id="skillSel"><option value="">不用 skill</option></select>
       <button id="skillReload" class="link" type="button">重新读取</button>
     </div>
-    <label id="useMemRow" class="dedup" style="margin-top:0"><input id="useMemory" type="checkbox" checked>参考记忆</label>
+    <span id="useMemRow" class="mem-row"><label class="dedup" style="margin-top:0"><input id="useMemory" type="checkbox" checked>参考记忆</label><button id="memSettings" class="link" type="button">记忆设置</button></span>
     </div>
     <div id="localStatus" class="status" aria-live="polite"></div>
     <div id="skillHint" class="hint" aria-live="polite"></div>
@@ -363,7 +364,7 @@
         <button id="testModel" type="button">测试连接</button>
       </div>
       <div id="settingsStatus" class="status" aria-live="polite"></div>
-      <h3 style="margin-top:12px">记忆</h3>
+      <h3 id="memHead" tabindex="-1" style="margin-top:12px">记忆</h3>
       <label class="dedup"><input id="memoryOn" type="checkbox" checked>记住提问时选过的文件和核对通过的结论</label>
       <p class="hint">记忆存在本机的 ~/.local/share/ask-local-files/memory.sqlite（权限 600，只有你能读）。勾选「参考记忆」时，提问会按问题从记忆里找出相关的以前结论和原文段落，排在已选文件之后一起发给模型；文件改了按新内容复核，文件不在了就忘掉。关掉后不再记入、也不再参考，已记住的保留，可在下面清空。</p>
       <div class="row">
@@ -399,7 +400,7 @@
   <div id="convFrames" hidden></div>
 
 
-  <footer><span id="ver">找文件问 AI v2.1</span>　关闭全部页面后服务自动退出；点「退出」立即结束，开着的页面一起结束。有回答正在生成（含 skill 脚本运行）时，服务等它结束再退出。对话不自动保存，退出即清空；记忆存在本机，可在「模型设置」里关闭或清空。</footer>
+  <footer><span id="ver">找文件问 AI v2.2</span>　关闭全部页面后服务自动退出；点「退出」立即结束，开着的页面一起结束。有回答正在生成（含 skill 脚本运行）时，服务等它结束再退出。对话不自动保存，退出即清空；记忆存在本机，可在「模型设置」里关闭或清空。</footer>
 </main>
 <script>
 'use strict';
@@ -1531,7 +1532,12 @@ function renderChat() {
       const c = btn('复制', 'small', () => copyText(m.content, c));
       c.setAttribute('aria-label', '复制这条回答');
       foot.appendChild(c);
-      if (m.answerId) foot.appendChild(el('span', 'hint', m.wrong ? '已忘掉这条回答记住的结论' : '已记住 ' + m.remembered + ' 条结论'));
+      if (m.answerId && m.wrong) foot.appendChild(el('span', 'hint', '已忘掉这条回答记住的结论'));
+      else if (m.answerId) {
+        const r = btn('已记住 ' + m.remembered + ' 条结论', 'link', () => openMemory(true));
+        r.setAttribute('aria-label', '已记住 ' + m.remembered + ' 条结论，打开记忆设置');
+        foot.appendChild(r);
+      }
       // 只在最后一条回答不完整时给「继续」「重新生成」；发了新问题后旧的只留标记
       if (m.partial && i === chat.length - 1) {
         const go = btn('继续', 'small resume', () => run({kind: 'continue'}));
@@ -1652,6 +1658,15 @@ function memAction(body, b, done) {
     refreshMemStats();
   }).catch(e => { b.disabled = !alive; say('memStatus', failText('操作', e.message, RETRY), 'bad'); });
 }
+
+// 「记忆设置」入口：展开「模型设置」，滚到「记忆」一节并聚焦；view 为真时另外展开「查看记忆」
+function openMemory(view) {
+  if ($('modelPanel').hidden) $('modelSettings').click();
+  if (view && $('memPanel').hidden) $('memView').click();
+  $('memHead').scrollIntoView({block: 'start', behavior: 'smooth'});
+  $('memHead').focus({preventScroll: true});
+}
+$('memSettings').addEventListener('click', () => openMemory(false));
 
 $('memView').addEventListener('click', () => {
   togglePanel($('memView'), $('memPanel'));
@@ -2383,7 +2398,10 @@ api('/api/state').then(s => {
   else if (!s.pdftotext) miss.push('本机没有 pdftotext，读不了 pdf；需要时请安装 poppler-utils');
   if (miss.length) { $('banner').textContent = miss.join('；') + '。'; $('banner').hidden = false; }
   if (s.memory && !s.memory_notice && !EMBED) {
-    say('askStatus', '记忆已默认打开：提问时选过的文件和核对通过的结论会记在本机，之后提问时自动参考；可在「模型设置」里关闭、查看或清空。', 'info');
+    say('askStatus', '记忆已默认打开：提问时选过的文件和核对通过的结论会记在本机，之后提问时自动参考；可在「记忆设置」里查看、关闭或清空。', 'info');
+    const go = btn('记忆设置', 'link', () => openMemory(false));
+    go.setAttribute('aria-label', '打开记忆设置');
+    $('askStatus').appendChild(go);
     post('/api/settings', {memory_notice: true}).catch(() => {});
   }
   loadDirs().then(r => renderPlaces(r.places)).catch(() => {});
