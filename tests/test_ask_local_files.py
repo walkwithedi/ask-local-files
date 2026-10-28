@@ -154,6 +154,40 @@ class SearchTest(ServerCase):
         code, r = self.call('/api/search?q=&ext=txt')
         self.assertEqual([x['name'] for x in r['results']], ['季度总结.txt'])
 
+    def test_in_folder_matches_relative_path(self):
+        # 在文件夹里搜：只看其中各层，关键字只和文件夹以下的相对路径比，上级文件夹名不算命中
+        sub = os.path.join(self.docs, '子目录')
+        write(os.path.join(sub, '更深', '子目录说明.txt'), 'x')
+        self.index.refresh(full=True, wait=True)
+        code, r = self.call('/api/search?q=%s&dir=%s' % (q('子目录'), q(sub)))
+        self.assertEqual(code, 200)
+        self.assertEqual([x['name'] for x in r['results']], ['子目录说明.txt'])
+        self.assertEqual(r['dir'], sub)
+        self.assertEqual([c['name'] for c in r['crumbs']], ['资料', '子目录'])
+        r = self.call('/api/search?q=&ext=md&dir=%s' % q(sub))[1]
+        self.assertEqual([x['name'] for x in r['results']], ['会议记录.md'])
+        r = self.call('/api/search?q=&ext=&dir=%s' % q(sub))[1]
+        self.assertEqual(r['total'], 2)
+        r = self.call('/api/search?re=1&q=%s&dir=%s' % (q('^更深/'), q(sub)))[1]
+        self.assertEqual([x['name'] for x in r['results']], ['子目录说明.txt'])
+        # 全部：照旧从所添加文件夹的名字起比
+        r = self.call('/api/search?q=' + q('子目录'))[1]
+        self.assertEqual(r['total'], 2)
+        self.assertEqual((r['dir'], r['crumbs']), ('', []))
+
+    def test_in_folder_sort_before_limit(self):
+        sub = os.path.join(self.docs, '批量')
+        for i in range(5):
+            write(os.path.join(sub, '文件%d.txt' % i), 'x')
+            os.utime(os.path.join(sub, '文件%d.txt' % i), (1000 + i, 1000 + i))
+        self.index.refresh(full=True, wait=True)
+        found, total = self.index.snap.search(['文件'], set(), limit=2, order='time_asc', folder=sub)
+        self.assertEqual(([os.path.basename(e[0]) for e in found], total), (['文件0.txt', '文件1.txt'], 5))
+
+    def test_folder_outside(self):
+        code, r = self.call('/api/search?q=&dir=%s' % q(self.root))
+        self.assertEqual((code, r['error']), (200, fa.FOLDER_GONE))
+
 
 class IgnoreMarkdownTest(ServerCase):
     def setUp(self):
@@ -603,8 +637,10 @@ class ExportTest(ServerCase):
         self.assertEqual((r['files'], r['skipped'], r['chars']), (2, 0, len(r['text'])))
         self.assertTrue(r['text'].startswith(fa.CITE_RULE))
         self.assertIn('使用者选了下面 2 个文件', r['text'])
-        self.assertIn('===== 文件 1：%s =====' % files[0], r['text'])
-        self.assertIn('===== 文件 2：%s =====' % files[1], r['text'])
+        # 路径从所添加文件夹的名字起写，不带上级部分
+        self.assertIn('===== 文件 1：资料/季度总结.txt =====\n路径：资料/季度总结.txt\n', r['text'])
+        self.assertIn('===== 文件 2：资料/子目录/会议记录.md =====', r['text'])
+        self.assertNotIn(self.root, r['text'])
         self.assertIn('甲' * 100, r['text'])
         self.assertNotIn('skill', r['text'])
 
@@ -625,7 +661,7 @@ class ExportTest(ServerCase):
         with mock.patch.object(self.st.texts, 'get', side_effect=get):
             code, r = self.call('/api/export', {'files': [bad, good]})
             self.assertEqual((code, r['files'], r['skipped']), (200, 1, 1))
-            self.assertIn('===== 文件 1：%s =====' % good, r['text'])
+            self.assertIn('===== 文件 1：资料/季度总结.txt =====', r['text'])
             self.assertEqual(self.call('/api/export', {'files': [bad]})[0], 400)
 
     def test_only_indexed_paths(self):
@@ -987,7 +1023,10 @@ class MemoryChatTest(ServerCase):
         self.ask('第一阶段什么时候验收', [self.plan])
         code, lines = self.ask('第一阶段验收', [os.path.join(self.docs, '季度总结.txt')])
         self.assertEqual(lines[0]['memory']['files'][0]['n'], 2)
-        self.assertIn('===== 文件 2：%s（来自记忆，节选）=====' % self.plan, self.sent())
+        shown = os.path.relpath(self.plan, os.path.dirname(self.docs))
+        self.assertEqual(lines[0]['memory']['files'][0]['shown'], shown)
+        self.assertIn('===== 文件 2：%s（来自记忆，节选）=====' % shown, self.sent())
+        self.assertNotIn(self.root, self.sent())
 
     def test_no_files_and_nothing_found(self):
         code, r = self.ask('毫不相干的问题')
@@ -1152,6 +1191,41 @@ class MemoryUpdateTest(MemoryChatTest):
         self.assertEqual(self.st.should_exit(), 'quit requested')
         self.assertTrue(up.halt.is_set())       # 自动更新随退出停下
         up.running = False
+
+
+class TitleTest(ServerCase):
+    def test_title_from_model(self):
+        code, r = self.call('/api/title', {'question': '总结要点', 'answer': '你好，世界'})
+        self.assertEqual((code, r), (200, {'ok': True, 'title': '季度要点'}))
+        sent = fake_model.FakeModel.last_title['messages']
+        self.assertEqual(len(sent), 1)
+        self.assertIn('问：总结要点', sent[0]['content'])
+        self.assertNotIn('甲', sent[0]['content'], '不带文件')
+
+    def test_title_failures(self):
+        self.config.custom['model'] = 'titlefail'
+        self.assertEqual(self.call('/api/title', {'question': '问', 'answer': '答'})[1], {'ok': False})
+        self.config.custom['model'] = 'err500'
+        self.assertEqual(self.call('/api/title', {'question': '问', 'answer': '答'})[1], {'ok': False})
+        self.assertEqual(self.call('/api/title', {'question': 1, 'answer': '答'})[1], {'ok': False})
+        self.assertEqual(self.call('/api/title', {'question': '问', 'answer': '答'}, token='bad')[0], 403)
+
+    def test_clean_title(self):
+        self.assertEqual(fa.clean_title('<think>想想</think>\n\n标题：《季度工作总结》。\n解释'), '季度工作总结')
+        self.assertEqual(fa.clean_title('一二三四五六七八九十十一'), '一二三四五六七八九十')
+        self.assertEqual(fa.clean_title('  \n"…"'), '')
+
+
+class ShownPathTest(unittest.TestCase):
+    def test_shown_path(self):
+        roots = ['/home/user/盘/资料', '/home/user/文档/']
+        self.assertEqual(fa.shown_path('/home/user/盘/资料/子目录/a.txt', roots), '资料/子目录/a.txt')
+        self.assertEqual(fa.shown_path('/home/user/文档/b.md', roots), '文档/b.md')
+        self.assertEqual(fa.shown_path('/home/user/盘/资料2/c.txt', roots), 'c.txt', '前缀相同的别的文件夹不算')
+        self.assertEqual(fa.shown_path('/elsewhere/d.txt', roots), 'd.txt')
+        text = '路径：/home/user/盘/资料/a.txt\n文件名：a.txt\n\n正文'
+        self.assertEqual(fa.shown_text('/home/user/盘/资料/a.txt', text, roots), '路径：资料/a.txt\n文件名：a.txt\n\n正文')
+        self.assertEqual(fa.shown_text('/home/user/盘/资料/a.txt', '正文', roots), '正文')
 
 
 class CheckQuotesTest(unittest.TestCase):

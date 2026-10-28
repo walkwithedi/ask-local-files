@@ -64,7 +64,7 @@ from urllib.parse import parse_qs, urlsplit
 LOG_FORMAT = '%(asctime)s [%(levelname)s] %(name)s.%(funcName)s:%(lineno)d - %(message)s'
 log = logging.getLogger('ask_local_files')
 
-VERSION = '2.4'
+VERSION = '2.5'
 HERE = os.path.dirname(os.path.abspath(__file__))
 PAGE_FILE = os.path.join(HERE, 'ask_local_files.html')
 LOG_NAME = 'ask_local_files.log'
@@ -90,6 +90,7 @@ MAX_BODY = 8 * 1024 * 1024
 CHECK_EVERY = 30        # 搜索时至多每多少秒校验一次文件夹变化
 PUBLISH_EVERY = 2.0     # 首次扫描时每多少秒放出一次部分结果
 RESULT_LIMIT = 300
+FOLDER_GONE = '这个文件夹不在已添加的文件夹里，请回到「全部」重新选择'
 MAX_FILES = 50          # 一次最多选几个文件
 SORTS = ('time_desc', 'time_asc', 'name_asc', 'name_desc')     # 找文件列表的排序，页面下拉框的取值
 DEFAULT_SORT = 'time_desc'
@@ -104,6 +105,10 @@ MAX_TEXT_BYTES = 20 * 1024 * 1024   # 纯文本文件最多读这么多字节
 TIMEOUT = 120           # 模型接口最多静默多少秒
 LOCAL_TIMEOUT = 900     # 本机地址的模型接口最多静默多少秒：纯 CPU 读长文件要先算完整段输入才出字
 TEST_TIMEOUT = 30       # 测试连接最多等多少秒
+TITLE_TIMEOUT = 30      # 概括对话标题最多等多少秒（本机模型按 TITLE_LOCAL_TIMEOUT）
+TITLE_LOCAL_TIMEOUT = 90
+TITLE_CHARS = 10        # 对话标题最多几个字
+TITLE_ANSWER_CHARS = 1500   # 概括标题时交给模型的回答最多几个字
 LOOPBACK = {'127.0.0.1', 'localhost', '::1'}
 # 自动发现的本机模型服务：(类型, 端口, 名称)，探测各自的 /v1/models
 LOCAL_SERVERS = (('llama', 8080, 'llama-server'), ('ollama', 11434, 'Ollama'))
@@ -334,12 +339,20 @@ class Snapshot:
             self.starts.append(pos)
             pos += len(line) + 1
 
-    def search(self, words, exts, limit=RESULT_LIMIT, regex=None, order=DEFAULT_SORT, skip_md=False):
+    def search(self, words, exts, limit=RESULT_LIMIT, regex=None, order=DEFAULT_SORT, skip_md=False, folder=''):
         """(命中条目, 命中总数)，命中条目按 order 排序后取前 limit 个。没有关键字时按扩展名列出全部文件。
         给了 regex（已编译的正则）时不用 words，逐行对显示路径 re.search。skip_md 时不列 Markdown 文件，
-        扩展名里明确给了 md 或 markdown 时照列。"""
+        扩展名里明确给了 md 或 markdown 时照列。
+        给了 folder 时只看其中各层的文件，关键字与正则只对 folder 以下的相对路径匹配。"""
         words = [w.lower() for w in words if w]
-        if regex is not None:
+        if folder:
+            prefix = folder.rstrip(os.sep) + os.sep
+            scoped = ((e, e[0][len(prefix):]) for e in self.entries if e[0].startswith(prefix))
+            if regex is not None:
+                pool = (e for e, rel in scoped if regex.search(rel))
+            else:
+                pool = (e for e, rel in scoped if all(w in rel.lower() for w in words))
+        elif regex is not None:
             pool = (e for e in self.entries if regex.search(e[1]))
         elif words:
             anchor = max(words, key=len)
@@ -535,15 +548,36 @@ class FileIndex:
             return None
         return [mtime, files, subs]
 
-    def search(self, query, exts, regex=False, order=DEFAULT_SORT, skip_md=False):
-        """regex 时整个 query 作为一个不区分大小写的正则，写错时抛 re.error。order 见 SORTS；skip_md 见 Snapshot.search。"""
+    def search(self, query, exts, regex=False, order=DEFAULT_SORT, skip_md=False, folder=''):
+        """regex 时整个 query 作为一个不区分大小写的正则，写错时抛 re.error。order 见 SORTS；skip_md 见 Snapshot.search。
+        folder 为空时搜全部；否则须是已添加的文件夹或其中的子文件夹，只搜其中各层，按相对路径匹配。"""
         self.maybe_refresh()
+        folder = os.path.normpath(folder) if folder else ''
+        crumbs = []
+        if folder:
+            crumbs = self.crumbs(folder)
+            if crumbs is None:
+                return {'error': FOLDER_GONE, 'status': self.status()}
         words = query.split()
         pattern = re.compile(query.strip(), re.IGNORECASE) if regex and query.strip() else None
         exts = {x.lower().lstrip('.') for x in re.split(r'[\s,，、;；]+', exts or '') if x.strip('. ')}
-        found, total = self.snap.search(words, exts, regex=pattern, order=order, skip_md=skip_md)
+        found, total = self.snap.search(words, exts, regex=pattern, order=order, skip_md=skip_md, folder=folder)
         reasons = {}
-        return {'results': [entry_public(e, reasons) for e in found], 'total': total, 'status': self.status()}
+        return {'dir': folder, 'crumbs': crumbs, 'results': [entry_public(e, reasons) for e in found], 'total': total,
+                'status': self.status()}
+
+    def crumbs(self, folder):
+        """folder 从所在的已添加文件夹起的各层 [{path, name}]；不在已添加的文件夹里时返回 None。"""
+        root = next((r for r in self.config.folders if folder == r or folder.startswith(r.rstrip(os.sep) + os.sep)), None)
+        if not root:
+            return None
+        out = [{'path': root, 'name': os.path.basename(root.rstrip(os.sep)) or root}]
+        cur = root
+        for part in os.path.relpath(folder, root).split(os.sep):
+            if part != '.':
+                cur = os.path.join(cur, part)
+                out.append({'path': cur, 'name': part})
+        return out
 
     def browse(self, folder, dedup=False, order=DEFAULT_SORT, skip_md=False):
         """按文件夹逐层浏览。folder 为空时列出已添加的文件夹；否则须是已添加的文件夹或其中的子文件夹。
@@ -557,15 +591,9 @@ class FileIndex:
             dirs = [{'path': r, 'name': r, 'files': len(snap.browse(r, skip_md)[2])} for r in roots]
             return {'dir': '', 'crumbs': [], 'dirs': dirs, 'files': [], 'here': 0, 'here_dedup': 0, 'tree': [],
                     'tree_total': 0, 'dedup': dedup, 'status': self.status()}
-        root = next((r for r in roots if folder == r or folder.startswith(r.rstrip(os.sep) + os.sep)), None)
-        if not root:
-            return {'error': '这个文件夹不在已添加的文件夹里，请回到「全部」重新选择', 'status': self.status()}
-        crumbs = [{'path': root, 'name': os.path.basename(root.rstrip(os.sep)) or root}]
-        cur = root
-        for part in os.path.relpath(folder, root).split(os.sep):
-            if part != '.':
-                cur = os.path.join(cur, part)
-                crumbs.append({'path': cur, 'name': part})
+        crumbs = self.crumbs(folder)
+        if crumbs is None:
+            return {'error': FOLDER_GONE, 'status': self.status()}
         subs, files, tree = snap.browse(folder, skip_md)
         files, tree = sort_entries(files, order), sort_entries(tree, order)
         reasons = {}
@@ -1257,20 +1285,36 @@ def memory_text(block):
     return '\n\n'.join(block['paras'])
 
 
-def memory_part(n, block):
-    lines = ['===== 文件 %d：%s（来自记忆，节选）=====' % (n, block['path'])]
+def shown_path(path, roots):
+    """带出本机的内容（发给模型、复制、保存）里写的路径：从所在的已添加文件夹的名字起，与列表显示一致，
+    不写家目录、用户名、挂载点等上级部分；不在已添加的文件夹里时只写文件名。"""
+    for r in roots:
+        if path == r or path.startswith(r.rstrip(os.sep) + os.sep):
+            return os.path.relpath(path, os.path.dirname(r.rstrip(os.sep)) or os.sep)
+    return os.path.basename(path)
+
+
+def shown_text(path, text, roots):
+    """取出的文字开头 file_info() 写的「路径：」行同样换成 shown_path。"""
+    head = '路径：' + path + '\n'
+    return '路径：' + shown_path(path, roots) + '\n' + text[len(head):] if text.startswith(head) else text
+
+
+def memory_part(n, block, roots=()):
+    lines = ['===== 文件 %d：%s（来自记忆，节选）=====' % (n, shown_path(block['path'], roots))]
     if block['facts']:
         lines.append('以前的结论（只作线索）：')
         lines += ['- %s（原文：「%s」）' % (f['conclusion'], f['quote']) for f in block['facts']]
         lines.append('')
     lines.append('原文节选：')
-    return '\n'.join(lines) + '\n' + memory_text(block)
+    return '\n'.join(lines) + '\n' + '\n\n'.join(shown_text(block['path'], p, roots) for p in block['paras'])
 
 
-def build_messages(files, history, skill=None, memory=()):
+def build_messages(files, history, skill=None, memory=(), roots=()):
     """files: [(路径, 文字)]；history: [{role, content}]，最后一条是使用者的新问题；skill 为所选 skill；
     memory: 从记忆里找出的 [{'path', 'facts', 'paras'}]，编号接在已选文件之后。
-    规则写在文件之前，所有文件之后再重申要点；选了 skill 时格式按 skill 的说明，不加 FORMAT_RULE。"""
+    规则写在文件之前，所有文件之后再重申要点；选了 skill 时格式按 skill 的说明，不加 FORMAT_RULE。
+    路径按 roots（已添加的文件夹）写成 shown_path。"""
     parts = [skill_prompt(skill)] if skill else []
     if files or memory:
         parts.append(CITE_RULE + (SKILL_CITE_NOTE if skill else FORMAT_RULE))
@@ -1281,9 +1325,9 @@ def build_messages(files, history, skill=None, memory=()):
     if memory:
         parts.append(MEMORY_NOTE)
     for i, (path, text) in enumerate(files, 1):
-        parts.append('===== 文件 %d：%s =====\n%s' % (i, path, text))
+        parts.append('===== 文件 %d：%s =====\n%s' % (i, shown_path(path, roots), shown_text(path, text, roots)))
     for i, block in enumerate(memory, len(files) + 1):
-        parts.append(memory_part(i, block))
+        parts.append(memory_part(i, block, roots))
     if files or memory:     # 文件很长时，紧挨着对话再说一遍要点
         parts.append(CITE_REMINDER + ('' if skill else '先给结论，再分点。'))
     return [{'role': 'system', 'content': '\n\n'.join(parts)}] + history
@@ -1295,10 +1339,20 @@ def main_part(answer):
     return answer if i < 0 else answer[:i]
 
 
-def memory_public(memory, first):
-    """页面上「参考了记忆」的说明：用到的结论与段落及其出处。"""
+def clean_title(text):
+    """模型给的标题：取第一行非空文字，去掉「标题：」前缀、引号、书名号与首尾标点，最多 TITLE_CHARS 字。"""
+    text = re.sub(r'<think>.*?</think>', '', text, flags=re.S)
+    line = next((x.strip() for x in text.splitlines() if x.strip()), '')
+    line = re.sub(r'^(标题|题目)\s*[:：]\s*', '', line)
+    line = re.sub(r'[\s"\'“”‘’「」『』《》#*`]+', ' ', line).strip()
+    line = line.strip('。，、；：！？.,;:!?…-— ')
+    return line[:TITLE_CHARS]
+
+
+def memory_public(memory, first, roots=()):
+    """页面上「参考了记忆」的说明：用到的结论与段落及其出处；shown 为保存对话时写的 shown_path。"""
     return {'facts': sum(len(b['facts']) for b in memory), 'paras': sum(len(b['paras']) for b in memory),
-            'files': [{'n': i, 'path': b['path'], 'paras': len(b['paras']),
+            'files': [{'n': i, 'path': b['path'], 'shown': shown_path(b['path'], roots), 'paras': len(b['paras']),
                        'facts': [{'conclusion': f['conclusion'], 'quote': f['quote']} for f in b['facts']]}
                       for i, b in enumerate(memory, first)]}
 
@@ -1987,7 +2041,7 @@ class Handler(BaseHTTPRequestHandler):
         elif url.path == '/api/search':
             try:
                 self.send_json(200, st.index.search(arg('q'), arg('ext'), arg('re') == '1', sort_arg(arg('sort')),
-                                                    self.skip_md(arg('md'))))
+                                                    self.skip_md(arg('md')), arg('dir')))
             except re.error as e:
                 self.send_json(400, {'error': '正则表达式有误：%s' % e})
         elif url.path == '/api/browse':
@@ -2050,6 +2104,8 @@ class Handler(BaseHTTPRequestHandler):
             self.post_memory(data)
         elif url.path == '/api/memory-update':
             self.post_memory_update(data)
+        elif url.path == '/api/title':
+            self.post_title(data)
         elif url.path == '/api/test-model':
             self.post_test_model(data)
         elif url.path == '/api/local-models':
@@ -2183,7 +2239,7 @@ class Handler(BaseHTTPRequestHandler):
         if not got:
             self.send_json(400, {'error': '已选文件都取不出文字'})
             return
-        text = build_messages(got, [])[0]['content']
+        text = build_messages(got, [], roots=st.config.folders)[0]['content']
         self.send_json(200, {'text': text, 'chars': len(text), 'files': len(got), 'skipped': len(files) - len(got)})
 
     def post_folders(self, data):
@@ -2282,6 +2338,32 @@ class Handler(BaseHTTPRequestHandler):
             return
         self.send_json(200, {'ok': True, 'path': path})
 
+    def post_title(self, data):
+        """把第一问与回答节选交给所选模型，概括成 TITLE_CHARS 字以内的对话标题。不带文件与记忆，不写进对话；
+        超过时限、出错或概括不出时返回 ok False，页面保留原来的标签文字。"""
+        targets, default = model_targets(self.state.config, self.state.local_models)
+        tg = targets.get(data.get('model') or default)
+        question, answer = data.get('question'), data.get('answer')
+        if not tg or not isinstance(question, str) or not isinstance(answer, str):
+            self.send_json(200, {'ok': False})
+            return
+        prompt = ('把下面这次问答概括成一个不超过 %d 个字的中文标题，只回复标题本身，不加引号、标点和解释。\n\n'
+                  '问：%s\n\n答：%s' % (TITLE_CHARS, question[:500], answer[:TITLE_ANSWER_CHARS]))
+        limit = TITLE_LOCAL_TIMEOUT if is_loopback(tg['base']) else TITLE_TIMEOUT
+        deadline, pieces = time.monotonic() + limit, []
+        try:
+            for piece in stream_chat(tg, [{'role': 'user', 'content': prompt}], timeout=limit):
+                if isinstance(piece, str):
+                    pieces.append(piece)
+                if time.monotonic() > deadline:
+                    raise ModelError('timeout')
+        except ModelError as e:
+            log.info('title failed: %r', str(e))
+            self.send_json(200, {'ok': False})
+            return
+        title = clean_title(''.join(pieces))
+        self.send_json(200, {'ok': True, 'title': title} if title else {'ok': False})
+
     def post_test_model(self, data):
         """向所选模型发一条极短的请求，拿到第一段回答即算连通。"""
         targets, default = model_targets(self.state.config, self.state.local_models)
@@ -2373,10 +2455,11 @@ class Handler(BaseHTTPRequestHandler):
         # 按最近两问检索：追问（如「那第二阶段呢」）与「继续」也能带上前一问的关键字
         asks = [m['content'] for m in history if m['role'] == 'user'][-2:]
         memory = self.recall('\n'.join(reversed(asks)), paths, budget) if use_mem else []
-        mem_chars = sum(len(memory_part(i, b)) for i, b in enumerate(memory, 1))
+        roots = list(st.config.folders)
+        mem_chars = sum(len(memory_part(i, b, roots)) for i, b in enumerate(memory, 1))
         while memory and mem_chars > (room - files_chars if files and not data.get('truncate') else room):
             # 估算预算时没算每个文件的标题行：放不下时从最不相关的文件起去掉
-            mem_chars -= len(memory_part(len(memory), memory.pop()))
+            mem_chars -= len(memory_part(len(memory), memory.pop(), roots))
         if not files and not skill and not memory:
             self.send_json(400, {'error': NO_MEMORY_HIT})
             return
@@ -2384,7 +2467,7 @@ class Handler(BaseHTTPRequestHandler):
         full = texts
         texts, cut = fit_texts(texts, room - mem_chars)
         msgs = build_messages(list(zip(files, texts)), [{'role': m['role'], 'content': m['content']}
-                                                       for m in history], skill, memory)
+                                                       for m in history], skill, memory, roots)
         tools = skill_tools(skill) if skill else None
         log.info('chat: %d files, %d chars, %d from memory, model %s, host %s, skill %s, tools %s', len(files),
                  total, mem_chars, tg['model'], tg['host'], skill['name'] if skill else '-', bool(tools))
@@ -2399,7 +2482,7 @@ class Handler(BaseHTTPRequestHandler):
                             self.wfile.flush())
         try:
             emit({'start': True, 'truncated': cut, 'model': tg['model'], 'host': tg['host'],
-                  'skill': skill['name'] if skill else '', 'memory': memory_public(memory, len(files) + 1)})
+                  'skill': skill['name'] if skill else '', 'memory': memory_public(memory, len(files) + 1, roots)})
             pieces, used, writes = [], 0, 0
             if skill and skill['scripts']:
                 work = st.new_work_dir()

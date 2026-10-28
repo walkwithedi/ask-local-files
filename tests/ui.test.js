@@ -41,7 +41,7 @@ test.after(async () => {
 // opts.homeDirs 为家目录下另建的文件夹，opts.noPdf 时 PATH 置空、找不到 pdftotext，
 // opts.clock 时接管页面计时器（用 page.clock.fastForward 快进），opts.beforeGoto(page) 在打开页面前调用，
 // opts.skills 为自建 skill {名称: {相对路径: 内容}}，写到 OpenCode 的 skills 文件夹，opts.env 为另加的环境变量；
-// 页面默认打开「搜索」，opts.tab 为 'browse' 时加载完后切到「浏览文件夹」
+// 页面打开时显示「全部」的文件夹，opts.tab 为 'browse' 时等它加载完
 // opts.height 为视口高度；opts.mdDefault 时「忽略 Markdown 文件」按默认（勾选），否则测试里关闭
 async function launch(t, opts) {
   opts = Object.assign({folders: true, model: 'ok', width: 1280, files: {}, homeDirs: []}, opts || {});
@@ -79,10 +79,7 @@ async function launch(t, opts) {
   if (opts.beforeGoto) await opts.beforeGoto(page);
   await context.grantPermissions(['clipboard-read', 'clipboard-write']);
   await page.goto(url);
-  if (opts.tab === 'browse') {
-    await page.locator('#findStatus:not(:empty)').waitFor({timeout: 3000}).catch(() => {});
-    await page.click('#tabBrowse');
-  }
+  if (opts.tab === 'browse') await page.locator('#findStatus:not(:empty)').waitFor({timeout: 3000}).catch(() => {});
   t.after(async () => {
     await context.close();
     proc.kill();
@@ -292,7 +289,7 @@ test('按钮统一在右侧，结果第二行只写所在文件夹', async t => 
   assert.ok(b.x > n.x, '加入按钮应在文件名右侧');
   const meta = await li.locator('.meta').textContent();
   assert.match(meta, /^资料\/子目录/);
-  await li.getByRole('button', {name: '浏览文件夹 资料/子目录'}).waitFor();
+  await li.getByRole('button', {name: '进入文件夹 资料/子目录'}).waitFor();
   assert.doesNotMatch(meta, /会议记录/);
   await pickByName(page, '会议记录');
   const pl = page.locator('#picked li', {hasText: '会议记录'});
@@ -392,8 +389,9 @@ test('「复制全部文字」带提问要求与全部文件，没有模型也�
   assert.match(await page.getAttribute('#pickStatus', 'class'), /\bok\b/);
   const text = await page.evaluate(() => navigator.clipboard.readText());
   assert.match(text, /^只依据下面这些文件/);
-  assert.ok(text.includes('===== 文件 1：' + path.join(docs, '季度总结.txt') + ' ====='));
-  assert.ok(text.includes('===== 文件 2：' + path.join(docs, '子目录', '会议记录.md') + ' ====='));
+  assert.ok(text.includes('===== 文件 1：资料/季度总结.txt ====='));
+  assert.ok(text.includes('===== 文件 2：资料/子目录/会议记录.md ====='));
+  assert.ok(!text.includes(docs), '路径从所添加文件夹的名字起写');
   assert.ok(text.includes('甲'.repeat(100)));
 });
 
@@ -630,7 +628,7 @@ test('每个可读文件都有定位按钮，用文件管理器打开所在文�
   fs.symlinkSync(path.join(__dirname, 'fake_opener.sh'), path.join(bin, 'nautilus'));
   const args = path.join(bin, 'args.txt');
   const {page, docs} = await launch(t, {env: {PATH: bin, FAKE_OPEN_ARGS: args}});
-  await page.fill('#q', '');
+  await page.fill('#q', '资料');
   const zip = page.locator('#results li', {hasText: '资料包.zip'});
   await zip.waitFor();
   assert.strictEqual(await zip.locator('[data-act="reveal"]').count(), 0);
@@ -641,7 +639,7 @@ test('每个可读文件都有定位按钮，用文件管理器打开所在文�
   assert.strictEqual(fs.readFileSync(args, 'utf8'), '--select\nfile://' + encodeURI(file) + '\n');
   await pickByName(page, '季度总结');
   await page.locator('#picked li', {hasText: '季度总结'}).getByRole('button', {name: '在文件夹中显示 季度总结.txt'}).waitFor();
-  await page.click('#tabBrowse');
+  await page.fill('#q', '');
   await page.locator('#browseList button.dir').first().click();
   await page.locator('#browseList li', {hasText: '季度总结'}).locator('[data-act="reveal"]').waitFor();
 });
@@ -1027,7 +1025,11 @@ test('记住核对通过的结论，不选文件也能参考记忆提问，回�
   assert.match(await memo.textContent(), /第一阶段三月底验收（原文：「第一阶段在三月底完成验收」）/);
   await page.waitForFunction(() => !document.querySelector('#send').disabled);
   const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#save')]);
-  assert.match(fs.readFileSync(await dl.path(), 'utf-8'), /参考了记忆：1 条结论、1 段原文/);
+  const md = fs.readFileSync(await dl.path(), 'utf-8');
+  assert.match(md, /参考了记忆：1 条结论、1 段原文/);
+  assert.match(md, /- 文件 1：资料\/项目计划\.txt（1 段原文）/, '保存时记忆里的路径从所添加文件夹的名字起写');
+  assert.ok(!md.includes(docs), '不写完整路径');
+  assert.doesNotMatch(md, /## 参考文件/, '没选文件时不写参考文件');
 });
 
 test('取消「参考记忆」且没选文件时不发送', async t => {
@@ -1169,28 +1171,28 @@ test('更新记忆：整理出主题页，更新记录可撤销，「空闲时�
 
 test('「忽略 Markdown 文件」默认勾选，搜索与浏览都不列 .md，扩展名填 md 时照列，取消后恢复并记住', async t => {
   const {page, url} = await launch(t, {mdDefault: true, files: {'说明.markdown': '丙'}});
-  await page.locator('#results li').first().waitFor();
-  assert.ok(await page.locator('#ignoreMdSearch').isChecked());
+  await page.locator('#browseList li').first().waitFor();
+  assert.ok(await page.locator('#ignoreMd').isChecked());
+  assert.strictEqual(await page.locator('#findBody label', {hasText: '忽略 Markdown 文件'}).count(), 1, '只有一个勾选框');
   const names = () => page.$$eval('#results li .name', els => els.map(e => e.textContent));
-  await page.fill('#q', '');
+  await page.fill('#q', '资料');
   await page.waitForFunction(() => document.querySelectorAll('#results li').length === 2);
   assert.ok(!(await names()).some(n => /\.(md|markdown)$/.test(n)));
+  await page.fill('#q', '');
   await page.fill('#ext', 'md');
   await page.locator('#results li', {hasText: '会议记录.md'}).waitFor();
   await page.fill('#ext', '');
-  await page.click('#tabBrowse');
   await page.locator('#browseList button.dir').first().click();
   await page.locator('#browseList li', {hasText: '季度总结.txt'}).waitFor();
   assert.strictEqual(await page.locator('#browseList li', {hasText: '说明.markdown'}).count(), 0);
   assert.strictEqual(await page.locator('#browseList li', {hasText: '子目录'}).count(), 0);   // 只有 .md 的子文件夹不列
-  assert.ok(await page.locator('#ignoreMdBrowse').isChecked());
-  await page.uncheck('#ignoreMdBrowse');
+  await page.uncheck('#ignoreMd');
   await page.locator('#browseList li', {hasText: '说明.markdown'}).waitFor();
   await page.locator('#browseList li', {hasText: '子目录'}).waitFor();
   await page.waitForTimeout(300);
   await page.goto(url);
   await page.locator('#findStatus:not(:empty)').waitFor();
-  assert.strictEqual(await page.locator('#ignoreMdSearch').isChecked(), false);
+  assert.strictEqual(await page.locator('#ignoreMd').isChecked(), false);
   await noHorizontalScroll(page);
 });
 
@@ -1202,7 +1204,8 @@ test('页头介绍写明记忆的用法', async t => {
 
 test('搜索结果少于 50 个时可全部加入，跳过读不了的', async t => {
   const {page} = await launch(t, {files: {'报告甲.txt': '甲', '报告乙.md': '乙', '报告丙.rar': 'x'}});
-  await page.getByRole('button', {name: '全部加入（4 个）'}).waitFor();     // 搜索框为空、列表少于 50 个时也出现
+  await page.fill('#q', '资料');
+  await page.getByRole('button', {name: '全部加入（4 个）'}).waitFor();     // 不限关键字，列表少于 50 个时就出现
   await page.fill('#q', '报告');
   const b = page.getByRole('button', {name: '全部加入（2 个）'});
   await b.click();
@@ -1350,7 +1353,11 @@ test('保存为 Word：单条回答与整个对话', async t => {
   const one = page.locator('#chat .msg.assistant .who').getByRole('button', {name: '把这条回答保存为 Word'});
   const [d1] = await Promise.all([page.waitForEvent('download'), one.click()]);
   assert.strictEqual(fs.readFileSync(await d1.path()).subarray(0, 2).toString(), 'PK');
-  await page.locator('#chatStatus').getByText(/已保存为 找文件问AI-\d{8}-\d{4}\.docx/).waitFor();
+  await page.locator('#chatStatus').getByText(/已保存为 找文件问AI-(总结一下|季度要点)-\d{8}-\d{4}\.docx/).waitFor();
+  const docxText = file => execFileSync(PYTHON, ['-c', 'import sys,zipfile;print(zipfile.ZipFile(sys.argv[1]).read("word/document.xml").decode())',
+                                                 file]).toString();
+  const single = docxText(await d1.path());
+  assert.match(single, /参考文件[\s\S]*资料\/季度总结\.txt/, '单条回答末尾附参考文件');
   const [d2] = await Promise.all([page.waitForEvent('download'), page.click('#saveDocx')]);
   const zip = fs.readFileSync(await d2.path());
   assert.strictEqual(zip.subarray(0, 2).toString(), 'PK');
@@ -1358,7 +1365,8 @@ test('保存为 Word：单条回答与整个对话', async t => {
                                        await d2.path()]).toString();
   assert.match(unzip, /找文件问 AI 对话/);
   assert.match(unzip, /总结一下/);
-  assert.match(unzip, /你好，世界/);
+  assert.match(unzip, /你好，世界[\s\S]*参考文件/, '参考文件在最后');
+  assert.doesNotMatch(unzip, new RegExp(path.sep === '/' ? os.tmpdir() : '^$'), '不写上级路径');
 });
 
 test('360px 下 skill 说明与运行记录不横向溢出', async t => {
@@ -1450,11 +1458,10 @@ test('另开的浏览器页面算一个页面；开着多个页面时退出先�
   await other.close();
 });
 
-test('浏览：标签页切换，逐层进入文件夹，全部加入含子文件夹', async t => {
+test('浏览：搜索框为空时显示文件夹内容，逐层进入文件夹，全部加入含子文件夹', async t => {
   const {page} = await launch(t, {files: {'子目录/深一层/纪要.txt': '丙'.repeat(10)}});
-  await page.click('#tabBrowse');
-  assert.strictEqual(await page.getAttribute('#tabBrowse', 'aria-selected'), 'true');
-  assert.ok(await page.isHidden('#q'));
+  assert.strictEqual(await page.locator('#findBody [role=tab]').count(), 0, '没有标签页');
+  assert.ok(await page.isVisible('#q'));
   await page.locator('#crumbs [aria-current]', {hasText: '全部'}).waitFor();
   await page.locator('#browseList button.dir').first().click();
   await page.locator('#crumbs [aria-current]', {hasText: '资料'}).waitFor();
@@ -1470,27 +1477,64 @@ test('浏览：标签页切换，逐层进入文件夹，全部加入含子文�
   assert.ok(await page.isHidden('#browseAddRow'), '都已加入后不再显示全部加入');
   await page.locator('#crumbs').getByRole('button', {name: '资料'}).click();
   await page.locator('#browseAdd').getByText('全部加入（1 个，含子文件夹）').waitFor();
-  await page.focus('#tabBrowse');
-  await page.keyboard.press('ArrowLeft');
-  assert.strictEqual(await page.getAttribute('#tabSearch', 'aria-selected'), 'true');
-  assert.ok(await page.isVisible('#q'));
-  assert.strictEqual(await page.evaluate(() => document.activeElement.id), 'tabSearch');
 });
 
-test('点搜索结果里的文件夹跳到浏览里那个文件夹', async t => {
+test('在文件夹里搜索：含各层子文件夹，只比相对路径；清空后回到文件夹内容', async t => {
+  const {page} = await launch(t, {files: {'子目录/深一层/纪要.txt': '丙', '其他/资料清单.txt': '丁'}});
+  await page.locator('#browseList button.dir').first().click();
+  await page.getByRole('button', {name: '打开文件夹 子目录'}).click();
+  await page.locator('#crumbs [aria-current]', {hasText: '子目录'}).waitFor();
+  assert.match(await page.getAttribute('#q', 'placeholder'), /^在「子目录」里搜索：/);
+  await page.fill('#q', '纪要');
+  await page.locator('#results li', {hasText: '纪要.txt'}).waitFor();
+  assert.ok(await page.isHidden('#browsePane'));
+  assert.match(await page.textContent('#findStatus'), /在「子目录」里找到 1 个/);
+  // 上级文件夹名「资料」不算命中
+  await page.fill('#q', '资料');
+  await page.locator('#findStatus', {hasText: '在「子目录」里找到 0 个'}).waitFor();
+  // 只填扩展名也算搜索
+  await page.fill('#q', '');
+  await page.fill('#ext', 'md');
+  await page.locator('#results li', {hasText: '会议记录.md'}).waitFor();
+  assert.strictEqual(await page.locator('#results li').count(), 1);
+  await page.fill('#ext', '');
+  await page.locator('#browseList li', {hasText: '会议记录.md'}).waitFor();
+  assert.ok(await page.isHidden('#searchPane'));
+  // 点「全部」保留关键字，搜全部文件夹
+  await page.fill('#q', '资料');
+  await page.locator('#crumbs').getByRole('button', {name: '全部'}).click();
+  await page.locator('#results li', {hasText: '资料清单.txt'}).waitFor();
+  assert.strictEqual(await page.inputValue('#q'), '资料');
+  await page.click('#qClear');
+  await page.locator('#crumbs [aria-current]', {hasText: '全部'}).waitFor();
+  assert.strictEqual(await page.inputValue('#q'), '');
+  assert.ok(await page.isHidden('#qClear'));
+  await page.locator('#browseList button.dir', {hasText: '资料'}).waitFor();
+});
+
+test('点搜索结果里的所在文件夹：进入那个文件夹，关键字保留；重新打开回到上次的文件夹', async t => {
   const {page} = await launch(t);
   await page.fill('#q', '会议');
-  await page.getByRole('button', {name: '浏览文件夹 资料/子目录'}).click();
-  assert.strictEqual(await page.getAttribute('#tabBrowse', 'aria-selected'), 'true');
+  await page.getByRole('button', {name: '进入文件夹 资料/子目录'}).click();
   await page.locator('#crumbs [aria-current]', {hasText: '子目录'}).waitFor();
+  assert.strictEqual(await page.inputValue('#q'), '会议');
+  await page.locator('#results li', {hasText: '会议记录.md'}).waitFor();
+  await page.reload();
+  await page.locator('#crumbs [aria-current]', {hasText: '子目录'}).waitFor();
+  assert.strictEqual(await page.inputValue('#q'), '', '关键字不记');
   await page.locator('#browseList li', {hasText: '会议记录.md'}).waitFor();
+  // 记住的文件夹已不在索引里：静默回到「全部」
+  await page.evaluate(() => localStorage.setItem('ask-local-files.find', JSON.stringify({dir: '/不存在/的文件夹', sort: 'time_desc'})));
+  await page.reload();
+  await page.locator('#crumbs [aria-current]', {hasText: '全部'}).waitFor();
+  await page.locator('#browseList button.dir', {hasText: '资料'}).waitFor();
+  assert.doesNotMatch(await page.textContent('#findStatus'), /失败/);
 });
 
 test('浏览里的全部加入超过已选名额时不可点并写明', async t => {
   const files = {};
   for (let i = 1; i <= 51; i++) files['大批/文件' + i + '.txt'] = String(i);
   const {page} = await launch(t, {files});
-  await page.click('#tabBrowse');
   await page.locator('#browseList button.dir').first().click();
   await page.getByRole('button', {name: '打开文件夹 大批'}).click();
   const b = page.getByRole('button', {name: '全部加入（51 个，含子文件夹）'});
@@ -1501,7 +1545,6 @@ test('浏览里的全部加入超过已选名额时不可点并写明', async t 
 
 test('360px 下浏览不横向溢出', async t => {
   const {page} = await launch(t, {width: 360});
-  await page.click('#tabBrowse');
   await page.locator('#browseList button.dir').first().click();
   await page.getByRole('button', {name: '打开文件夹 子目录'}).waitFor();
   await noHorizontalScroll(page);
@@ -1640,11 +1683,10 @@ test('搜索按文件名去重：写出去重前后个数，另有 N 个同名�
   assert.strictEqual(await page.locator('#picked > li').count(), 2, '同名文件照常加入');
   assert.strictEqual(await more.getAttribute('aria-expanded'), 'true', '重绘后保持展开');
   await page.locator('#results ul.dups pre', {hasText: '乙'}).waitFor();
-  await page.uncheck('#dedupSearch');
+  await page.uncheck('#dedup');
   await page.locator('#results > li').nth(2).waitFor();
-  assert.strictEqual(await page.isChecked('#dedupBrowse'), false, '两处联动');
   await page.reload();
-  await page.waitForFunction(() => document.querySelector('#ver').textContent.includes('v') && !document.querySelector('#dedupSearch').checked);
+  await page.waitForFunction(() => document.querySelector('#ver').textContent.includes('v') && !document.querySelector('#dedup').checked);
 });
 
 test('搜索的全部加入只加去重后留下的，跳过已选里有同名的', async t => {
@@ -1661,14 +1703,13 @@ test('搜索的全部加入只加去重后留下的，跳过已选里有同名�
 
 test('浏览在服务端去重：状态行写出去重前后数量，全部加入按去重后计数，关掉后恢复', async t => {
   const {page} = await launch(t, {files: {'报告.txt': '甲', '报告 (1).txt': '乙', '子目录/报告_副本.txt': '丙'}});
-  await page.click('#tabBrowse');
   await page.locator('#browseList button.dir').first().click();
   await page.locator('#findStatus').getByText('本层 4 个文件（去重后 3 个）、1 个子文件夹').waitFor();
   await page.locator('#browseAdd', {hasText: '全部加入（3 个，含子文件夹）'}).waitFor();
   assert.strictEqual(await page.locator('#browseList [data-act="dups"]').count(), 1);
-  await page.uncheck('#dedupBrowse');
+  await page.uncheck('#dedup');
   await page.locator('#browseAdd', {hasText: '全部加入（5 个，含子文件夹）'}).waitFor();
-  assert.ok(!(await page.isChecked('#dedupSearch')));
+  assert.strictEqual(await page.locator('#findBody label.dedup', {hasText: '按文件名去重'}).count(), 1, '只有一个去重勾选框');
   assert.doesNotMatch(await page.textContent('#findStatus'), /去重后/);
 });
 
@@ -1707,7 +1748,7 @@ test('「选择……」弹出选择框：期间禁用并提示，选好只填�
 
 test('没有可用的选择窗口时不显示「选择……」', async t => {
   const {page} = await launch(t, {env: {DISPLAY: '', WAYLAND_DISPLAY: ''}});
-  await page.locator('#results li').first().waitFor();
+  await page.locator('#browseList li').first().waitFor();
   assert.ok(await page.isHidden('#pickFolder'));
 });
 
@@ -1754,7 +1795,7 @@ test('去重时从列表移除连同同名一起不显示', async t => {
   const name = await page.locator('#results > li', {has: page.locator('[data-act="dups"]')}).locator('.name').textContent();
   await page.getByRole('button', {name: '从列表移除 ' + name}).click();
   await page.locator('#findStatus', {hasText: '已从列表移除 1 个'}).waitFor();
-  await page.uncheck('#dedupSearch');
+  await page.uncheck('#dedup');
   await page.locator('#findStatus', {hasText: '已从列表移除 2 个'}).waitFor();
   assert.deepStrictEqual((await page.locator('#results .name').allTextContents()).sort(), ['季度总结.txt', '计划.txt']);
 });
@@ -1776,7 +1817,6 @@ test('去重后 52 个时没有全部加入，从列表移除 3 个后出现全�
 
 test('浏览里从列表移除：该行消失、全部加入减 1，进别的文件夹后恢复', async t => {
   const {page} = await launch(t);
-  await page.click('#tabBrowse');
   await page.locator('#browseList button.dir').first().click();
   await page.locator('#browseAdd', {hasText: '全部加入（2 个，含子文件夹）'}).waitFor();
   await page.getByRole('button', {name: '从列表移除 季度总结.txt'}).click();
@@ -1805,33 +1845,21 @@ test('正则表达式：勾选后按正则搜索并记住，写错时写明原�
   assert.strictEqual(await page.locator('#results > li').count(), 0);
   await page.reload();
   await page.waitForFunction(() => document.querySelector('#regex').checked);
-  assert.strictEqual(await page.getAttribute('#tabSearch', 'aria-selected'), 'true');
+  assert.ok(await page.isVisible('#regex'), '「正则表达式」常驻');
   await page.uncheck('#regex');
   assert.doesNotMatch(await page.getAttribute('#q', 'placeholder'), /正则/);
 });
 
 // ---------------- v1.10 界面优化
 
-test('「搜索」排在前面并默认显示，记住上次的标签；Home、End 随之调整', async t => {
+test('打开页面停在「全部」，搜索框常驻；在「全部」里搜索即全局搜索', async t => {
   const {page} = await launch(t);
-  assert.deepStrictEqual(await page.locator('#findBody [role=tab]').allTextContents(), ['搜索', '浏览文件夹']);
-  assert.strictEqual(await page.getAttribute('#tabSearch', 'aria-selected'), 'true');
-  assert.ok(await page.isVisible('#q'));
-  await page.focus('#tabSearch');
-  await page.keyboard.press('End');
-  assert.strictEqual(await page.getAttribute('#tabBrowse', 'aria-selected'), 'true');
   await page.locator('#crumbs [aria-current]', {hasText: '全部'}).waitFor();
-  assert.ok(await page.isHidden('#q'));
-  await page.reload();
-  await page.locator('#crumbs [aria-current]', {hasText: '全部'}).waitFor();
-  assert.strictEqual(await page.getAttribute('#tabBrowse', 'aria-selected'), 'true', '重新打开停在上次的标签');
-  await page.focus('#tabBrowse');
-  await page.keyboard.press('Home');
-  assert.strictEqual(await page.getAttribute('#tabSearch', 'aria-selected'), 'true');
-  assert.strictEqual(await page.evaluate(() => document.activeElement.id), 'tabSearch');
-  await page.reload();
-  await page.waitForFunction(() => document.querySelector('#tabSearch').getAttribute('aria-selected') === 'true' && document.querySelector('#findStatus').textContent);
   assert.ok(await page.isVisible('#q'));
+  await page.locator('#findStatus', {hasText: '已添加 1 个文件夹'}).waitFor();
+  await page.fill('#q', '会议');
+  await page.locator('#results li', {hasText: '会议记录.md'}).waitFor();
+  assert.doesNotMatch(await page.textContent('#findStatus'), /在「/);
 });
 
 test('排序：四种顺序，搜索与浏览都生效，选择记在本浏览器', async t => {
@@ -1848,7 +1876,6 @@ test('排序：四种顺序，搜索与浏览都生效，选择记在本浏览�
   await page.waitForFunction(() => [...document.querySelectorAll('#results .name')].map(x => x.textContent).join() === 'b.txt,C.txt,a.txt');
   await page.reload();
   assert.strictEqual(await page.inputValue('#sortBy'), 'time_asc');
-  await page.click('#tabBrowse');
   await page.locator('#browseList button.dir').first().click();
   await page.getByRole('button', {name: '打开文件夹 排序'}).click();
   await page.locator('#crumbs [aria-current]', {hasText: '排序'}).waitFor();
@@ -1880,7 +1907,7 @@ test('加入前 10 个、前 30 个：按当前排序取，名额不足时不可
   // 浏览：已选还能加 20 个，「加入前 30 个」不可点
   for (let i = 0; i < 31; i++) fs.writeFileSync(path.join(docs, '批量', 'z' + i + '.txt'), 'x');
   await page.click('#refresh');
-  await page.click('#tabBrowse');
+  await page.fill('#q', '');
   await page.locator('#browseList button.dir').first().click();
   await page.getByRole('button', {name: '打开文件夹 批量'}).click();
   await page.locator('#crumbs [aria-current]', {hasText: '批量'}).waitFor();
@@ -1926,7 +1953,9 @@ test('管理文件夹、模型设置带图标与展开箭头', async t => {
 test('清空已选、清空对话用醒目的红色', async t => {
   const {page} = await launch(t);
   await pickByName(page, '季度总结');
-  const bad = await page.evaluate(() => getComputedStyle(document.querySelector('.bad')).color);
+  await page.fill('#q', '资料包');
+  await page.locator('#results .bad').waitFor();
+  const bad = await page.evaluate(() => getComputedStyle(document.querySelector('#results .bad')).color);
   for (const id of ['#clearPicked', '#clear']) {
     assert.strictEqual(await page.$eval(id, e => getComputedStyle(e).color), bad);
     assert.strictEqual(await page.$eval(id, e => getComputedStyle(e).borderTopColor), bad);
@@ -1942,9 +1971,8 @@ test('文件夹用文件夹图标与单独的颜色，与文件区分', async t 
   const folder = await dir.evaluate(e => getComputedStyle(e).color);
   const file = await page.locator('#browseList .name').first().evaluate(e => getComputedStyle(e).color);
   assert.notStrictEqual(folder, file);
-  await page.click('#tabSearch');
   await page.fill('#q', '会议');
-  const link = page.getByRole('button', {name: '浏览文件夹 资料/子目录'});
+  const link = page.getByRole('button', {name: '进入文件夹 资料/子目录'});
   await link.waitFor();
   assert.strictEqual(await link.locator('svg.icon').count(), 1);
   assert.strictEqual(await link.evaluate(e => getComputedStyle(e).color), folder);
@@ -1986,6 +2014,7 @@ test('回答按 Markdown 显示，不用 innerHTML，链接不可点，复制仍
 test('360px 下 Markdown 表格只在表格容器里横向滚动', async t => {
   const wide = '| ' + Array.from({length: 12}, (_, i) => '很长的列标题' + i).join(' | ') + ' |\n|' + ' --- |'.repeat(12) + '\n';
   const {page} = await launch(t, {width: 360});
+  await page.locator('#findStatus:not(:empty)').waitFor();     // 页面读完状态后会重画对话区，先等它
   await page.evaluate(text => {
     const d = document.createElement('div');
     d.className = 'msg assistant';
@@ -2036,7 +2065,7 @@ test('＋ 新对话：同一窗口内开标签，各自独立；方向键切换�
   assert.ok(await page.isHidden('#convMain'));
   const f = page.frameLocator('#convFrames iframe');
   await f.locator('#findStatus', {hasText: '个文件'}).waitFor();
-  assert.strictEqual(await f.locator('#tabSearch').getAttribute('aria-selected'), 'true', '新标签同样停在上次用的「搜索」');
+  await f.locator('#crumbs [aria-current]', {hasText: '全部'}).waitFor();
   assert.ok(await f.locator('header').isHidden(), '标签里不显示页头');
   assert.ok(await f.locator('footer').isHidden(), '标签里不显示页脚');
   assert.strictEqual(await f.locator('#picked li .name').count(), 0, '新对话的已选为空');
@@ -2066,7 +2095,6 @@ test('关闭有未保存问答的标签不确认；退出按全部标签合计�
   await ask(page);
   await page.click('#newConv');
   const f = page.frameLocator('#convFrames iframe');
-  await f.locator('#tabSearch').click();
   await f.locator('#q').fill('会议');
   await f.locator('#results li', {hasText: '会议记录'}).getByRole('button', {name: /加入/}).click();
   await f.locator('#picked li', {hasText: '会议记录'}).getByText(/\d 字/).waitFor();
@@ -2077,7 +2105,8 @@ test('关闭有未保存问答的标签不确认；退出按全部标签合计�
   page.onDialog = d => { msg = d.message(); d.dismiss(); };
   await page.click('#newConv');
   assert.strictEqual(await page.locator('#convFrames iframe').count(), 2);
-  await page.getByRole('button', {name: '关闭 对话 2'}).click();
+  assert.match(await page.getAttribute('#convClose2', 'aria-label'), /^关闭 (季度要点|总结)$/, '关闭按钮写对话标题');
+  await page.click('#convClose2');
   assert.strictEqual(msg, '', '关闭标签不弹确认');
   assert.strictEqual(await page.locator('#convFrames iframe').count(), 1, '对话 2 已关闭');
   await page.getByRole('button', {name: '关闭 对话 3'}).click();
@@ -2101,4 +2130,111 @@ test('关闭没有问答的标签不确认，回到前一个标签', async t => 
   assert.ok(!asked);
   assert.strictEqual(await page.getAttribute('#convTab2', 'aria-selected'), 'true');
   assert.strictEqual(await page.evaluate(() => document.activeElement.id), 'convTab2');
+});
+
+
+// ---------------- v2.4 合并搜索与浏览、参考文件放最后、页头说明收起、对话标题
+
+test('保存对话：参考文件放在最后，路径从所添加文件夹的名字起写，文件名带对话标题', async t => {
+  const {page, docs} = await launch(t);
+  await pickByName(page, '季度总结');
+  await pickByName(page, '会议记录');
+  await ask(page, '把这两份材料的要点列出来');
+  await page.waitForFunction(() => convTitle().text === '季度要点');
+  const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#save')]);
+  await page.locator('#chatStatus').getByText(/^已保存为 找文件问AI-季度要点-\d{8}-\d{4}\.md/).waitFor();
+  const md = fs.readFileSync(await dl.path(), 'utf-8');
+  assert.match(md, /^# 找文件问 AI 对话 \d{8}-\d{4}\n\n## 问\n/, '从第一问开始');
+  assert.match(md, /核实后再用。\n\n## 参考文件\n\n1\. 资料\/季度总结\.txt\n2\. 资料\/子目录\/会议记录\.md\n$/);
+  assert.ok(!md.includes(docs), '不写完整路径');
+  // 复制全部文字同样只写相对路径
+  await page.click('#copyTexts');
+  await page.locator('#pickStatus', {hasText: '已复制'}).waitFor();
+  const clip = await page.evaluate(() => navigator.clipboard.readText());
+  assert.match(clip, /===== 文件 1：资料\/季度总结\.txt =====\n路径：资料\/季度总结\.txt\n/);
+  assert.ok(!clip.includes(docs));
+});
+
+test('页头说明默认收起，点「说明」展开，记在本浏览器', async t => {
+  const {page} = await launch(t);
+  assert.ok(await page.isHidden('#sub'));
+  assert.strictEqual(await page.getAttribute('#foldSub', 'aria-expanded'), 'false');
+  await page.focus('#foldSub');
+  await page.keyboard.press('Enter');
+  assert.ok(await page.isVisible('#sub'));
+  assert.strictEqual(await page.getAttribute('#foldSub', 'aria-expanded'), 'true');
+  assert.match(await page.textContent('#foldSub'), /说明▾/);
+  await page.reload();
+  await page.locator('#sub').waitFor();
+  await page.click('#foldSub');
+  assert.ok(await page.isHidden('#sub'));
+  await page.reload();
+  await page.locator('#foldSub').waitFor();
+  assert.ok(await page.isHidden('#sub'));
+});
+
+test('对话标签：先写第一问的前 12 字，回答结束后换成模型概括的标题；清空对话后回到「对话 N」', async t => {
+  const {page} = await launch(t);
+  await page.click('#newConv');
+  await page.locator('#convTab1').click();
+  await pickByName(page, '季度总结');
+  await page.fill('#ask', '请把这份季度总结的要点整理成三条');
+  await page.click('#send');
+  await page.locator('#convTab1', {hasText: '季度要点'}).waitFor();
+  assert.strictEqual(await page.getAttribute('#convTab1', 'title'), '请把这份季度总结的要点整理成三条');
+  await page.getByRole('button', {name: '关闭 对话 2'}).waitFor();
+  await page.fill('#ask', '再详细一点');
+  await page.click('#send');
+  await page.waitForFunction(() => document.querySelectorAll('#chat .msg.assistant').length === 2 && !document.querySelector('#send').disabled);
+  assert.strictEqual(await page.textContent('#convTab1'), '季度要点', '追问不改标题');
+  await page.click('#clear');
+  await page.locator('#convTab1', {hasText: '对话 1'}).waitFor();
+  let msg = '';
+  page.onDialog = d => { msg = d.message(); d.dismiss(); };
+  await ask(page, '再问一次');
+  await page.locator('#convTab1', {hasText: '季度要点'}).waitFor();
+  await page.click('#quit');
+  await page.waitForFunction(() => !document.querySelector('#quit').disabled);
+  assert.match(msg, /当前 1 轮问答未保存|1 个对话标签（季度要点）/);
+});
+
+test('对话标题概括失败时保留第一问的前 12 字；只选 skill 没写问题时用 skill 名', async t => {
+  const {page} = await launch(t, {model: 'titlefail'});
+  await pickByName(page, '季度总结');
+  await ask(page, '一二三四五六七八九十十一十二');
+  await page.waitForTimeout(300);
+  assert.strictEqual(await page.evaluate(() => convTitle().text), '一二三四五六七八九十十一……');
+  const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#save')]);
+  await page.locator('#chatStatus').getByText(/^已保存为 找文件问AI-一二三四五六七八九十十一……-\d{8}-\d{4}\.md/).waitFor();
+  assert.ok(dl);
+  await page.click('#clear');
+  assert.strictEqual(await page.evaluate(() => convTitle().text), '');
+  assert.strictEqual(await page.evaluate(() => saveStem('20260101-0000')), '找文件问AI-20260101-0000', '还没有标题时不带');
+  await page.selectOption('#skillSel', 'summarize-meeting');
+  await page.click('#send');
+  await page.waitForFunction(() => !document.querySelector('#send').disabled && document.querySelector('#chat .msg.assistant'));
+  assert.strictEqual(await page.evaluate(() => convTitle().text), await page.evaluate(() => currentSkill().label));
+});
+
+test('加入前 50 个：可加入的多于 50 个时出现，已选不为空时不可点', async t => {
+  const files = {};
+  for (let i = 0; i < 55; i++) files['批量/' + String(i).padStart(2, '0') + '.txt'] = 'x';
+  const {page} = await launch(t, {files});
+  await page.selectOption('#sortBy', 'name_asc');
+  await page.locator('#browseList button.dir').first().click();
+  await page.getByRole('button', {name: '打开文件夹 批量'}).click();
+  await page.locator('#browseTop50').waitFor();
+  assert.strictEqual(await page.textContent('#browseTop50'), '加入前 50 个');
+  assert.ok(!(await page.isDisabled('#browseTop50')));
+  await page.fill('#q', '.txt');
+  await page.locator('#addTop50').waitFor();
+  await page.locator('#results li', {hasText: '00.txt'}).getByRole('button', {name: /加入/}).click();
+  await page.waitForFunction(() => document.querySelector('#addTop50').disabled);
+  assert.match(await page.textContent('#addAllHint'), /已选还能加 49 个/);
+  await page.locator('#picked li').getByRole('button', {name: /移除/}).click();
+  await page.waitForFunction(() => !document.querySelector('#addTop50').disabled);
+  await page.click('#addTop50');
+  await page.waitForFunction(() => document.querySelectorAll('#picked > li').length === 50);
+  await page.setViewportSize({width: 360, height: 800});
+  await noHorizontalScroll(page);
 });
