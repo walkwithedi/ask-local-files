@@ -42,7 +42,7 @@ test.after(async () => {
 // opts.clock 时接管页面计时器（用 page.clock.fastForward 快进），opts.beforeGoto(page) 在打开页面前调用，
 // opts.skills 为自建 skill {名称: {相对路径: 内容}}，写到 OpenCode 的 skills 文件夹，opts.env 为另加的环境变量；
 // 页面默认打开「搜索」，opts.tab 为 'browse' 时加载完后切到「浏览文件夹」
-// opts.height 为视口高度
+// opts.height 为视口高度；opts.mdDefault 时「忽略 Markdown 文件」按默认（勾选），否则测试里关闭
 async function launch(t, opts) {
   opts = Object.assign({folders: true, model: 'ok', width: 1280, files: {}, homeDirs: []}, opts || {});
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ask-local-files-ui-'));
@@ -54,6 +54,7 @@ async function launch(t, opts) {
   }
   for (const d of opts.homeDirs) fs.mkdirSync(path.join(home, d), {recursive: true});
   const conf = {folders: opts.folders ? [docs] : [], char_limit: opts.limit || 100000};
+  if (!opts.mdDefault) conf.ignore_md = false;     // 各测试照常列出 .md；opts.mdDefault 时按默认（忽略）
   if (opts.model) Object.assign(conf, {custom: {base: modelBase, model: opts.model, key: 'k'}, model: 'custom'});
   fs.mkdirSync(path.join(home, '.config', 'ask-local-files'), {recursive: true});
   fs.writeFileSync(path.join(home, '.config', 'ask-local-files', 'config.json'), JSON.stringify(conf));
@@ -1054,7 +1055,7 @@ test('查看记忆：搜索、删除结论、忘掉文件、清空，关掉记�
   const {page} = await launch(t, {model: 'memo', files: PLAN, width: 360});
   await pickByName(page, '项目计划');
   await ask(page, '第一阶段什么时候验收');
-  await page.click('#modelSettings');
+  await page.click('#memSettings');
   await page.locator('#memStats', {hasText: '已记住 1 个文件、1 条结论'}).waitFor();
   await page.click('#memView');
   await page.locator('#memFacts li', {hasText: '第一阶段三月底验收'}).waitFor();
@@ -1072,34 +1073,40 @@ test('查看记忆：搜索、删除结论、忘掉文件、清空，关掉记�
   await page.uncheck('#memoryOn');
   await page.locator('#memStatus', {hasText: '已关闭记忆'}).waitFor();
   assert.ok(await page.locator('#useMemRow').isHidden());
+  assert.ok(await page.locator('#memSettings').isVisible());      // 关掉记忆后仍能打开记忆设置
 });
 
-// 入口点了：「模型设置」展开、焦点在「记忆」小标题、小标题在视口里
+// 入口点了：记忆设置面板展开、焦点在「记忆」小标题、小标题在视口里
 async function atMemory(page) {
   await page.waitForFunction(() => document.activeElement && document.activeElement.id === 'memHead');
-  assert.ok(await page.locator('#modelPanel').isVisible());
-  assert.strictEqual(await page.getAttribute('#modelSettings', 'aria-expanded'), 'true');
+  assert.ok(await page.locator('#memSettingsPanel').isVisible());
+  assert.strictEqual(await page.getAttribute('#memSettings', 'aria-expanded'), 'true');
   await page.waitForFunction(() => {
     const r = document.querySelector('#memHead').getBoundingClientRect();
-    return r.top >= 0 && r.bottom <= window.innerHeight;
+    return r.top >= -1 && r.bottom <= window.innerHeight + 1;     // 滚到顶时可能差半个像素
   });
 }
 
-test('记忆入口：「参考记忆」旁、首次提示里的「记忆设置」与回答下方「已记住 N 条结论」都直达记忆；360px 不溢出', async t => {
+test('记忆设置是独立面板：默认收起，「记忆设置」展开收起，首次提示与回答下方「已记住 N 条结论」展开它；360px 不溢出', async t => {
   const {page} = await launch(t, {model: 'memo', files: PLAN, width: 360});
+  assert.ok(await page.locator('#memSettingsPanel').isHidden());
+  assert.strictEqual(await page.locator('#modelPanel #memoryOn').count(), 0);     // 「模型设置」里不再放记忆
   const notice = page.locator('#askStatus').getByRole('button', {name: '打开记忆设置'});
   await notice.click();
   await atMemory(page);
   assert.ok(await page.locator('#memPanel').isHidden());
   await noHorizontalScroll(page);
-  await page.click('#modelSettings');
-  assert.ok(await page.locator('#modelPanel').isHidden());
-  await page.click('#memSettings');
+  // 已展开时入口再点不收起
+  await notice.click();
   await atMemory(page);
-  // 已展开时再点不收起
   await page.click('#memSettings');
-  await atMemory(page);
-  await page.click('#modelSettings');
+  assert.ok(await page.locator('#memSettingsPanel').isHidden());
+  assert.strictEqual(await page.getAttribute('#memSettings', 'aria-expanded'), 'false');
+  await page.focus('#memSettings');
+  await page.keyboard.press('Enter');
+  await page.locator('#memSettingsPanel').waitFor();
+  await page.keyboard.press('Enter');
+  assert.ok(await page.locator('#memSettingsPanel').isHidden());
   await pickByName(page, '项目计划');
   await ask(page, '第一阶段什么时候验收');
   await page.locator('#chat .foot').getByRole('button', {name: /已记住 1 条结论，打开记忆设置/}).click();
@@ -1108,14 +1115,35 @@ test('记忆入口：「参考记忆」旁、首次提示里的「记忆设置�
   await noHorizontalScroll(page);
   await page.uncheck('#memoryOn');
   await page.locator('#memStatus', {hasText: '已关闭记忆'}).waitFor();
-  assert.ok(await page.locator('#memSettings').isHidden());
+  assert.ok(await page.locator('#memSettings').isVisible());
+});
+
+test('「查看记忆」按钮用主色描边与文字，浅色、深色下都与普通按钮不同', async t => {
+  for (const scheme of ['light', 'dark']) {
+    const {page} = await launch(t, {beforeGoto: p => p.emulateMedia({colorScheme: scheme})});
+    await page.click('#memSettings');
+    const [view, plain] = await Promise.all(['#memView', '#memUpdate'].map(sel => page.$eval(sel, b => {
+      const c = getComputedStyle(b);
+      return [c.color, c.borderTopColor, c.backgroundColor];
+    })));
+    const accent = await page.evaluate(() => {
+      const d = document.createElement('div');
+      d.style.color = 'var(--accent)';
+      document.body.appendChild(d);
+      const c = getComputedStyle(d).color;
+      d.remove();
+      return c;
+    });
+    assert.deepStrictEqual(view.slice(0, 2), [accent, accent], scheme);
+    assert.notStrictEqual(view[2], plain[2], scheme);
+  }
 });
 
 test('更新记忆：整理出主题页，更新记录可撤销，「空闲时自动更新」记住；360px 不溢出', async t => {
   const {page, url} = await launch(t, {model: 'memo', files: PLAN, width: 360});
   await pickByName(page, '项目计划');
   await ask(page, '第一阶段什么时候验收');
-  await page.click('#modelSettings');
+  await page.click('#memSettings');
   await page.locator('#memStats', {hasText: '待更新 1 项'}).waitFor();
   await page.click('#memUpdate');
   await page.locator('#memUpdStatus', {hasText: '记忆已更新：新建主题页 1 页。'}).waitFor();
@@ -1135,8 +1163,35 @@ test('更新记忆：整理出主题页，更新记录可撤销，「空闲时�
   await page.uncheck('#memAuto');
   await page.locator('#memUpdStatus', {hasText: '已关闭空闲时自动更新'}).waitFor();
   await page.goto(url);
-  await page.click('#modelSettings');
+  await page.click('#memSettings');
   assert.strictEqual(await page.locator('#memAuto').isChecked(), false);
+});
+
+test('「忽略 Markdown 文件」默认勾选，搜索与浏览都不列 .md，扩展名填 md 时照列，取消后恢复并记住', async t => {
+  const {page, url} = await launch(t, {mdDefault: true, files: {'说明.markdown': '丙'}});
+  await page.locator('#results li').first().waitFor();
+  assert.ok(await page.locator('#ignoreMdSearch').isChecked());
+  const names = () => page.$$eval('#results li .name', els => els.map(e => e.textContent));
+  await page.fill('#q', '');
+  await page.waitForFunction(() => document.querySelectorAll('#results li').length === 2);
+  assert.ok(!(await names()).some(n => /\.(md|markdown)$/.test(n)));
+  await page.fill('#ext', 'md');
+  await page.locator('#results li', {hasText: '会议记录.md'}).waitFor();
+  await page.fill('#ext', '');
+  await page.click('#tabBrowse');
+  await page.locator('#browseList button.dir').first().click();
+  await page.locator('#browseList li', {hasText: '季度总结.txt'}).waitFor();
+  assert.strictEqual(await page.locator('#browseList li', {hasText: '说明.markdown'}).count(), 0);
+  assert.strictEqual(await page.locator('#browseList li', {hasText: '子目录'}).count(), 0);   // 只有 .md 的子文件夹不列
+  assert.ok(await page.locator('#ignoreMdBrowse').isChecked());
+  await page.uncheck('#ignoreMdBrowse');
+  await page.locator('#browseList li', {hasText: '说明.markdown'}).waitFor();
+  await page.locator('#browseList li', {hasText: '子目录'}).waitFor();
+  await page.waitForTimeout(300);
+  await page.goto(url);
+  await page.locator('#findStatus:not(:empty)').waitFor();
+  assert.strictEqual(await page.locator('#ignoreMdSearch').isChecked(), false);
+  await noHorizontalScroll(page);
 });
 
 test('页头介绍写明记忆的用法', async t => {

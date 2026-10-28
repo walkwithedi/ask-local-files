@@ -9,6 +9,7 @@
     long      流式返回 200 行（测对话区滚动）
     cite      回答带两条摘句：一条在「季度总结.txt」原文里，一条不在
     notfound  回答「所选文件中未找到」
+    supp      回答带一条核对得上的摘句，末尾「文件外补充（未核对）：」一段里另有一条编造的摘句
     memo      回答带一条摘句「第一阶段在三月底完成验收」，引自文件 1（测记忆）；收到记忆更新时，
               把给出的结论（文件没改过的）整理成一页「验收安排」
     err401 / err404 / err429 / err500   返回对应状态码
@@ -102,6 +103,8 @@ class FakeModel(BaseHTTPRequestHandler):
             pieces = ['第 %d 行\n' % i for i in range(1, 201)]
         if model == 'cite':
             pieces = ['要点一（文件 1：「甲甲', '甲」）。', '要点二（文件 1：「编造的话」）。']
+        if model == 'supp':
+            pieces = ['要点（文件 1：「甲甲', '甲」）。\n\n文件外补充（未核对）：', '另一说法（文件 1：「编造的话」）。']
         if model == 'notfound':
             pieces = ['所选文件中未找到。']
         if model == 'memo':
