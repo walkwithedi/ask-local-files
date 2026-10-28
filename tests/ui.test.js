@@ -1074,6 +1074,48 @@ test('查看记忆：搜索、删除结论、忘掉文件、清空，关掉记�
   assert.ok(await page.locator('#useMemRow').isHidden());
 });
 
+// 入口点了：「模型设置」展开、焦点在「记忆」小标题、小标题在视口里
+async function atMemory(page) {
+  await page.waitForFunction(() => document.activeElement && document.activeElement.id === 'memHead');
+  assert.ok(await page.locator('#modelPanel').isVisible());
+  assert.strictEqual(await page.getAttribute('#modelSettings', 'aria-expanded'), 'true');
+  await page.waitForFunction(() => {
+    const r = document.querySelector('#memHead').getBoundingClientRect();
+    return r.top >= 0 && r.bottom <= window.innerHeight;
+  });
+}
+
+test('记忆入口：「参考记忆」旁、首次提示里的「记忆设置」与回答下方「已记住 N 条结论」都直达记忆；360px 不溢出', async t => {
+  const {page} = await launch(t, {model: 'memo', files: PLAN, width: 360});
+  const notice = page.locator('#askStatus').getByRole('button', {name: '打开记忆设置'});
+  await notice.click();
+  await atMemory(page);
+  assert.ok(await page.locator('#memPanel').isHidden());
+  await noHorizontalScroll(page);
+  await page.click('#modelSettings');
+  assert.ok(await page.locator('#modelPanel').isHidden());
+  await page.click('#memSettings');
+  await atMemory(page);
+  // 已展开时再点不收起
+  await page.click('#memSettings');
+  await atMemory(page);
+  await page.click('#modelSettings');
+  await pickByName(page, '项目计划');
+  await ask(page, '第一阶段什么时候验收');
+  await page.locator('#chat .foot').getByRole('button', {name: /已记住 1 条结论，打开记忆设置/}).click();
+  await atMemory(page);
+  await page.locator('#memFacts li', {hasText: '第一阶段三月底验收'}).waitFor();
+  await noHorizontalScroll(page);
+  await page.uncheck('#memoryOn');
+  await page.locator('#memStatus', {hasText: '已关闭记忆'}).waitFor();
+  assert.ok(await page.locator('#memSettings').isHidden());
+});
+
+test('页头介绍写明记忆的用法', async t => {
+  const {page} = await launch(t);
+  assert.match(await page.locator('.sub').first().textContent(), /勾选「参考记忆」时参考本机记住的文件和结论，可在「记忆设置」里查看或清空。/);
+});
+
 
 test('搜索结果少于 50 个时可全部加入，跳过读不了的', async t => {
   const {page} = await launch(t, {files: {'报告甲.txt': '甲', '报告乙.md': '乙', '报告丙.rar': 'x'}});
