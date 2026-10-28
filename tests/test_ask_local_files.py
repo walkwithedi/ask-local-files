@@ -1000,6 +1000,104 @@ class MemoryChatTest(ServerCase):
         self.assertEqual(lines[-1]['remembered'], 0)
 
 
+class MemoryUpdateTest(MemoryChatTest):
+    """记忆更新：假模型 memo 把结论整理成一页「验收安排」。"""
+
+    def wait(self):
+        for _ in range(100):
+            st = self.call('/api/memory-update')[1]
+            if not st['running']:
+                return st
+            time.sleep(0.05)
+        self.fail('更新没有结束')
+
+    def test_manual_update_and_undo(self):
+        st = self.call('/api/memory-update')[1]
+        self.assertEqual((st['running'], st['pending'], st['auto'], st['history']), (False, 0, True, []))
+        self.ask('第一阶段什么时候验收', [self.plan])
+        self.assertEqual(self.call('/api/memory-update')[1]['pending'], 1)
+        code, st = self.call('/api/memory-update', {'action': 'run'})
+        self.assertEqual(code, 200)
+        st = self.wait()
+        self.assertEqual(st['result']['kind'], 'done')
+        self.assertEqual(st['result']['text'], '记忆已更新：新建主题页 1 页。')
+        self.assertEqual(st['pending'], 0)
+        h = st['history'][0]
+        self.assertEqual((h['mode'], h['summary'], h['changes']), ('manual', '新建主题页 1 页', ['新建主题页：验收安排']))
+        self.assertIn('你在维护使用者本机的一份「记忆」', json.loads(
+            urllib.request.urlopen(MODEL_BASE + '/last').read())['messages'][0]['content'])
+        topics = self.call('/api/memory')[1]['topics']
+        self.assertEqual([(t['title'], len(t['points'])) for t in topics], [('验收安排', 1)])
+        # 提问时主题页要点排在最前
+        code, lines = self.ask('第一阶段验收')
+        self.assertIn('验收安排：第一阶段三月底验收（原文：「第一阶段在三月底完成验收」）', self.sent())
+        # 撤销：只能撤最近一次
+        self.assertEqual(self.call('/api/memory-update', {'action': 'undo', 'id': h['id'] + 1})[0], 409)
+        code, st = self.call('/api/memory-update', {'action': 'undo', 'id': h['id']})
+        self.assertEqual((code, st['history'], st['stats']['topics']), (200, [], 0))
+        self.assertEqual(self.call('/api/memory-update', {'action': 'undo', 'id': True})[0], 400)
+        self.assertEqual(self.call('/api/memory', {'action': 'topic', 'id': 1})[1]['count'], 0)
+
+    def test_nothing_to_do_and_errors(self):
+        self.call('/api/memory-update', {'action': 'run'})
+        self.assertEqual(self.wait()['result']['text'], '没有要更新的内容。')
+        self.ask('第一阶段什么时候验收', [self.plan])
+        self.config.custom['model'] = 'err500'
+        self.call('/api/memory-update', {'action': 'run'})
+        st = self.wait()
+        self.assertEqual(st['result']['kind'], 'error')
+        self.assertTrue(st['result']['text'].startswith('更新记忆失败：'))
+        self.assertEqual(st['pending'], 1)     # 没写入，留在队里
+        self.config.custom['model'] = 'ok'     # 回答不是 JSON：这一批不写入，留待下次
+        self.call('/api/memory-update', {'action': 'run'})
+        self.assertIn('另有 2 批模型的回答看不懂', self.wait()['result']['text'])
+        self.call('/api/settings', {'memory': False})
+        self.assertEqual(self.call('/api/memory-update', {'action': 'run'})[0], 400)
+        self.assertEqual(self.call('/api/memory-update', {'action': 'nope'})[0], 400)
+
+    def test_auto_when_idle_and_yield_on_ask(self):
+        up = self.st.updater
+        up.idle = 0
+        up.tick()
+        self.assertFalse(up.status()['running'])       # 队里没东西
+        self.ask('第一阶段什么时候验收', [self.plan])
+        self.call('/api/settings', {'memory_auto': False})
+        self.assertFalse(fa.Config(self.config.path).memory_auto)
+        up.tick()
+        self.assertFalse(up.status()['running'])
+        self.call('/api/settings', {'memory_auto': True})
+        up.idle = 3600
+        up.tick()
+        self.assertFalse(up.status()['running'])       # 还没空闲够
+        # 空闲够了：开始自动更新；模型回答到一半时有人提问，这一批不写入
+        up.idle = 0
+        real = fa.stream_chat
+
+        def asked_midway(tg, msgs, **kw):
+            yield from real(tg, msgs, **kw)
+            up.asked()
+            yield ''
+        with mock.patch.object(fa, 'stream_chat', asked_midway):
+            up.tick()
+            st = self.wait()
+        self.assertEqual((st['mode'], st['result']['kind'], st['pending'], st['history']), ('auto', 'yielded', 1, []))
+        up.last_try = 0
+        up.tick()
+        st = self.wait()
+        self.assertEqual((st['result']['kind'], st['pending'], st['history'][0]['mode']), ('done', 0, 'auto'))
+
+    def test_exit_waits_for_manual_only(self):
+        self.st.seen = True
+        self.st.quit.set()
+        up = self.st.updater
+        up.running, up.mode = True, 'manual'
+        self.assertIsNone(self.st.should_exit())
+        up.mode = 'auto'
+        self.assertEqual(self.st.should_exit(), 'quit requested')
+        self.assertTrue(up.halt.is_set())       # 自动更新随退出停下
+        up.running = False
+
+
 class CheckQuotesTest(unittest.TestCase):
     def test_whitespace_and_ellipsis(self):
         texts = ['第一条 规定\n如下：每月 5 日前提交。其余事项另行通知。']

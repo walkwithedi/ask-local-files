@@ -1111,6 +1111,34 @@ test('记忆入口：「参考记忆」旁、首次提示里的「记忆设置�
   assert.ok(await page.locator('#memSettings').isHidden());
 });
 
+test('更新记忆：整理出主题页，更新记录可撤销，「空闲时自动更新」记住；360px 不溢出', async t => {
+  const {page, url} = await launch(t, {model: 'memo', files: PLAN, width: 360});
+  await pickByName(page, '项目计划');
+  await ask(page, '第一阶段什么时候验收');
+  await page.click('#modelSettings');
+  await page.locator('#memStats', {hasText: '待更新 1 项'}).waitFor();
+  await page.click('#memUpdate');
+  await page.locator('#memUpdStatus', {hasText: '记忆已更新：新建主题页 1 页。'}).waitFor();
+  assert.ok(await page.locator('#memUpdStop').isHidden());
+  assert.strictEqual(await page.locator('#memUpdate').isDisabled(), false);
+  await page.click('#memView');
+  await page.locator('#memTopics li', {hasText: '验收安排'}).waitFor();
+  assert.match(await page.locator('#memTopics li').first().textContent(), /第一阶段三月底验收（「第一阶段在三月底完成验收」/);
+  await page.click('#memLog');
+  const rec = page.locator('#memLogList li').first();
+  assert.match(await rec.textContent(), /手动 · 新建主题页 1 页新建主题页：验收安排/);
+  await noHorizontalScroll(page);
+  await rec.getByRole('button', {name: '撤销这次更新'}).click();
+  await page.locator('#memUpdStatus', {hasText: '已撤销'}).waitFor();
+  await page.locator('#memLogList li', {hasText: '还没有更新记录'}).waitFor();
+  await page.locator('#memTopics li', {hasText: '还没有主题页'}).waitFor();
+  await page.uncheck('#memAuto');
+  await page.locator('#memUpdStatus', {hasText: '已关闭空闲时自动更新'}).waitFor();
+  await page.goto(url);
+  await page.click('#modelSettings');
+  assert.strictEqual(await page.locator('#memAuto').isChecked(), false);
+});
+
 test('页头介绍写明记忆的用法', async t => {
   const {page} = await launch(t);
   assert.match(await page.locator('.sub').first().textContent(), /勾选「参考记忆」时参考本机记住的文件和结论，可在「记忆设置」里查看或清空。/);

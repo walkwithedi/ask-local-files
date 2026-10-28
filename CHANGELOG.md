@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.3.0
+
+- Memory updates, after the LLM Wiki pattern: the selected model turns conclusions into topic pages (a title and points, each point with its file and quote), merges duplicates, replaces statements superseded by newer ones, deletes ones that no longer hold, and rewrites conclusions from files that changed. Every point and rewritten conclusion is checked against the file's current text before it is written; ones marked 不对 ("wrong") are never written back.
+- New conclusions and changed files wait in an update queue, so answers do not slow down. 更新记忆 ("update memory") works through the queue and then checks every conclusion, in batches within the character limit; it can be stopped, and quitting waits for it. 空闲时自动更新 ("update when idle", on by default) works through the queue after 10 minutes without a question, and gives way at once to a question or to quitting, discarding the batch in progress.
+- 更新记录 ("update history") lists the last 20 updates with their changes; they can be undone one at a time, newest first. 查看记忆 lists topic pages too, and questions draw on topic points first.
+- A conclusion whose quote is gone from a changed file now waits for the update instead of being deleted at once; it is not consulted meanwhile. The memory database is upgraded in place and keeps what it holds.
+
 ## 2.2.0
 
 - Memory is easier to reach: 记忆设置 ("memory settings") next to 参考记忆, the 已记住 N 条结论 ("N conclusions kept") line under an answer, and a 记忆设置 button in the first-run notice open 模型设置, scroll to its 记忆 section and move focus there; the line under an answer also opens 查看记忆. The entry next to 参考记忆 hides with it when memory is off.

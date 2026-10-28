@@ -9,7 +9,8 @@
     long      流式返回 200 行（测对话区滚动）
     cite      回答带两条摘句：一条在「季度总结.txt」原文里，一条不在
     notfound  回答「所选文件中未找到」
-    memo      回答带一条摘句「第一阶段在三月底完成验收」，引自文件 1（测记忆）
+    memo      回答带一条摘句「第一阶段在三月底完成验收」，引自文件 1（测记忆）；收到记忆更新时，
+              把给出的结论（文件没改过的）整理成一页「验收安排」
     err401 / err404 / err429 / err500   返回对应状态码
     toolong   返回 400，内容含 context length exceeded
     call:<工具名>:<JSON 参数>   请求带 tools 且还没有工具结果时流式返回一次工具调用（参数分两段发），
@@ -105,6 +106,13 @@ class FakeModel(BaseHTTPRequestHandler):
             pieces = ['所选文件中未找到。']
         if model == 'memo':
             pieces = ['第一阶段三月底验收（文件 1：「第一阶段', '在三月底完成验收」）。']
+            if '你在维护使用者本机的一份「记忆」' in data['messages'][0]['content']:
+                # 记忆更新：把给出的结论整理成一页「验收安排」
+                work = json.loads(data['messages'][1]['content'])
+                points = [{'text': c['conclusion'], 'file': c['file'], 'quote': c['quote']}
+                          for c in work['conclusions'] if not c.get('changed')]
+                text = json.dumps({'topics': [{'id': 'new', 'title': '验收安排', 'points': points}]}, ensure_ascii=False)
+                pieces = [text[i:i + 20] for i in range(0, len(text), 20)]
         if model == 'md':
             text = ('# 标题\n\n**加粗** 与 *斜体* 和 `代码`，见 [说明](https://example.com/a)\n\n'
                     '- 甲\n  - 甲一\n- 乙\n\n1. 一\n2. 二\n\n> 引用\n\n---\n\n'
