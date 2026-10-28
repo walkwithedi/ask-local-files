@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 """ask_memory.py 的测试，只用标准库：python3 -m unittest discover -s ask-local-files/tests"""
 
+import json
 import os
 import shutil
 import sqlite3
@@ -147,14 +148,17 @@ class MemoryTest(MemoryCase):
         quotes = [f['quote'] for b in got for f in b['facts']]
         self.assertEqual(quotes, ['预算总额为一百万元'])
         self.assertIn('第一阶段在五月完成验收。', got[0]['paras'])
-        self.assertEqual(self.mem.stats()['facts'], 1)
+        # 原句不在了的结论留待更新时由模型改写，先不拿去参考；文件排进更新队列
+        self.assertEqual(self.mem.stats()['facts'], 2)
+        self.assertEqual(self.mem.plan_update()[0], ('file', self.file))
 
     def test_deleted_file_forgotten(self):
         self.remember()
         self.mem.remember_answer('a1', '问', ANSWER, {1: self.file})
         os.remove(self.file)
         self.assertEqual(self.recall('预算'), [])
-        self.assertEqual(self.mem.stats(), {'files': 0, 'facts': 0, 'bytes': 0, 'max_bytes': am.MAX_BYTES})
+        self.assertEqual(self.mem.stats(), {'files': 0, 'facts': 0, 'topics': 0, 'queued': 0, 'bytes': 0,
+                                            'max_bytes': am.MAX_BYTES})
 
     def test_unreadable_changed_file_forgotten(self):
         self.remember()
@@ -197,6 +201,180 @@ class MemoryTest(MemoryCase):
         self.assertEqual([f['conclusion'] for f in self.mem.listing('预算')['facts']], ['预算一百万元'])
         self.assertEqual(self.mem.listing('100%')['facts'], [])
         self.assertEqual(len(self.mem.listing('计划')['files']), 1)
+
+
+def reply(**plan):
+    return '```json\n' + json.dumps(plan, ensure_ascii=False) + '\n```'
+
+
+class UpdateTest(MemoryCase):
+    """更新：用写好的回答代替模型。"""
+
+    def setUp(self):
+        super().setUp()
+        self.remember()
+        self.mem.remember_answer('a1', '问', ANSWER, {1: self.file})
+        self.ids = {f['quote']: f['id'] for f in self.mem.listing()['facts']}
+
+    def batch(self, full=False):
+        units = self.mem.plan_update(full)
+        self.assertTrue(units)
+        payload, ctx = self.mem.update_batch(units[0], 100000)
+        return json.loads(payload), ctx
+
+    def topic(self):
+        return {'id': 'new', 'title': '项目安排', 'points': [
+            {'text': '第一阶段三月底验收', 'file': 1, 'quote': '第一阶段在三月底完成验收'},
+            {'text': '预算一百万', 'file': 1, 'quote': '预算总额为一百万元'}]}
+
+    def test_queue_and_topic_page(self):
+        self.assertEqual(self.mem.pending(), 2)
+        payload, ctx = self.batch()
+        self.assertEqual(payload['files'], {'1': self.file})
+        self.assertEqual({c['quote'] for c in payload['conclusions']}, set(self.ids))
+        run, counts, changes = self.mem.apply_update(ctx, reply(topics=[self.topic()]), 'manual')
+        self.assertEqual(counts, {'topics_new': 1})
+        self.assertEqual(am.summary(counts), '新建主题页 1 页')
+        self.assertEqual(changes, ['新建主题页：项目安排'])
+        self.assertEqual(self.mem.pending(), 0)
+        topics = self.mem.listing()['topics']
+        self.assertEqual([t['title'] for t in topics], ['项目安排'])
+        self.assertEqual(len(topics[0]['points']), 2)
+        # 提问时主题页要点排在最前，同一原句不重复给结论
+        got = self.recall('第一阶段验收')
+        self.assertEqual(got[0]['facts'][0]['conclusion'], '项目安排：第一阶段三月底验收')
+        self.assertEqual(len([f for f in got[0]['facts'] if f['quote'] == '第一阶段在三月底完成验收']), 1)
+        self.assertEqual(self.mem.listing('一百万')['topics'][0]['title'], '项目安排')
+        self.assertEqual(self.mem.stats()['topics'], 1)
+
+    def test_quote_check_and_rejected(self):
+        payload, ctx = self.batch()
+        bad = {'id': 'new', 'title': '编的', 'points': [{'text': '编的', 'file': 1, 'quote': '文件里没有这句'}]}
+        run, counts, _ = self.mem.apply_update(ctx, reply(topics=[bad]), 'manual')
+        self.assertEqual((run, counts), (None, {}))
+        self.assertEqual(self.mem.history(), [])
+        # 「不对」过的结论不会经由主题页写回
+        self.mem.wrong('a1')
+        self.remember()
+        self.mem.remember_answer('a9', '问', '预算为一百万元（文件 1：「预算总额为一百万元」）', {1: self.file})
+        payload, ctx = self.batch()
+        page = {'id': 'new', 'title': '验收', 'points': [
+            {'text': '第一阶段三月底验收', 'file': 1, 'quote': '第一阶段在三月底完成验收'}]}
+        self.assertEqual(self.mem.apply_update(ctx, reply(topics=[page]), 'auto')[1], {})
+        with self.assertRaises(ValueError):
+            self.mem.apply_update(ctx, '我看不懂', 'auto')
+
+    def test_merge_replace_delete_and_undo(self):
+        self.mem.remember_answer('a2', '问', '验收在三月底（文件 1：「第一阶段在三月底完成验收」）', {1: self.file})
+        other = os.path.join(self.root, '新计划.txt')
+        self.write('第一阶段推迟到五月完成验收。', other)
+        self.remember(other)
+        self.mem.remember_answer('a3', '问', '验收推迟到五月（文件 1：「推迟到五月完成验收」）', {1: other})
+        self.mem.remember_answer('a4', '问', '另有一条（文件 1：「由财务部负责」）', {1: self.file})
+        facts = {f['quote']: f['id'] for f in self.mem.listing()['facts']}
+        before = self.mem.listing()
+        payload, ctx = self.batch()
+        f = lambda q: 'F%d' % facts[q]
+        plan = {'conclusions': [{'id': f('第一阶段在三月底完成验收'), 'action': 'replace', 'into': f('推迟到五月完成验收')},
+                                {'id': f('由财务部负责'), 'action': 'delete'},
+                                {'id': f('预算总额为一百万元'), 'action': 'rewrite', 'conclusion': '不改', 'file': 1,
+                                 'quote': '预算总额为一百万元'}]}
+        run, counts, changes = self.mem.apply_update(ctx, reply(**plan), 'manual')
+        # 没改过的文件不改写
+        self.assertEqual(counts, {'replaced': 1, 'deleted': 1})
+        self.assertIn('以新代旧：验收在三月底 → 验收推迟到五月', changes)
+        self.assertEqual(set(f['quote'] for f in self.mem.listing()['facts']), {'预算总额为一百万元', '推迟到五月完成验收'})
+        hist = self.mem.history()
+        self.assertEqual([(h['id'], h['mode'], h['counts']) for h in hist], [(run, 'manual', counts)])
+        self.assertFalse(self.mem.undo_update(run + 1))
+        self.assertTrue(self.mem.undo_update(run))
+        after = self.mem.listing()
+        key = lambda r: sorted((x['id'], x['conclusion'], x['count']) for x in r['facts'])
+        self.assertEqual(key(after), key(before))
+        self.assertEqual(self.mem.history(), [])
+        # 合并：次数相加
+        payload, ctx = self.batch(full=True)
+        self.mem.apply_update(ctx, reply(conclusions=[{'id': f('推迟到五月完成验收'), 'action': 'merge',
+                                                       'into': f('预算总额为一百万元')}]), 'manual')
+        merged = {x['quote']: x for x in self.mem.listing()['facts']}
+        self.assertEqual(merged['预算总额为一百万元']['count'], 2)
+
+    def test_changed_file_rewritten_or_dropped(self):
+        self.mem.apply_update(self.batch()[1], reply(topics=[self.topic()]), 'manual')
+        self.write(PLAN.replace('三月底', '五月'))
+        self.recall('第一阶段')         # 取用时发现文件改了
+        payload, ctx = self.batch()
+        self.assertEqual(ctx['kind'], 'file')
+        self.assertEqual([c['quote'] for c in payload['conclusions']], ['第一阶段在三月底完成验收'])
+        self.assertTrue(all(c.get('changed') for c in payload['conclusions']))
+        self.assertIn('第一阶段在五月完成验收', payload['texts']['1'])
+        fid = payload['conclusions'][0]['id']
+        run, counts, _ = self.mem.apply_update(ctx, reply(conclusions=[
+            {'id': fid, 'action': 'rewrite', 'conclusion': '第一阶段五月验收', 'file': 1, 'quote': '第一阶段在五月完成验收'}]),
+            'auto')
+        # 改写了结论；主题页里原句不在了的要点没改写，删掉
+        self.assertEqual(counts, {'rewritten': 1})
+        self.assertIn('第一阶段五月验收', [f['conclusion'] for f in self.mem.listing()['facts']])
+        self.assertEqual([len(t['points']) for t in self.mem.listing()['topics']], [1])
+        self.assertEqual(self.mem.plan_update()[0][0], 'facts')     # 改写后的结论再整理进主题页
+        self.assertTrue(self.mem.undo_update(run))
+        self.assertEqual([len(t['points']) for t in self.mem.listing()['topics']], [2])
+        # 模型改写不了：删除
+        self.write(PLAN.replace('三月底', '六月'))
+        self.recall('第一阶段')
+        payload, ctx = self.batch()
+        run, counts, _ = self.mem.apply_update(ctx, reply(), 'auto')
+        self.assertEqual(counts, {'deleted': 1})
+
+    def test_budget_and_history_limit(self):
+        for i in range(30):
+            self.mem.remember_answer('b%d' % i, '问', '预算%d（文件 1：「预算总额为一百万元」）' % i, {1: self.file})
+        payload, ctx = self.mem.update_batch(('lint', list(self.ids.values())), 300)
+        self.assertLessEqual(len(payload), 300)
+        for i in range(am.MAX_UPDATES + 1):
+            self.mem.forget_topic(0)
+            page = dict(self.topic(), title='页%d' % i)
+            self.mem.apply_update(self.batch(full=True)[1], reply(topics=[page]), 'auto')
+        hist = self.mem.history()
+        self.assertEqual(len(hist), am.MAX_UPDATES)
+        self.assertFalse(self.mem.undo_update(hist[1]['id']))       # 只能从最近一次往回撤销
+        for h in hist:
+            self.assertTrue(self.mem.undo_update(h['id']))
+        self.assertEqual([t['title'] for t in self.mem.listing()['topics']], ['页0'])
+
+    def test_clear_and_forget_topic(self):
+        self.mem.apply_update(self.batch()[1], reply(topics=[self.topic()]), 'manual')
+        tid = self.mem.listing()['topics'][0]['id']
+        self.assertTrue(self.mem.forget_topic(tid))
+        self.assertEqual(self.mem.listing()['topics'], [])
+        self.mem.apply_update(self.batch(full=True)[1], reply(topics=[self.topic()]), 'manual')
+        self.mem.forget_file(self.file)
+        self.assertEqual(self.mem.stats()['topics'], 0)        # 出处文件不在了，要点删光，主题页一并删
+        self.remember()
+        self.mem.remember_answer('a1', '问', ANSWER, {1: self.file})
+        self.mem.clear()
+        self.assertEqual((self.mem.pending(), self.mem.history()), (0, []))
+
+
+class UpgradeTest(MemoryCase):
+    def test_schema_1_kept(self):
+        os.makedirs(os.path.dirname(self.mem.path))
+        db = sqlite3.connect(self.mem.path)
+        am.Memory._create(db)
+        db.close()
+        self.assertTrue(self.remember())
+        self.mem.remember_answer('a1', '问', ANSWER, {1: self.file})
+        self.mem.close()
+        # 降回版本 1 的库：去掉新表与新列，再打开
+        db = sqlite3.connect(self.mem.path)
+        db.executescript('DROP TABLE points_fts; DROP TABLE points; DROP TABLE topics; DROP TABLE queue; '
+                         'DROP TABLE updates; ALTER TABLE facts DROP COLUMN stale; PRAGMA user_version = 1;')
+        db.close()
+        self.assertEqual(self.mem.stats()['facts'], 2)
+        self.assertEqual(self.recall('预算')[0]['facts'][0]['quote'], '预算总额为一百万元')
+        self.assertEqual([n for n in os.listdir(os.path.dirname(self.mem.path)) if '.broken-' in n], [])
+        with sqlite3.connect(self.mem.path) as db:
+            self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], am.SCHEMA)
 
 
 class _NoFts:

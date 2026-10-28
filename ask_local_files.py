@@ -26,6 +26,7 @@ ask_local_files  --  找文件问 AI
     - 记忆（ask_memory.py，默认开，设置里可关）：提问时选过的文件按段落存进本机 SQLite 记忆
       （~/.local/share/ask-local-files/memory.sqlite，权限 600），回答里核对通过的摘句连同结论记下；
       之后提问时按关键字检索记忆，结论与原文段落排在已选文件之后一起发给模型，取用前按文件当前内容复核。
+      「更新记忆」或空闲时自动把记忆分批交给模型，整理成主题页，合并重复、以新代旧、改写文件改过的结论，可撤销。
     - 文件夹输入框接受 file:/// 地址；可由本机服务弹出系统的目录选择框（zenity、kdialog 或 tkinter）。
     - 按文件名去重：同名（不区分大小写，去掉一个副本标记后相同也算）只列修改时间最新的一个。
 
@@ -63,7 +64,7 @@ from urllib.parse import parse_qs, urlsplit
 LOG_FORMAT = '%(asctime)s [%(levelname)s] %(name)s.%(funcName)s:%(lineno)d - %(message)s'
 log = logging.getLogger('ask_local_files')
 
-VERSION = '2.2'
+VERSION = '2.3'
 HERE = os.path.dirname(os.path.abspath(__file__))
 PAGE_FILE = os.path.join(HERE, 'ask_local_files.html')
 LOG_NAME = 'ask_local_files.log'
@@ -75,6 +76,7 @@ CONFIG_FILE = os.path.join(XDG_CONFIG, 'ask-local-files', 'config.json')
 CACHE_FILE = os.path.join(XDG_CACHE, 'ask-local-files', 'index.json')
 MEMORY_FILE = os.path.join(XDG_DATA, 'ask-local-files', 'memory.sqlite')
 MEMORY_SHARE = 3        # 选了文件时，记忆至多占发送字数上限（扣除 skill 与对话后）的几分之一
+MEMORY_IDLE = 600       # 空闲时自动更新记忆：多少秒没有提问后开始
 OPENCODE_DIR = os.path.join(XDG_CONFIG, 'opencode')
 USER_SKILLS = os.path.join(OPENCODE_DIR, 'skills')
 BUNDLED_SKILLS = os.path.join(HERE, 'skills')
@@ -214,17 +216,18 @@ class Config:
         self.memory = data.get('memory') is not False   # 记忆总开关，默认开
         self.use_memory = data.get('use_memory') is not False   # 「问 AI」里的「参考记忆」，默认开
         self.memory_notice = data.get('memory_notice') is True  # 已提示过记忆默认打开
+        self.memory_auto = data.get('memory_auto') is not False     # 空闲时自动更新记忆，默认开
 
     def save(self):
         write_private(self.path, {'folders': self.folders, 'char_limit': self.char_limit, 'dedup': self.dedup,
                                   'regex': self.regex, 'memory': self.memory, 'use_memory': self.use_memory,
-                                  'memory_notice': self.memory_notice,
+                                  'memory_notice': self.memory_notice, 'memory_auto': self.memory_auto,
                                   'custom': self.custom, 'model': self.model})
 
     def public(self):
         return {'folders': list(self.folders), 'char_limit': self.char_limit, 'model': self.model, 'dedup': self.dedup,
                 'regex': self.regex, 'memory': self.memory, 'use_memory': self.use_memory,
-                'memory_notice': self.memory_notice,
+                'memory_notice': self.memory_notice, 'memory_auto': self.memory_auto,
                 'custom': {'base': self.custom['base'], 'model': self.custom['model'],
                            'has_key': bool(self.custom['key'])},
                 }
@@ -1396,6 +1399,163 @@ def stream_chat(tg, msgs, timeout=None, tools=None):
         raise ModelError('连接中断：%s' % e)
 
 
+# ---------------------------------------------------------------- 记忆更新
+
+class MemoryUpdater:
+    """在后台把记忆的更新队列（手动时另加全量体检）分批交给模型，按回答整理主题页、合并、以新代旧、改写或删除。
+    手动（「更新记忆」）可停止，退出时等它结束；自动（「空闲时自动更新」）在没有回答在生成、且 idle 秒没有提问时
+    处理队列，发起提问或退出时立即停下，正在处理的那一批不写入。模型调用失败时停下这一轮。"""
+
+    def __init__(self, state, idle=MEMORY_IDLE):
+        self.st = state
+        self.idle = idle
+        self.lock = threading.Lock()
+        self.running = False
+        self.mode = ''
+        self.stage = ''
+        self.done = self.total = 0
+        self.result = None      # {'kind': done|stopped|yielded|error, 'text', 'time'}
+        self.halt = threading.Event()
+        self.last_ask = self.last_try = time.monotonic()
+
+    def status(self):
+        st = self.st
+        try:
+            pending, history = st.memory.pending(), st.memory.history()
+        except (sqlite3.Error, OSError) as e:
+            log.warning('memory: update status failed: %s', e)
+            pending, history = 0, []
+        for h in history:
+            h['summary'] = ask_memory.summary(h['counts'])
+        with self.lock:
+            return {'running': self.running, 'mode': self.mode, 'stage': self.stage, 'done': self.done,
+                    'total': self.total, 'result': self.result, 'pending': pending,
+                    'auto': st.config.memory_auto, 'history': history}
+
+    def asked(self):
+        """有人提问：记下时间，自动更新立即让路。"""
+        with self.lock:
+            self.last_ask = time.monotonic()
+            if self.running and self.mode == 'auto':
+                self.halt.set()
+
+    def stop(self):
+        self.halt.set()
+
+    def busy_manual(self):
+        with self.lock:
+            return self.running and self.mode == 'manual'
+
+    def start(self, mode):
+        """开始一次更新；已在进行时返回 False，没有可用模型时抛 ModelError。"""
+        targets, default = model_targets(self.st.config, self.st.local_models)
+        tg = targets.get(default)
+        if not tg:
+            raise ModelError(NO_MODEL)
+        with self.lock:
+            if self.running:
+                return False
+            self.running, self.mode, self.stage, self.done, self.total = True, mode, '', 0, 0
+            self.halt.clear()
+        threading.Thread(target=self._run, args=(mode, tg), daemon=True).start()
+        return True
+
+    def _finish(self, kind, text):
+        log.info('memory update (%s) finished: %s', self.mode, kind)
+        with self.lock:
+            self.running = False
+            self.result = {'kind': kind, 'text': text, 'time': time.time()}
+
+    def _run(self, mode, tg):
+        mem = self.st.memory
+        budget = model_limit(self.st.config, tg) - len(ask_memory.UPDATE_PROMPT) - 200
+        counts, run, unreadable = {}, None, 0
+        try:
+            units = mem.plan_update(full=mode == 'manual')
+        except (sqlite3.Error, OSError) as e:
+            self._finish('error', '更新记忆失败：读不了记忆（%s）。' % e)
+            return
+        if not units:
+            self._finish('done', '没有要更新的内容。' if mode == 'manual' else '')
+            return
+        with self.lock:
+            self.total = len(units)
+        log.info('memory update (%s): %d batches, model %s', mode, len(units), tg['label'])
+        for i, unit in enumerate(units):
+            with self.lock:
+                self.done = i
+                self.stage = '体检' if unit[0] == 'lint' else '处理待更新的内容'
+            if self.halt.is_set():
+                break
+            try:
+                payload, ctx = mem.update_batch(unit, budget)
+                reply = None
+                if payload is not None:
+                    pieces = []
+                    for piece in stream_chat(tg, ask_memory.update_messages(payload)):
+                        if self.halt.is_set():
+                            break
+                        if isinstance(piece, str):
+                            pieces.append(piece)
+                    if self.halt.is_set():
+                        break
+                    reply = ''.join(pieces)
+                try:
+                    run, got, _ = mem.apply_update(ctx, reply, mode, run)
+                except ValueError:
+                    unreadable += 1
+                    log.info('memory update: batch %d unreadable reply, left for next time', i + 1)
+                    continue
+                for k, v in got.items():
+                    counts[k] = counts.get(k, 0) + v
+            except ModelError as e:
+                self._finish('error', '更新记忆失败：%s。%s' % (e, '已写入的改动保留；' if counts else '') +
+                             '请在「模型设置」里检查模型后再点「更新记忆」。')
+                return
+            except (sqlite3.Error, OSError) as e:
+                self._finish('error', '更新记忆失败：记忆写不进去（%s）。' % e)
+                return
+        done = ask_memory.summary(counts)
+        if self.halt.is_set():
+            if mode == 'auto':
+                self._finish('yielded', '自动更新为提问或退出让路，正在处理的这一批没有写入，下次空闲时继续' +
+                             ('；已完成的：%s。' % done if counts else '。'))
+            else:
+                self._finish('stopped', '已停止更新，正在处理的这一批没有写入' + ('；已完成的：%s。' % done if counts else '。'))
+            return
+        with self.lock:
+            self.done = self.total
+        note = '另有 %d 批模型的回答看不懂，没有写入，留待下次。' % unreadable if unreadable else ''
+        self._finish('done', '记忆已更新：%s。%s' % (done, note))
+
+    def tick(self):
+        """空闲时自动更新：打开了记忆和自动更新、没有回答在生成、idle 秒没有提问（也没自动试过）、队里有内容。"""
+        cfg = self.st.config
+        if not (cfg.memory and cfg.memory_auto) or self.st.chats or self.st.quit.is_set():
+            return
+        with self.lock:
+            if self.running or time.monotonic() - max(self.last_ask, self.last_try) < self.idle:
+                return
+            self.last_try = time.monotonic()
+        try:
+            if not self.st.memory.pending():
+                return
+            self.start('auto')
+        except ModelError:
+            return
+        except (sqlite3.Error, OSError) as e:
+            log.warning('memory: auto update check failed: %s', e)
+
+
+def memory_timer(updater, interval=20):
+    while True:
+        time.sleep(interval)
+        try:
+            updater.tick()
+        except Exception:       # 定时线程不能因个别错误停掉
+            log.exception('memory auto update failed to start')
+
+
 
 
 # ---------------------------------------------------------------- 目录选择框
@@ -1588,6 +1748,7 @@ class WebState:
         self.outputs = {}       # 输出文件编号 -> (路径, 文件名)
         self.picker = FolderPicker(detect_picker())
         self.local_models = LocalModels()
+        self.updater = MemoryUpdater(self)
 
     def ping(self, page, shell=None):
         """登记心跳，返回当前开着的窗口数：同一窗口里各标签的页面（shell 相同）算一个。"""
@@ -1649,8 +1810,10 @@ class WebState:
                     del self.pages[page]
                     if not self.pages:
                         self.empty_since = now - BYE_GRACE
-            if self.chats:
+            if self.chats or self.updater.busy_manual():
                 return None
+            if self.quit.is_set() or (not self.pages and self.empty_since is not None):
+                self.updater.stop()     # 自动更新不拖住退出：正在处理的那一批不写入
             if self.quit.is_set():
                 return 'quit requested'
             if not self.seen:
@@ -1772,6 +1935,8 @@ class Handler(BaseHTTPRequestHandler):
                 return
             out['stats'] = self.memory_stats()
             self.send_json(200, out)
+        elif url.path == '/api/memory-update':
+            self.send_json(200, st.updater.status())
         elif url.path == '/api/skills':
             skills, problems = load_skills()
             self.send_json(200, {'skills': skills_public(skills), 'problems': problems, 'user_dir': USER_SKILLS})
@@ -1836,8 +2001,8 @@ class Handler(BaseHTTPRequestHandler):
             shell = data.get('shell')
             self.send_json(200, {'ok': True, 'pages': st.ping(str(data.get('page')), str(shell) if shell else None)})
         elif url.path == '/api/quit':
-            busy = st.chats > 0
-            log.info('quit requested by page%s', ', waiting for answers' if busy else '')
+            busy = st.chats > 0 or st.updater.busy_manual()
+            log.info('quit requested by page%s', ', waiting for answers or memory update' if busy else '')
             self.send_json(200, {'ok': True, 'waiting': busy})
             st.picker.close()
             st.quit.set()
@@ -1852,6 +2017,8 @@ class Handler(BaseHTTPRequestHandler):
             self.post_chat(data)
         elif url.path == '/api/memory':
             self.post_memory(data)
+        elif url.path == '/api/memory-update':
+            self.post_memory_update(data)
         elif url.path == '/api/test-model':
             self.post_test_model(data)
         elif url.path == '/api/local-models':
@@ -1876,16 +2043,19 @@ class Handler(BaseHTTPRequestHandler):
             return self.state.memory.stats()
         except (sqlite3.Error, OSError) as e:
             log.warning('memory: stats failed: %s', e)
-            return {'files': 0, 'facts': 0, 'bytes': 0, 'max_bytes': ask_memory.MAX_BYTES, 'error': str(e)}
+            return {'files': 0, 'facts': 0, 'topics': 0, 'queued': 0, 'bytes': 0, 'max_bytes': ask_memory.MAX_BYTES,
+                    'error': str(e)}
 
     def post_memory(self, data):
-        """记忆的管理：「不对」（wrong）、删一条结论（fact）、忘掉一个文件（file）、清空（clear）。"""
+        """记忆的管理：「不对」（wrong）、删一条结论（fact）、删一页主题页（topic）、忘掉一个文件（file）、清空（clear）。"""
         mem, action = self.state.memory, data.get('action')
         try:
             if action == 'wrong' and isinstance(data.get('answer_id'), str) and data['answer_id']:
                 n = mem.wrong(data['answer_id'])
             elif action == 'fact' and isinstance(data.get('id'), int) and not isinstance(data['id'], bool):
                 n = int(mem.forget_fact(data['id']))
+            elif action == 'topic' and isinstance(data.get('id'), int) and not isinstance(data['id'], bool):
+                n = int(mem.forget_topic(data['id']))
             elif action == 'file' and isinstance(data.get('path'), str):
                 n = int(mem.forget_file(data['path']))
             elif action == 'clear':
@@ -1896,11 +2066,47 @@ class Handler(BaseHTTPRequestHandler):
                 return
         except (sqlite3.Error, OSError) as e:
             # 页面传来的取值只记已知的几种，异常文字去掉换行，免得伪造日志行
-            act = {'wrong': 'wrong', 'fact': 'fact', 'file': 'file', 'clear': 'clear'}.get(action, '?')
+            act = {'wrong': 'wrong', 'fact': 'fact', 'topic': 'topic', 'file': 'file', 'clear': 'clear'}.get(action, '?')
             log.warning('memory: %s failed: %s', act, str(e).replace('\r', ' ').replace('\n', ' '))
             self.send_json(500, {'error': '记忆写不进去（%s）' % e})
             return
         self.send_json(200, {'ok': True, 'count': n, 'stats': self.memory_stats()})
+
+    def post_memory_update(self, data):
+        """「更新记忆」（run）、停止（stop）、撤销最近一次更新（undo，id 为该次记录的编号）。"""
+        st, action = self.state, data.get('action')
+        if action == 'run':
+            if not st.config.memory:
+                self.send_json(400, {'error': '记忆已关闭，请先打开记忆'})
+                return
+            try:
+                if not st.updater.start('manual'):
+                    self.send_json(409, {'error': '更新正在进行，请等它结束'})
+                    return
+            except ModelError as e:
+                self.send_json(400, {'error': str(e)})
+                return
+        elif action == 'stop':
+            st.updater.stop()
+        elif action == 'undo' and isinstance(data.get('id'), int) and not isinstance(data['id'], bool):
+            if st.updater.status()['running']:
+                self.send_json(409, {'error': '更新正在进行，请等它结束后再撤销'})
+                return
+            try:
+                ok = st.memory.undo_update(data['id'])
+            except (sqlite3.Error, OSError) as e:
+                log.warning('memory: undo failed: %s', str(e).replace('\r', ' ').replace('\n', ' '))
+                self.send_json(500, {'error': '记忆写不进去（%s）' % e})
+                return
+            if not ok:
+                self.send_json(409, {'error': '只能从最近一次往回撤销，请刷新更新记录后再试'})
+                return
+        else:
+            self.send_json(400, {'error': '不认识的记忆操作'})
+            return
+        out = st.updater.status()
+        out['stats'] = self.memory_stats()
+        self.send_json(200, out)
 
     def post_docx(self, data):
         """「保存为 Word」：把页面发来的 Markdown 转成 docx 返回，不落盘。"""
@@ -1998,7 +2204,7 @@ class Handler(BaseHTTPRequestHandler):
                 cfg.dedup = bool(data['dedup'])
             if 'regex' in data:
                 cfg.regex = bool(data['regex'])
-            for k in ('memory', 'use_memory', 'memory_notice'):
+            for k in ('memory', 'use_memory', 'memory_notice', 'memory_auto'):
                 if k in data:
                     setattr(cfg, k, bool(data[k]))
             cfg.save()
@@ -2149,6 +2355,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Content-Type', 'application/x-ndjson; charset=utf-8')
         self.send_header('Cache-Control', 'no-store')
         self.end_headers()
+        st.updater.asked()
         st.chat_begin()
         work = None
         emit = lambda obj: (self.wfile.write((json.dumps(obj, ensure_ascii=False) + '\n').encode('utf-8')),
@@ -2409,6 +2616,7 @@ def serve(open_browser=True, app=True):
     log.info('serving on %s', st.origin)
     print('网页界面：' + url, flush=True)
     threading.Thread(target=watchdog, args=(server, st), daemon=True).start()
+    threading.Thread(target=memory_timer, args=(st.updater,), daemon=True).start()
     if open_browser and not open_page(url, app):
         tell_user('未能自动打开浏览器，请在浏览器中打开：' + url)
     try:

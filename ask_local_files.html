@@ -371,11 +371,24 @@
         <span id="memStats" class="hint" style="margin:0"></span>
         <button id="memView" class="toggle" type="button" aria-expanded="false" aria-controls="memPanel">查看记忆<span class="arrow" aria-hidden="true">▸</span></button>
       </div>
+      <div class="row" style="margin-top:6px">
+        <button id="memUpdate" type="button">更新记忆</button>
+        <button id="memUpdStop" type="button" hidden>停止</button>
+        <label class="dedup" style="margin-top:0"><input id="memAuto" type="checkbox" checked>空闲时自动更新</label>
+        <button id="memLog" class="toggle" type="button" aria-expanded="false" aria-controls="memLogPanel">更新记录<span class="arrow" aria-hidden="true">▸</span></button>
+      </div>
+      <p class="hint">更新时把记忆里的结论、原句和相关段落分批发给所选模型，由它把结论按主题整理成主题页，合并重复、以新代旧、删除不再成立的说法，文件改过的按新内容改写结论；写入前逐条核对原句。点「更新记忆」先处理待更新的内容，再把全部结论体检一遍；勾选「空闲时自动更新」时，工具开着、10 分钟没有提问时自动处理待更新的内容，一提问就让路。最近 20 次更新可以从最近一次往回撤销。</p>
+      <div id="memUpdStatus" class="status" aria-live="polite"></div>
+      <div id="memLogPanel" hidden>
+        <ul id="memLogList" class="list"></ul>
+      </div>
       <div id="memPanel" hidden>
         <div class="row" style="margin-top:6px">
           <input id="memQ" type="text" placeholder="搜索结论、原句或文件路径" autocomplete="off" aria-label="搜索记忆" style="flex:1 1 200px">
           <button id="memClear" class="small danger" type="button">清空记忆</button>
         </div>
+        <h4 class="mem-h">主题</h4>
+        <ul id="memTopics" class="list"></ul>
         <h4 class="mem-h">结论</h4>
         <ul id="memFacts" class="list"></ul>
         <h4 class="mem-h">文件</h4>
@@ -400,7 +413,7 @@
   <div id="convFrames" hidden></div>
 
 
-  <footer><span id="ver">找文件问 AI v2.2</span>　关闭全部页面后服务自动退出；点「退出」立即结束，开着的页面一起结束。有回答正在生成（含 skill 脚本运行）时，服务等它结束再退出。对话不自动保存，退出即清空；记忆存在本机，可在「模型设置」里关闭或清空。</footer>
+  <footer><span id="ver">找文件问 AI v2.3</span>　关闭全部页面后服务自动退出；点「退出」立即结束，开着的页面一起结束。有回答正在生成（含 skill 脚本运行）或记忆正在手动更新时，服务等它结束再退出。对话不自动保存，退出即清空；记忆存在本机，可在「模型设置」里关闭或清空。</footer>
 </main>
 <script>
 'use strict';
@@ -1610,7 +1623,8 @@ function showMemStats(st) {
   if (!st) return;
   state.memory_stats = st;
   $('memStats').textContent = st.error ? '读不了记忆：' + st.error : '已记住 ' + fmtNum(st.files) + ' 个文件、' + fmtNum(st.facts) +
-    ' 条结论，约 ' + fmtSize(st.bytes) + '（上限 ' + fmtSize(st.max_bytes) + '，超出时先忘掉最久没用的文件）';
+    ' 条结论、' + fmtNum(st.topics || 0) + ' 页主题页' + (st.queued ? '，待更新 ' + fmtNum(st.queued) + ' 项' : '') +
+    '，约 ' + fmtSize(st.bytes) + '（上限 ' + fmtSize(st.max_bytes) + '，超出时先忘掉最久没用的文件）';
 }
 function refreshMemStats() {
   api('/api/memory?q=' + encodeURIComponent($('memQ').value.trim())).then(r => {
@@ -1620,10 +1634,24 @@ function refreshMemStats() {
 }
 
 function renderMemory(r) {
-  const facts = $('memFacts'), files = $('memFiles');
+  const facts = $('memFacts'), files = $('memFiles'), topics = $('memTopics');
   facts.textContent = '';
   files.textContent = '';
+  topics.textContent = '';
   const q = $('memQ').value.trim();
+  if (!r.topics.length) topics.appendChild(el('li', 'meta', q ? '没有含「' + q + '」的主题页。' : '还没有主题页：点「更新记忆」整理。'));
+  r.topics.forEach(t => {
+    const li = el('li');
+    const g = el('div', 'grow');
+    g.appendChild(el('div', '', t.title));
+    t.points.forEach(p => g.appendChild(el('div', 'hint', '· ' + p.text + '（「' + p.quote + '」 · ' + p.path + '）' +
+                                            (p.stale ? '（文件已改，待复核）' : ''))));
+    li.appendChild(g);
+    const x = btn('删除', 'small', () => memAction({action: 'topic', id: t.id}, x, '已删除主题页「' + t.title + '」。'));
+    x.setAttribute('aria-label', '删除主题页 ' + t.title);
+    li.appendChild(x);
+    topics.appendChild(li);
+  });
   if (!r.facts.length) facts.appendChild(el('li', 'meta', q ? '没有含「' + q + '」的结论。' : '还没有记住结论。'));
   r.facts.forEach(f => {
     const li = el('li');
@@ -1684,6 +1712,84 @@ $('memoryOn').addEventListener('change', () => {
     say('memStatus', on ? '已打开记忆。' : '已关闭记忆：不再记入、也不再参考，已记住的保留。', 'ok');
   }).catch(e => { $('memoryOn').checked = !on; say('memStatus', failText('保存', e.message, RETRY), 'bad'); });
 });
+// ---------------- 记忆更新：手动、空闲时自动、更新记录与撤销
+
+let memUpd = {running: false, mode: '', history: []}, memUpdShown = null, memUpdTimer = 0;
+function memTime(sec) {
+  const d = new Date(sec * 1000), p = n => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+}
+function showMemUpdate(st) {
+  const was = memUpd.running;
+  memUpd = st;
+  $('memUpdate').disabled = st.running || !alive || !state.memory;
+  $('memUpdStop').hidden = !(st.running && st.mode === 'manual');
+  $('memAuto').checked = st.auto;
+  if (st.running && st.mode === 'manual') {
+    say('memUpdStatus', '正在更新记忆：' + (st.stage || '准备') + (st.total ? '，第 ' + Math.min(st.done + 1, st.total) + ' / ' + st.total + ' 批' : '') + '……', 'info');
+  } else if (st.running) {
+    say('memUpdStatus', '正在空闲时自动更新记忆，提问时会让路……', 'info');
+  } else if (st.result && st.result.time !== memUpdShown && st.result.text) {
+    memUpdShown = st.result.time;
+    say('memUpdStatus', st.result.text, {done: 'ok', stopped: 'warn', yielded: 'info', error: 'bad'}[st.result.kind]);
+  } else if (!st.result && !$('memUpdStatus').textContent) {
+    say('memUpdStatus', st.pending ? '待更新 ' + fmtNum(st.pending) + ' 项。' : '', 'info');
+  }
+  if (was && !st.running) refreshMemStats();
+  renderMemLog();
+  clearTimeout(memUpdTimer);
+  // 进行中每秒看一次进度；「模型设置」开着时每 15 秒看一次，以便显示自动更新
+  if (alive && (st.running || !$('modelPanel').hidden)) memUpdTimer = setTimeout(pollMemUpdate, st.running ? 1000 : 15000);
+}
+function pollMemUpdate() { return api('/api/memory-update').then(showMemUpdate).catch(() => {}); }
+function renderMemLog() {
+  const ul = $('memLogList');
+  ul.textContent = '';
+  if (!memUpd.history.length) ul.appendChild(el('li', 'meta', '还没有更新记录。'));
+  memUpd.history.forEach((h, i) => {
+    const li = el('li');
+    const g = el('div', 'grow');
+    g.appendChild(el('div', '', memTime(h.time) + ' · ' + (h.mode === 'auto' ? '自动' : '手动') + ' · ' + h.summary));
+    h.changes.slice(0, 10).forEach(c => g.appendChild(el('div', 'hint', c)));
+    if (h.changes.length > 10) g.appendChild(el('div', 'hint', '……另有 ' + (h.changes.length - 10) + ' 处改动'));
+    li.appendChild(g);
+    if (i === 0) {     // 只能从最近一次往回撤销
+      const u = btn('撤销', 'small', () => {
+        u.disabled = true;
+        post('/api/memory-update', {action: 'undo', id: h.id}).then(r => {
+          say('memUpdStatus', '已撤销 ' + memTime(h.time) + ' 的更新：' + h.summary + '。', 'ok');
+          showMemStats(r.stats);
+          showMemUpdate(r);
+          refreshMemStats();
+        }).catch(e => { u.disabled = !alive; say('memUpdStatus', failText('撤销', e.message, RETRY), 'bad'); });
+      });
+      u.setAttribute('aria-label', '撤销这次更新');
+      u.disabled = memUpd.running;
+      li.appendChild(u);
+    }
+    ul.appendChild(li);
+  });
+}
+$('memUpdate').addEventListener('click', () => {
+  $('memUpdate').disabled = true;
+  say('memUpdStatus', '正在更新记忆：准备……', 'info');
+  post('/api/memory-update', {action: 'run'}).then(showMemUpdate)
+    .catch(e => { $('memUpdate').disabled = !alive; say('memUpdStatus', failText('更新记忆', e.message, RETRY), 'bad'); });
+});
+$('memUpdStop').addEventListener('click', () => {
+  $('memUpdStop').disabled = true;
+  post('/api/memory-update', {action: 'stop'}).then(showMemUpdate).catch(() => {})
+    .then(() => { $('memUpdStop').disabled = false; });
+});
+$('memAuto').addEventListener('change', () => {
+  const on = $('memAuto').checked;
+  post('/api/settings', {memory_auto: on}).then(() => {
+    memUpd.auto = on;
+    say('memUpdStatus', on ? '已打开空闲时自动更新。' : '已关闭空闲时自动更新，可随时点「更新记忆」。', 'ok');
+  }).catch(e => { $('memAuto').checked = !on; say('memUpdStatus', failText('保存', e.message, RETRY), 'bad'); });
+});
+$('memLog').addEventListener('click', () => togglePanel($('memLog'), $('memLogPanel')));
+
 $('useMemory').addEventListener('change', () => {
   renderDest();
   post('/api/settings', {use_memory: $('useMemory').checked}).catch(() => {});
@@ -1882,7 +1988,7 @@ function togglePanel(b, panel, open) {
 $('manageFolders').addEventListener('click', () => togglePanel($('manageFolders'), $('folderPanel')));
 $('modelSettings').addEventListener('click', () => {
   togglePanel($('modelSettings'), $('modelPanel'));
-  if (!$('modelPanel').hidden) findLocal(false);
+  if (!$('modelPanel').hidden) { findLocal(false); pollMemUpdate(); }
 });
 
 // 重新探测本机的 llama-server 与 Ollama；shout 为使用者点了「重新查找」，写明找到了什么
@@ -2260,6 +2366,8 @@ function applyState(s) {
   $('memoryOn').checked = state.memory;
   $('useMemory').checked = state.use_memory;
   $('useMemRow').hidden = !state.memory;
+  $('memAuto').checked = state.memory_auto !== false;
+  $('memUpdate').disabled = !state.memory || memUpd.running || !alive;
   showMemStats(state.memory_stats);
   renderModels();
   document.body.classList.toggle('no-ai', noAi());
@@ -2370,11 +2478,12 @@ function quit(pages) {
   const parts = [], tabs = convStates(), open = tabs.filter(c => c.unsaved);
   if (pages > 1) parts.push('还有 ' + (pages - 1) + ' 个页面开着，退出会一起结束，那些页面里未保存的对话也会清空。');
   if (tabs.some(c => c.busy)) parts.push('回答正在生成，服务会等它结束后再退出。');
+  else if (memUpd.running && memUpd.mode === 'manual') parts.push('记忆正在更新，服务会等它结束后再退出。');
   const n = open.reduce((k, c) => k + c.rounds, 0);
   if (open.length && tabs.length > 1) parts.push(open.length + ' 个对话标签共 ' + n + ' 轮问答未保存，退出后会清空，可先点「保存对话」。');
   else if (open.length) parts.push('当前 ' + n + ' 轮问答未保存，退出后会清空，可先点「保存对话」。');
   if (parts.length && !confirm(parts.join('\n') + '\n\n确定退出？')) return;
-  post('/api/quit').then(r => serviceGone(r.waiting ? '服务将在回答生成结束后退出，可关闭本页。需要再用时重新双击「双击运行」。' : undefined))
+  post('/api/quit').then(r => serviceGone(r.waiting ? '服务将在回答生成或记忆更新结束后退出，可关闭本页。需要再用时重新双击「双击运行」。' : undefined))
     .catch(() => serviceGone());
 }
 
