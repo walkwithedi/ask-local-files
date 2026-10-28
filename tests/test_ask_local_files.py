@@ -892,7 +892,7 @@ class MemoryChatTest(ServerCase):
         super().setUp()
         self.plan = os.path.join(self.docs, '项目计划.txt')
         write(self.plan, '项目计划\n\n第一阶段在三月底完成验收。\n\n预算另行说明。')
-        self.index.refresh(wait=True)
+        self.index.refresh(full=True, wait=True)     # 增量扫描按目录修改时间，同一时钟刻内新建的文件会漏掉
 
     def ask(self, question, files=(), memory=True):
         """不带默认文件的提问，返回 (状态码, 各行或错误)。"""
