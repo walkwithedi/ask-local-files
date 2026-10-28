@@ -42,7 +42,7 @@
   button.reveal { padding:1px 6px; color:var(--folder); }
   /* 本机没有可用模型：「问 AI」只留一行说明和「模型设置」，与「已选」对调位置 */
   #noAiNote { margin:4px 0 0; font-size:14px; color:var(--muted); }
-  .no-ai #askBody > :not(#noAiNote):not(#optRow):not(#localStatus):not(#modelPanel),
+  .no-ai #askBody > :not(#noAiNote):not(#optRow):not(#localStatus):not(#modelPanel):not(#memSettingsPanel),
   .no-ai #askCard .card-head > button, .no-ai #skillRow, .no-ai #modelRow > :not(#modelSettings):not(#findLocal) { display:none; }
   /* 各模块点标题收起，收起时标题旁写一行摘要 */
   h2 button.fold { display:inline-flex; align-items:center; gap:6px; border:none; background:none; color:inherit; padding:0; font:inherit; font-weight:bold; text-align:left; }
@@ -90,7 +90,10 @@
   .meta button.link { padding:0; text-align:left; word-break:break-all; }
   ul.list ul.dups { flex-basis:100%; min-width:0; margin:2px 0 0 1.2em; }
   ul.list ul.dups li { padding:3px 0; }
-  .mem-row { display:inline-flex; gap:4px; align-items:center; }
+  .find-opts { display:flex; flex-wrap:wrap; gap:0 12px; }
+  .mem-row { display:inline-flex; gap:8px; align-items:center; }
+  #memView { color:var(--accent); border-color:var(--accent); background:var(--pick); }
+  #memView .arrow { color:var(--accent); }
   .dedup { display:inline-flex; gap:4px; align-items:center; font-size:13px; color:var(--muted); margin-top:6px; }
   .pickrow { flex-wrap:nowrap; }
   .pickrow input { flex:1 1 auto; width:auto; min-width:0; }
@@ -271,8 +274,11 @@
         <div id="folderStatus" class="status" aria-live="polite"></div>
       </div>
       <div id="searchPane" role="tabpanel" aria-labelledby="tabSearch">
-        <label class="dedup"><input id="dedupSearch" type="checkbox" checked>按文件名去重</label>
-        <label class="dedup" style="margin-left:12px"><input id="regex" type="checkbox">正则表达式</label>
+        <div class="find-opts">
+          <label class="dedup"><input id="dedupSearch" type="checkbox" checked>按文件名去重</label>
+          <label class="dedup"><input id="regex" type="checkbox">正则表达式</label>
+          <label class="dedup"><input id="ignoreMdSearch" type="checkbox" checked>忽略 Markdown 文件</label>
+        </div>
         <div id="addAllRow" class="row" style="margin-top:6px" hidden>
           <button id="addAll" class="small" type="button"></button>
           <button id="addTop10" class="small" type="button" data-n="10"></button>
@@ -282,7 +288,10 @@
         <ul id="results" class="list"></ul>
       </div>
       <div id="browsePane" role="tabpanel" aria-labelledby="tabBrowse" hidden>
-        <label class="dedup"><input id="dedupBrowse" type="checkbox" checked>按文件名去重</label>
+        <div class="find-opts">
+          <label class="dedup"><input id="dedupBrowse" type="checkbox" checked>按文件名去重</label>
+          <label class="dedup"><input id="ignoreMdBrowse" type="checkbox" checked>忽略 Markdown 文件</label>
+        </div>
         <nav id="crumbs" aria-label="当前文件夹" style="margin-top:6px"></nav>
         <div id="browseAddRow" class="row" style="margin-top:6px" hidden>
           <button id="browseAdd" class="small" type="button"></button>
@@ -339,7 +348,7 @@
       <select id="skillSel"><option value="">不用 skill</option></select>
       <button id="skillReload" class="link" type="button">重新读取</button>
     </div>
-    <span id="useMemRow" class="mem-row"><label class="dedup" style="margin-top:0"><input id="useMemory" type="checkbox" checked>参考记忆</label><button id="memSettings" class="link" type="button">记忆设置</button></span>
+    <span class="mem-row"><label id="useMemRow" class="dedup" style="margin-top:0"><input id="useMemory" type="checkbox" checked>参考记忆</label><button id="memSettings" class="toggle" type="button" aria-expanded="false" aria-controls="memSettingsPanel">记忆设置<span class="arrow" aria-hidden="true">▸</span></button></span>
     </div>
     <div id="localStatus" class="status" aria-live="polite"></div>
     <div id="skillHint" class="hint" aria-live="polite"></div>
@@ -364,7 +373,9 @@
         <button id="testModel" type="button">测试连接</button>
       </div>
       <div id="settingsStatus" class="status" aria-live="polite"></div>
-      <h3 id="memHead" tabindex="-1" style="margin-top:12px">记忆</h3>
+    </div>
+    <div id="memSettingsPanel" class="panel" hidden>
+      <h3 id="memHead" tabindex="-1">记忆</h3>
       <label class="dedup"><input id="memoryOn" type="checkbox" checked>记住提问时选过的文件和核对通过的结论</label>
       <p class="hint">记忆存在本机的 ~/.local/share/ask-local-files/memory.sqlite（权限 600，只有你能读）。勾选「参考记忆」时，提问会按问题从记忆里找出相关的以前结论和原文段落，排在已选文件之后一起发给模型；文件改了按新内容复核，文件不在了就忘掉。关掉后不再记入、也不再参考，已记住的保留，可在下面清空。</p>
       <div class="row">
@@ -413,7 +424,7 @@
   <div id="convFrames" hidden></div>
 
 
-  <footer><span id="ver">找文件问 AI v2.3</span>　关闭全部页面后服务自动退出；点「退出」立即结束，开着的页面一起结束。有回答正在生成（含 skill 脚本运行）或记忆正在手动更新时，服务等它结束再退出。对话不自动保存，退出即清空；记忆存在本机，可在「模型设置」里关闭或清空。</footer>
+  <footer><span id="ver">找文件问 AI v2.4</span>　关闭全部页面后服务自动退出；点「退出」立即结束，开着的页面一起结束。有回答正在生成（含 skill 脚本运行）或记忆正在手动更新时，服务等它结束再退出。对话不自动保存，退出即清空；记忆存在本机，可在「记忆设置」里关闭或清空。</footer>
 </main>
 <script>
 'use strict';
@@ -429,7 +440,7 @@ let savedLen = 0;      // 上次「保存对话」时的条数，用来判断有
 let skills = [], skillsDir = '';
 let resultsKey = '', indexNote = ['', 'info'], openPreviews = {}, overShown = false, searchComplete = false, addedNote = '';
 let findMode = 'search', browseDir = '', browse = null, browseKey = '', skillOpen = false;
-let rawResults = [], hiddenSearch = new Set(), hiddenBrowse = new Set(), regexOn = false, dedupOn = true, openDups = {}, dupPreviews = {}, listVer = 0, addedKind = 'ok', cutAction = null;
+let rawResults = [], hiddenSearch = new Set(), hiddenBrowse = new Set(), regexOn = false, dedupOn = true, ignoreMd = true, openDups = {}, dupPreviews = {}, listVer = 0, addedKind = 'ok', cutAction = null;
 // 找文件停在哪个标签、按什么排序，记在本浏览器；读不到时停在「搜索」、最新在前
 const FIND_KEY = 'ask-local-files.find';
 const SORT_LEAD = {time_desc: '最近修改的', time_asc: '最早修改的', name_asc: '按名称排在前面的', name_desc: '按名称排在前面的'};
@@ -548,7 +559,7 @@ function indexText(ix) {
 
 function search() {
   const q = $('q').value.trim(), ext = $('ext').value.trim();
-  return api('/api/search?q=' + encodeURIComponent(q) + '&ext=' + encodeURIComponent(ext) + (regexOn ? '&re=1' : '') + sortArg()).then(r => {
+  return api('/api/search?q=' + encodeURIComponent(q) + '&ext=' + encodeURIComponent(ext) + (regexOn ? '&re=1' : '') + '&md=' + (ignoreMd ? 1 : 0) + sortArg()).then(r => {
     rawResults = r.results;
     const all = dedupOn ? dedupList(rawResults) : rawResults.slice();
     results = all.filter(x => !hiddenSearch.has(x.path));
@@ -642,6 +653,17 @@ function setDedup(on) {
   $('dedupSearch').checked = on;
   $('dedupBrowse').checked = on;
 }
+// 「忽略 Markdown 文件」：搜索与浏览共用，服务端过滤；扩展名框明确填了 md 时照列
+function setIgnoreMd(on) {
+  ignoreMd = on;
+  $('ignoreMdSearch').checked = on;
+  $('ignoreMdBrowse').checked = on;
+}
+['ignoreMdSearch', 'ignoreMdBrowse'].forEach(id => $(id).addEventListener('change', () => {
+  setIgnoreMd($(id).checked);
+  post('/api/settings', {ignore_md: ignoreMd}).catch(e => say('findStatus', failText('保存设置', e.message, RETRY), 'bad'));
+  refreshFind();
+}));
 ['dedupSearch', 'dedupBrowse'].forEach(id => $(id).addEventListener('change', () => {
   setDedup($(id).checked);
   post('/api/settings', {dedup: dedupOn}).catch(e => say('findStatus', failText('保存去重设置', e.message, RETRY), 'bad'));
@@ -948,7 +970,7 @@ function openBrowse(dir) {
 function findFocus() { (findMode === 'search' ? $('q') : $('tabBrowse')).focus(); }
 
 function loadBrowse(dir) {
-  return api('/api/browse?dir=' + encodeURIComponent(dir) + '&dedup=' + (dedupOn ? 1 : 0) + sortArg()).then(r => {
+  return api('/api/browse?dir=' + encodeURIComponent(dir) + '&dedup=' + (dedupOn ? 1 : 0) + '&md=' + (ignoreMd ? 1 : 0) + sortArg()).then(r => {
     if (findMode !== 'browse') return;
     if (r.error) {
       browseDir = '';
@@ -1687,14 +1709,18 @@ function memAction(body, b, done) {
   }).catch(e => { b.disabled = !alive; say('memStatus', failText('操作', e.message, RETRY), 'bad'); });
 }
 
-// 「记忆设置」入口：展开「模型设置」，滚到「记忆」一节并聚焦；view 为真时另外展开「查看记忆」
+// 记忆设置面板：「记忆设置」展开或收起；入口展开它、滚到面板顶部并聚焦，view 为真时另外展开「查看记忆」
+function toggleMemSettings(open) {
+  togglePanel($('memSettings'), $('memSettingsPanel'), open);
+  if (!$('memSettingsPanel').hidden) { refreshMemStats(); pollMemUpdate(); }
+}
 function openMemory(view) {
-  if ($('modelPanel').hidden) $('modelSettings').click();
+  if ($('memSettingsPanel').hidden) toggleMemSettings(true);
   if (view && $('memPanel').hidden) $('memView').click();
-  $('memHead').scrollIntoView({block: 'start', behavior: 'smooth'});
+  $('memHead').scrollIntoView({block: 'start'});
   $('memHead').focus({preventScroll: true});
 }
-$('memSettings').addEventListener('click', () => openMemory(false));
+$('memSettings').addEventListener('click', () => toggleMemSettings());
 
 $('memView').addEventListener('click', () => {
   togglePanel($('memView'), $('memPanel'));
@@ -1738,8 +1764,8 @@ function showMemUpdate(st) {
   if (was && !st.running) refreshMemStats();
   renderMemLog();
   clearTimeout(memUpdTimer);
-  // 进行中每秒看一次进度；「模型设置」开着时每 15 秒看一次，以便显示自动更新
-  if (alive && (st.running || !$('modelPanel').hidden)) memUpdTimer = setTimeout(pollMemUpdate, st.running ? 1000 : 15000);
+  // 进行中每秒看一次进度；记忆设置开着时每 15 秒看一次，以便显示自动更新
+  if (alive && (st.running || !$('memSettingsPanel').hidden)) memUpdTimer = setTimeout(pollMemUpdate, st.running ? 1000 : 15000);
 }
 function pollMemUpdate() { return api('/api/memory-update').then(showMemUpdate).catch(() => {}); }
 function renderMemLog() {
@@ -1988,7 +2014,7 @@ function togglePanel(b, panel, open) {
 $('manageFolders').addEventListener('click', () => togglePanel($('manageFolders'), $('folderPanel')));
 $('modelSettings').addEventListener('click', () => {
   togglePanel($('modelSettings'), $('modelPanel'));
-  if (!$('modelPanel').hidden) { findLocal(false); pollMemUpdate(); }
+  if (!$('modelPanel').hidden) findLocal(false);
 });
 
 // 重新探测本机的 llama-server 与 Ollama；shout 为使用者点了「重新查找」，写明找到了什么
@@ -2492,6 +2518,7 @@ api('/api/state').then(s => {
   $('ver').textContent = '找文件问 AI v' + s.version;
   setDedup(s.dedup !== false);
   setRegex(s.regex === true);
+  setIgnoreMd(s.ignore_md !== false);
   $('pickFolder').hidden = !s.picker;
   applyState(s);
   renderFolders();

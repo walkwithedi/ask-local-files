@@ -59,6 +59,7 @@ class ServerCase(unittest.TestCase):
         write(os.path.join(self.docs, '资料包.zip'), 'x')
         self.config = fa.Config(os.path.join(self.root, 'config.json'))
         self.config.folders = [self.docs]
+        self.config.ignore_md = False       # 各测试照常列出 .md；「忽略 Markdown 文件」另有测试
         self.config.custom = {'base': MODEL_BASE, 'model': self.model, 'key': 'k'}
         self.config.model = 'custom'
         self.index = fa.FileIndex(self.config, os.path.join(self.root, 'index.json'))
@@ -152,6 +153,45 @@ class SearchTest(ServerCase):
     def test_ext_filter(self):
         code, r = self.call('/api/search?q=&ext=txt')
         self.assertEqual([x['name'] for x in r['results']], ['季度总结.txt'])
+
+
+class IgnoreMarkdownTest(ServerCase):
+    def setUp(self):
+        super().setUp()
+        write(os.path.join(self.docs, '说明.MARKDOWN'), 'x')
+        write(os.path.join(self.docs, '大批', '会议纪要.md'), 'x')
+        self.index.refresh(full=True, wait=True)
+
+    def names(self, r, key='results'):
+        return sorted(x['name'] for x in r[key])
+
+    def test_default_on_and_saved(self):
+        self.assertTrue(fa.Config(os.path.join(self.root, 'new.json')).ignore_md)
+        self.assertFalse(self.call('/api/state')[1]['ignore_md'])
+        self.call('/api/settings', {'ignore_md': True})
+        self.assertTrue(fa.Config(self.config.path).ignore_md)
+        # 没传 md 时按设置
+        self.assertEqual(self.names(self.call('/api/search?q=')[1]), ['季度总结.txt', '资料包.zip'])
+
+    def test_search(self):
+        r = self.call('/api/search?q=&md=1')[1]
+        self.assertEqual((self.names(r), r['total']), (['季度总结.txt', '资料包.zip'], 2))
+        self.assertEqual(self.names(self.call('/api/search?q=&md=0')[1]),
+                         ['会议纪要.md', '会议记录.md', '季度总结.txt', '说明.MARKDOWN', '资料包.zip'])
+        # 扩展名框明确填了 md 或 markdown 时照列
+        self.assertEqual(self.names(self.call('/api/search?q=&ext=md&md=1')[1]), ['会议纪要.md', '会议记录.md'])
+        self.assertEqual(self.names(self.call('/api/search?q=&ext=txt%20markdown&md=1')[1]),
+                         ['季度总结.txt', '说明.MARKDOWN'])
+
+    def test_browse_lists_and_counts(self):
+        top = self.call('/api/browse?dir=&md=1')[1]
+        self.assertEqual([d['files'] for d in top['dirs']], [2])
+        r = self.call('/api/browse?md=1&dir=' + q(self.docs))[1]
+        self.assertEqual(r['dirs'], [])     # 只有 Markdown 文件的子文件夹不列
+        self.assertEqual((self.names(r, 'files'), r['here']), (['季度总结.txt', '资料包.zip'], 2))
+        self.assertEqual((self.names(r, 'tree'), r['tree_total']), (['季度总结.txt'], 1))
+        r = self.call('/api/browse?md=0&dir=' + q(self.docs))[1]
+        self.assertEqual(r['tree_total'], 4)
 
 
 class RegexSearchTest(ServerCase):
@@ -878,6 +918,22 @@ class CiteTest(ServerCase):
         self.assertFalse(lines[-1]['uncited'])
         self.assertEqual(lines[-1]['missing'], [])
 
+    def test_rules_before_files_and_repeated_after(self):
+        self.chat([{'role': 'user', 'content': '总结'}])
+        system = json.loads(urllib.request.urlopen(MODEL_BASE + '/last').read())['messages'][0]['content']
+        self.assertIn('不超过 %d 字' % fa.QUOTE_MAX, fa.CITE_RULE)
+        rule, first, again = system.index(fa.CITE_RULE), system.index('===== 文件 1：'), system.index(fa.CITE_REMINDER)
+        self.assertTrue(rule < first < again)
+        self.assertIn(fa.FORMAT_RULE, system)
+        self.assertTrue(system.endswith(fa.CITE_REMINDER + '先给结论，再分点。'))
+
+    def test_supplement_not_checked(self):
+        self.config.custom['model'] = 'supp'
+        code, lines = self.chat([{'role': 'user', 'content': '总结'}])
+        self.assertEqual((lines[-1]['quotes'], lines[-1]['missing'], lines[-1]['uncited']), (1, [], False))
+        self.assertEqual(fa.main_part('正文\n' + fa.SUPPLEMENT + '补充'), '正文\n')
+        self.assertEqual(fa.main_part('正文'), '正文')
+
     def test_quotes_checked_against_full_text_when_truncated(self):
         self.config.char_limit = 60
         code, lines = self.chat([{'role': 'user', 'content': '总结'}], truncate=True)
@@ -1260,6 +1316,9 @@ class SkillChatTest(SkillCase):
         self.assertNotIn('tools', sent)
         system = sent['messages'][0]['content']
         self.assertLess(system.index('用一句话回答。'), system.index(fa.CITE_RULE))
+        # 选了 skill 时格式按 skill 的说明
+        self.assertNotIn(fa.FORMAT_RULE, system)
+        self.assertTrue(system.endswith(fa.CITE_REMINDER))
 
     def test_no_files_needs_skill(self):
         code, r = self.call('/api/chat', {'files': [], 'messages': [{'role': 'user', 'content': '做吧'}],

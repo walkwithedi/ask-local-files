@@ -64,7 +64,7 @@ from urllib.parse import parse_qs, urlsplit
 LOG_FORMAT = '%(asctime)s [%(levelname)s] %(name)s.%(funcName)s:%(lineno)d - %(message)s'
 log = logging.getLogger('ask_local_files')
 
-VERSION = '2.3'
+VERSION = '2.4'
 HERE = os.path.dirname(os.path.abspath(__file__))
 PAGE_FILE = os.path.join(HERE, 'ask_local_files.html')
 LOG_NAME = 'ask_local_files.log'
@@ -126,6 +126,7 @@ BUNDLED_LABELS = {'doc-compare': '文档对比', 'summarize-meeting': '会议纪
                   'prompt-optimize': '提示词优化', 'clarify-needs': '需求澄清'}
 EMPTY_ASK = '请按所选 skill 的说明处理已选文件。'   # 选了 skill、没写问题时代为提问
 SKILL_META_FILES = {'skill.md', 'upstream.md'}   # 不算参考文件；另有 LICENSE*
+MD_EXTS = {'md', 'markdown'}    # 「忽略 Markdown 文件」不列的扩展名
 SKIP_DIRS = {'node_modules', '__pycache__', '$RECYCLE.BIN', 'System Volume Information', 'lost+found'}
 TEXT_EXT = {'.txt', '.md', '.markdown', '.csv', '.tsv', '.log', '.json', '.xml', '.yaml', '.yml', '.ini',
             '.conf', '.cfg', '.toml', '.sql', '.py', '.sh', '.js', '.ts', '.java', '.c', '.h', '.cpp',
@@ -213,6 +214,7 @@ class Config:
         self.model = str(data.get('model') or '')
         self.dedup = data.get('dedup') is not False     # 按文件名去重，默认开
         self.regex = data.get('regex') is True          # 搜索框按正则表达式，默认关
+        self.ignore_md = data.get('ignore_md') is not False     # 找文件不列 Markdown 文件，默认开
         self.memory = data.get('memory') is not False   # 记忆总开关，默认开
         self.use_memory = data.get('use_memory') is not False   # 「问 AI」里的「参考记忆」，默认开
         self.memory_notice = data.get('memory_notice') is True  # 已提示过记忆默认打开
@@ -220,12 +222,14 @@ class Config:
 
     def save(self):
         write_private(self.path, {'folders': self.folders, 'char_limit': self.char_limit, 'dedup': self.dedup,
+                                  'ignore_md': self.ignore_md,
                                   'regex': self.regex, 'memory': self.memory, 'use_memory': self.use_memory,
                                   'memory_notice': self.memory_notice, 'memory_auto': self.memory_auto,
                                   'custom': self.custom, 'model': self.model})
 
     def public(self):
         return {'folders': list(self.folders), 'char_limit': self.char_limit, 'model': self.model, 'dedup': self.dedup,
+                'ignore_md': self.ignore_md,
                 'regex': self.regex, 'memory': self.memory, 'use_memory': self.use_memory,
                 'memory_notice': self.memory_notice, 'memory_auto': self.memory_auto,
                 'custom': {'base': self.custom['base'], 'model': self.custom['model'],
@@ -330,9 +334,10 @@ class Snapshot:
             self.starts.append(pos)
             pos += len(line) + 1
 
-    def search(self, words, exts, limit=RESULT_LIMIT, regex=None, order=DEFAULT_SORT):
+    def search(self, words, exts, limit=RESULT_LIMIT, regex=None, order=DEFAULT_SORT, skip_md=False):
         """(命中条目, 命中总数)，命中条目按 order 排序后取前 limit 个。没有关键字时按扩展名列出全部文件。
-        给了 regex（已编译的正则）时不用 words，逐行对显示路径 re.search。"""
+        给了 regex（已编译的正则）时不用 words，逐行对显示路径 re.search。skip_md 时不列 Markdown 文件，
+        扩展名里明确给了 md 或 markdown 时照列。"""
         words = [w.lower() for w in words if w]
         if regex is not None:
             pool = (e for e in self.entries if regex.search(e[1]))
@@ -355,6 +360,8 @@ class Snapshot:
             pool = iter(self.entries)
         if exts:
             pool = (e for e in pool if os.path.splitext(e[0])[1].lower().lstrip('.') in exts)
+        if skip_md and not (exts or set()) & MD_EXTS:
+            pool = (e for e in pool if not is_md(e[0]))
         if order != DEFAULT_SORT:
             hits = sort_entries(list(pool), order)
             return hits[:limit], len(hits)
@@ -365,13 +372,13 @@ class Snapshot:
                 out.append(e)
         return out, total
 
-    def browse(self, folder):
+    def browse(self, folder, skip_md=False):
         """folder 这一层：(子文件夹 {名称: 含各层文件数}, 本层全部文件, 含子文件夹的全部条目)。
-        条目沿用按修改时间倒序。"""
+        条目沿用按修改时间倒序；skip_md 时不含 Markdown 文件，也不计数。"""
         prefix = folder.rstrip(os.sep) + os.sep
         subs, files, tree = {}, [], []
         for e in self.entries:
-            if not e[0].startswith(prefix):
+            if not e[0].startswith(prefix) or (skip_md and is_md(e[0])):
                 continue
             tree.append(e)
             rest = e[0][len(prefix):]
@@ -381,6 +388,10 @@ class Snapshot:
             else:
                 files.append(e)
         return subs, files, tree
+
+
+def is_md(path):
+    return os.path.splitext(path)[1].lower().lstrip('.') in MD_EXTS
 
 
 class FileIndex:
@@ -524,26 +535,26 @@ class FileIndex:
             return None
         return [mtime, files, subs]
 
-    def search(self, query, exts, regex=False, order=DEFAULT_SORT):
-        """regex 时整个 query 作为一个不区分大小写的正则，写错时抛 re.error。order 见 SORTS。"""
+    def search(self, query, exts, regex=False, order=DEFAULT_SORT, skip_md=False):
+        """regex 时整个 query 作为一个不区分大小写的正则，写错时抛 re.error。order 见 SORTS；skip_md 见 Snapshot.search。"""
         self.maybe_refresh()
         words = query.split()
         pattern = re.compile(query.strip(), re.IGNORECASE) if regex and query.strip() else None
         exts = {x.lower().lstrip('.') for x in re.split(r'[\s,，、;；]+', exts or '') if x.strip('. ')}
-        found, total = self.snap.search(words, exts, regex=pattern, order=order)
+        found, total = self.snap.search(words, exts, regex=pattern, order=order, skip_md=skip_md)
         reasons = {}
         return {'results': [entry_public(e, reasons) for e in found], 'total': total, 'status': self.status()}
 
-    def browse(self, folder, dedup=False, order=DEFAULT_SORT):
+    def browse(self, folder, dedup=False, order=DEFAULT_SORT, skip_md=False):
         """按文件夹逐层浏览。folder 为空时列出已添加的文件夹；否则须是已添加的文件夹或其中的子文件夹。
         本层文件与含子文件夹的清单都按 order（见 SORTS）排序后再去重、截取。dedup 时本层文件与含子文件夹的清单各自按文件名去重（含子文件夹时跨层），每个文件带其余同名文件 dups。
         tree 为「全部加入」用的可读文件，最多 TREE_SHOWN 个：已选最多 MAX_FILES 个，扣掉已选的同名后
-        仍能判断能否全部加入、算出个数。"""
+        仍能判断能否全部加入、算出个数。skip_md 时不列也不计 Markdown 文件。"""
         self.maybe_refresh()
         snap, roots = self.snap, list(self.config.folders)
         folder = os.path.normpath(folder) if folder else ''
         if not folder:
-            dirs = [{'path': r, 'name': r, 'files': len(snap.browse(r)[2])} for r in roots]
+            dirs = [{'path': r, 'name': r, 'files': len(snap.browse(r, skip_md)[2])} for r in roots]
             return {'dir': '', 'crumbs': [], 'dirs': dirs, 'files': [], 'here': 0, 'here_dedup': 0, 'tree': [],
                     'tree_total': 0, 'dedup': dedup, 'status': self.status()}
         root = next((r for r in roots if folder == r or folder.startswith(r.rstrip(os.sep) + os.sep)), None)
@@ -555,7 +566,7 @@ class FileIndex:
             if part != '.':
                 cur = os.path.join(cur, part)
                 crumbs.append({'path': cur, 'name': part})
-        subs, files, tree = snap.browse(folder)
+        subs, files, tree = snap.browse(folder, skip_md)
         files, tree = sort_entries(files, order), sort_entries(tree, order)
         reasons = {}
         layer = dedup_entries(files) if dedup else [(e, []) for e in files]
@@ -1211,9 +1222,18 @@ def model_targets(config, local=None):
 
 
 NOT_FOUND = '所选文件中未找到'
-CITE_RULE = ('只依据下面这些文件的文字回答，不用常识或文件以外的知识补充。'
-             '每个结论后面紧跟出处，写成（文件 N：「原文摘句」），摘句从原文逐字照抄，不改写、不概括，'
-             '太长时只摘最关键的一句。所选文件中找不到依据的内容，直接写「' + NOT_FOUND + '」，不要推测。')
+SUPPLEMENT = '文件外补充（未核对）：'    # 回答末尾这一段不核对摘句、不记入记忆
+QUOTE_MAX = 50          # 每条摘句至多多少字
+CITE_RULE = ('只依据下面这些文件的文字回答，正文不用常识或文件以外的知识。'
+             '每个结论后面紧跟出处，写成（文件 N：「原文摘句」）。摘句先在原文里找到再逐字照抄，'
+             '除用省略号省去中间部分外不改写、不概括；每条摘句只取能支持这个结论的一句或半句，'
+             '不超过 %d 字，不跨段落、不跨表格格子。所选文件中找不到依据的内容，直接写「' % QUOTE_MAX + NOT_FOUND +
+             '」，不要推测。确有需要时（文件不够回答，或需要解释术语），可以在回答最后另起一段，以「' + SUPPLEMENT +
+             '」开头写文件以外的知识；这一段不附摘句，正文不引用它。')
+FORMAT_RULE = '回答先用一两句直接给出结论，再分点列出要点和依据；比较、清单类可以用表格；可用 Markdown 标题、列表和表格；不复述问题。'
+CITE_REMINDER = ('===== 回答要求（重申）=====\n只依据上面的文件回答。每个结论后附（文件 N：「原文摘句」），'
+                 '摘句逐字照抄、不超过 %d 字、不跨段落；找不到依据的写「' % QUOTE_MAX + NOT_FOUND +
+                 '」；文件以外的内容只能放在末尾「' + SUPPLEMENT + '」一段。')
 CITE_RE = re.compile(r'文件\s*(\d+)\s*[:：]\s*「([^「」]+)」')
 SCRIPT_NOTE = '（脚本输出）'
 MEMORY_NOTE = ('标「来自记忆」的文件是以前提问时用过的文件的节选，按这次的问题从本机记忆里找出，已按文件当前内容复核；'
@@ -1249,10 +1269,11 @@ def memory_part(n, block):
 
 def build_messages(files, history, skill=None, memory=()):
     """files: [(路径, 文字)]；history: [{role, content}]，最后一条是使用者的新问题；skill 为所选 skill；
-    memory: 从记忆里找出的 [{'path', 'facts', 'paras'}]，编号接在已选文件之后。"""
+    memory: 从记忆里找出的 [{'path', 'facts', 'paras'}]，编号接在已选文件之后。
+    规则写在文件之前，所有文件之后再重申要点；选了 skill 时格式按 skill 的说明，不加 FORMAT_RULE。"""
     parts = [skill_prompt(skill)] if skill else []
     if files or memory:
-        parts.append(CITE_RULE + (SKILL_CITE_NOTE if skill else ''))
+        parts.append(CITE_RULE + (SKILL_CITE_NOTE if skill else FORMAT_RULE))
     if files:
         parts.append('使用者选了下面 %d 个文件，以下是从中取出的文字。' % len(files))
     else:
@@ -1263,7 +1284,15 @@ def build_messages(files, history, skill=None, memory=()):
         parts.append('===== 文件 %d：%s =====\n%s' % (i, path, text))
     for i, block in enumerate(memory, len(files) + 1):
         parts.append(memory_part(i, block))
+    if files or memory:     # 文件很长时，紧挨着对话再说一遍要点
+        parts.append(CITE_REMINDER + ('' if skill else '先给结论，再分点。'))
     return [{'role': 'system', 'content': '\n\n'.join(parts)}] + history
+
+
+def main_part(answer):
+    """回答去掉末尾「文件外补充（未核对）：」一段后的正文：只核对和记住正文。"""
+    i = answer.find(SUPPLEMENT)
+    return answer if i < 0 else answer[:i]
 
 
 def memory_public(memory, first):
@@ -1957,12 +1986,14 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
         elif url.path == '/api/search':
             try:
-                self.send_json(200, st.index.search(arg('q'), arg('ext'), arg('re') == '1', sort_arg(arg('sort'))))
+                self.send_json(200, st.index.search(arg('q'), arg('ext'), arg('re') == '1', sort_arg(arg('sort')),
+                                                    self.skip_md(arg('md'))))
             except re.error as e:
                 self.send_json(400, {'error': '正则表达式有误：%s' % e})
         elif url.path == '/api/browse':
             dedup = arg('dedup')
-            self.send_json(200, st.index.browse(arg('dir'), dedup == '1' if dedup else st.config.dedup, sort_arg(arg('sort'))))
+            self.send_json(200, st.index.browse(arg('dir'), dedup == '1' if dedup else st.config.dedup, sort_arg(arg('sort')),
+                                                self.skip_md(arg('md'))))
         elif url.path == '/api/text':
             path = st.index.resolve(arg('path'))
             if not path:
@@ -2037,6 +2068,10 @@ class Handler(BaseHTTPRequestHandler):
             self.post_export(data)
         else:
             self.send_json(404, {'error': '没有这个地址'})
+
+    def skip_md(self, value):
+        """页面传 md=1 为忽略 Markdown 文件、md=0 为不忽略；没传时按设置。"""
+        return value == '1' if value in ('0', '1') else self.state.config.ignore_md
 
     def memory_stats(self):
         try:
@@ -2204,6 +2239,8 @@ class Handler(BaseHTTPRequestHandler):
                 cfg.dedup = bool(data['dedup'])
             if 'regex' in data:
                 cfg.regex = bool(data['regex'])
+            if 'ignore_md' in data:
+                cfg.ignore_md = bool(data['ignore_md'])
             for k in ('memory', 'use_memory', 'memory_notice', 'memory_auto'):
                 if k in data:
                     setattr(cfg, k, bool(data[k]))
@@ -2398,16 +2435,17 @@ class Handler(BaseHTTPRequestHandler):
                 if used >= MAX_TOOL_CALLS:
                     msgs.append({'role': 'user', 'content': TOOL_LIMIT_NOTE})
             answer = ''.join(pieces)
+            body = main_part(answer)
             if files or memory:
-                count, missing = check_quotes(answer, full + mem_texts)
-                uncited = count == 0 and NOT_FOUND not in answer and not (skill and SCRIPT_NOTE in answer)
+                count, missing = check_quotes(body, full + mem_texts)
+                uncited = count == 0 and NOT_FOUND not in body and not (skill and SCRIPT_NOTE in body)
             else:
                 count, missing, uncited = 0, [], False
             answer_id, kept = '', 0
             if st.config.memory and count > len(missing):
                 answer_id = secrets.token_urlsafe(9)
                 sources = dict(enumerate(files + [b['path'] for b in memory], 1))
-                kept = self.remember_answer(answer_id, history[-1]['content'], answer, sources, missing)
+                kept = self.remember_answer(answer_id, history[-1]['content'], body, sources, missing)
             log.info('answer: %d quotes, %d not found in files, %d remembered, %d tool calls, %d writes',
                      count, len(missing), kept, used, writes)
             emit({'done': True, 'quotes': count, 'missing': missing, 'uncited': uncited,
