@@ -1009,7 +1009,7 @@ class MemoryUpdateTest(MemoryChatTest):
             if not st['running']:
                 return st
             time.sleep(0.05)
-        self.fail('更新没有结束')
+        raise AssertionError('更新没有结束')
 
     def test_manual_update_and_undo(self):
         st = self.call('/api/memory-update')[1]
