@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.4.0
+
+- Prompt: the rules come before the files and their key points are repeated after them, so long files do not crowd them out. Quotes are copied word for word after finding them, one sentence or less, at most 50 characters, never across paragraphs or table cells. Answers lead with the conclusion, then points. When the files are not enough, or a term needs explaining, the model may add a closing 文件外补充（未核对）："outside the files (unchecked)" section, which is not quote-checked and not kept in memory. With a skill, the skill's own format applies.
+- Find files: 忽略 Markdown 文件 ("ignore Markdown files"), on by default and saved in the settings, leaves .md and .markdown out of search and browse, including counts and the add buttons. An explicit md or markdown in the extension box still lists them.
+- Memory settings are now their own panel, opened and closed by 记忆设置 ▸ next to 参考记忆, like 模型设置; it starts closed and stays reachable with memory off. 查看记忆 is drawn in the accent colour.
+
 ## 2.3.0
 
 - Memory updates, after the LLM Wiki pattern: the selected model turns conclusions into topic pages (a title and points, each point with its file and quote), merges duplicates, replaces statements superseded by newer ones, deletes ones that no longer hold, and rewrites conclusions from files that changed. Every point and rewritten conclusion is checked against the file's current text before it is written; ones marked 不对 ("wrong") are never written back.
