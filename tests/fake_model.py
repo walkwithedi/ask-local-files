@@ -20,7 +20,7 @@
     seq:<JSON 列表>   列表每项为 [工具名, 参数对象]，按已有工具结果数依次调用下一个；
               用完或请求不带 tools 时回答「结果：」加全部工具结果（以「|」分隔）
     notools   请求带 tools 时返回 400（tools not supported）
-GET /last 返回最近一次请求的 JSON 正文（其他 GET 路径同样返回，除非设了 serving）。
+GET /last 返回最近一次请求的 JSON 正文（不算概括对话标题的请求，那个记在 last_title；其他 GET 路径同样返回，除非设了 serving）。
 FakeModel.auth 为最近一次请求的 Authorization 头（没有时为 None）。
 FakeModel.serving 设为 {'models': [...], 'props': {...}, 'ps': {...}} 时模拟本机模型服务：
     GET /v1/models 列出 models，/props（llama-server）与 /api/ps（Ollama）返回对应内容，没给的返回 404。
@@ -37,6 +37,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 class FakeModel(BaseHTTPRequestHandler):
     last = {}
+    last_title = {}
     auth = None
     serving = None
 
@@ -72,7 +73,10 @@ class FakeModel(BaseHTTPRequestHandler):
     def do_POST(self):
         n = int(self.headers.get('Content-Length') or 0)
         data = json.loads(self.rfile.read(n).decode('utf-8'))
-        FakeModel.last = data
+        if data['messages'][0]['content'].startswith('把下面这次问答概括成'):
+            FakeModel.last_title = data
+        else:
+            FakeModel.last = data
         FakeModel.auth = self.headers.get('Authorization')
         model = data.get('model', '')
         if model.startswith('err'):
@@ -107,6 +111,9 @@ class FakeModel(BaseHTTPRequestHandler):
             pieces = ['要点（文件 1：「甲甲', '甲」）。\n\n文件外补充（未核对）：', '另一说法（文件 1：「编造的话」）。']
         if model == 'notfound':
             pieces = ['所选文件中未找到。']
+        if data['messages'][0]['content'].startswith('把下面这次问答概括成'):
+            # 概括对话标题：titlefail 时不给内容，其余给一个带前缀和引号的标题
+            pieces = [] if model == 'titlefail' else ['标题：「季度', '要点」']
         if model == 'memo':
             pieces = ['第一阶段三月底验收（文件 1：「第一阶段', '在三月底完成验收」）。']
             if '你在维护使用者本机的一份「记忆」' in data['messages'][0]['content']:

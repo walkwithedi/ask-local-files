@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.5.0
+
+- Find files is one view instead of two tabs: a folder path on top, then the search and extension boxes. With both boxes empty it lists the current folder; with either filled it searches the current folder and all its subfolders (everything when at 全部), matching keywords and regular expressions against the path below that folder. Moving to another folder keeps the keywords, and the page reopens in the folder used last. 按文件名去重, 正则表达式 and 忽略 Markdown 文件 sit together above the list. 加入前 50 个 ("add the first 50") joins 10 and 30.
+- Saved conversations and whole-conversation Word files start at the first question and list the files at the end under 参考文件 ("reference files"); a single answer saved as Word ends with them too.
+- Paths sent to the model, copied or saved as text, carried by QR code, and written in saved conversations start at the added folder's name instead of the full path. Files outside the added folders show their name only. 复制已选择的文件路径 still copies full paths.
+- The page header's description folds behind 说明 ▸ ("about"), closed by default.
+- Conversation tabs show the first 12 characters of the first question, then a title of up to 10 characters written by the model after the first answer; saved files carry the title in their names.
+
 ## 2.4.0
 
 - Prompt: the rules come before the files and their key points are repeated after them, so long files do not crowd them out. Quotes are copied word for word after finding them, one sentence or less, at most 50 characters, never across paragraphs or table cells. Answers lead with the conclusion, then points. When the files are not enough, or a term needs explaining, the model may add a closing 文件外补充（未核对）："outside the files (unchecked)" section, which is not quote-checked and not kept in memory. With a skill, the skill's own format applies.

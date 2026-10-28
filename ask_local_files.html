@@ -15,6 +15,7 @@
   body { margin:0; background:var(--bg); color:var(--text); font:15px/1.6 "Noto Sans CJK SC","WenQuanYi Micro Hei","PingFang SC","Microsoft YaHei",sans-serif; }
   main { max-width:1000px; margin:0 auto; padding:20px 16px 40px; }
   header { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+  .head-title { display:flex; flex-wrap:wrap; align-items:center; gap:4px 10px; min-width:0; }
   header .row { flex-wrap:nowrap; }
   h1 { font-size:22px; margin:0; }
   h2 { font-size:17px; margin:0 0 10px; }
@@ -75,11 +76,11 @@
   #convFrames { height:calc(100vh - 160px); min-height:480px; }
   .embed header, .embed .sub, .embed #convBar, .embed main > footer { display:none !important; }
   .embed main { padding:4px 0 8px; }
-  .tabs { display:flex; gap:4px; border-bottom:1px solid var(--line); margin:0 0 8px; }
-  .tabs [role=tab] { border:none; border-bottom:2px solid transparent; border-radius:0; background:none; color:var(--muted); padding:4px 12px; }
-  .tabs [role=tab][aria-selected=true] { color:var(--text); border-bottom-color:var(--accent); font-weight:bold; }
-  .tabs-row { display:flex; flex-wrap:wrap; align-items:center; gap:4px 8px; border-bottom:1px solid var(--line); margin:0 0 8px; }
-  .tabs-row .tabs { border-bottom:none; margin:0 0 -1px; }
+  .tabs-row { display:flex; flex-wrap:wrap; align-items:center; gap:4px 8px; border-bottom:1px solid var(--line); margin:0 0 8px; padding-bottom:4px; }
+  .tabs-row #crumbs { flex:1 1 12em; min-width:0; }
+  .qwrap { position:relative; display:flex; flex:1 1 200px; min-width:0; }
+  .qwrap input { flex:1 1 auto; width:auto; min-width:0; padding-right:28px; }
+  .qwrap button { position:absolute; right:2px; top:50%; transform:translateY(-50%); border:none; background:none; color:var(--muted); padding:2px 6px; font-size:15px; line-height:1; }
   .sort-by { margin-left:auto; display:inline-flex; gap:4px; align-items:center; font-size:13px; color:var(--muted); }
   .sort-by select { padding:2px 6px; font-size:13px; }
   #pickStatus { white-space:pre-wrap; overflow-wrap:anywhere; }
@@ -213,13 +214,16 @@
 <body>
 <main>
   <header>
-    <h1>找文件问 AI</h1>
+    <div class="head-title">
+      <h1>找文件问 AI</h1>
+      <button id="foldSub" class="toggle" type="button" aria-expanded="false" aria-controls="sub">说明<span class="arrow" aria-hidden="true">▸</span></button>
+    </div>
     <div class="row">
       <button id="newConv" type="button" title="在本窗口新开一个对话标签，已选和对话各自独立">＋ 新对话</button>
       <button id="quit" type="button">退出</button>
     </div>
   </header>
-  <p class="sub">逐层浏览或按文件名找出文件交给 AI，或选用 skill 让 AI 运行脚本处理；点「＋ 新对话」可在新标签里并行。支持 Word（docx）、Excel（xlsx、xlsm）、PowerPoint（pptx）、旧版 doc、xls、ppt（wps、et、dps 按同类格式试读）、PDF、邮件（eml）、网页（html、htm）、纯文本与代码文件；压缩包等读不了的文件可点「打开文件夹」自己处理。勾选「参考记忆」时参考本机记住的文件和结论，可在「记忆设置」里查看或清空。</p>
+  <p id="sub" class="sub" hidden>逐层浏览或按文件名找出文件交给 AI，或选用 skill 让 AI 运行脚本处理；点「＋ 新对话」可在新标签里并行。支持 Word（docx）、Excel（xlsx、xlsm）、PowerPoint（pptx）、旧版 doc、xls、ppt（wps、et、dps 按同类格式试读）、PDF、邮件（eml）、网页（html、htm）、纯文本与代码文件；压缩包等读不了的文件可点「打开文件夹」自己处理。勾选「参考记忆」时参考本机记住的文件和结论，可在「记忆设置」里查看或清空。</p>
   <div id="closed">服务已退出，可关闭本页。需要再用时重新双击「双击运行」。</div>
   <div id="banner" class="banner" role="status" hidden></div>
   <div id="convBar" hidden>
@@ -236,10 +240,7 @@
     </div>
     <div id="findBody" class="fold-body">
       <div class="tabs-row">
-        <div class="tabs" role="tablist" aria-label="找文件的方式">
-          <button id="tabSearch" type="button" role="tab" aria-selected="true" aria-controls="searchPane">搜索</button>
-          <button id="tabBrowse" type="button" role="tab" aria-selected="false" aria-controls="browsePane" tabindex="-1">浏览文件夹</button>
-        </div>
+        <nav id="crumbs" aria-label="当前文件夹"></nav>
         <label class="sort-by">排序<select id="sortBy">
           <option value="time_desc">最新在前</option>
           <option value="time_asc">最旧在前</option>
@@ -248,7 +249,7 @@
         </select></label>
       </div>
       <div id="searchRow" class="row">
-        <input id="q" type="text" placeholder="文件名或路径里的字，空格分开多个关键字，回车加入第一个结果" autocomplete="off" aria-label="关键字">
+        <span class="qwrap"><input id="q" type="text" placeholder="文件名或路径里的字，空格分开多个关键字，回车加入第一个结果" autocomplete="off" aria-label="关键字"><button id="qClear" type="button" aria-label="清除关键字" title="清除关键字" hidden>×</button></span>
         <input id="ext" type="text" placeholder="扩展名，如 docx pdf" autocomplete="off" aria-label="扩展名">
       </div>
       <div id="findStatusRow" class="status-row">
@@ -273,30 +274,27 @@
         <div id="places" class="row hint" style="margin-top:6px"></div>
         <div id="folderStatus" class="status" aria-live="polite"></div>
       </div>
-      <div id="searchPane" role="tabpanel" aria-labelledby="tabSearch">
-        <div class="find-opts">
-          <label class="dedup"><input id="dedupSearch" type="checkbox" checked>按文件名去重</label>
-          <label class="dedup"><input id="regex" type="checkbox">正则表达式</label>
-          <label class="dedup"><input id="ignoreMdSearch" type="checkbox" checked>忽略 Markdown 文件</label>
-        </div>
+      <div id="findOpts" class="find-opts">
+        <label class="dedup"><input id="dedup" type="checkbox" checked>按文件名去重</label>
+        <label class="dedup"><input id="regex" type="checkbox">正则表达式</label>
+        <label class="dedup"><input id="ignoreMd" type="checkbox" checked>忽略 Markdown 文件</label>
+      </div>
+      <div id="searchPane" aria-label="搜索结果" hidden>
         <div id="addAllRow" class="row" style="margin-top:6px" hidden>
           <button id="addAll" class="small" type="button"></button>
           <button id="addTop10" class="small" type="button" data-n="10"></button>
           <button id="addTop30" class="small" type="button" data-n="30"></button>
+          <button id="addTop50" class="small" type="button" data-n="50"></button>
           <span id="addAllHint" class="hint" style="margin:0"></span>
         </div>
         <ul id="results" class="list"></ul>
       </div>
-      <div id="browsePane" role="tabpanel" aria-labelledby="tabBrowse" hidden>
-        <div class="find-opts">
-          <label class="dedup"><input id="dedupBrowse" type="checkbox" checked>按文件名去重</label>
-          <label class="dedup"><input id="ignoreMdBrowse" type="checkbox" checked>忽略 Markdown 文件</label>
-        </div>
-        <nav id="crumbs" aria-label="当前文件夹" style="margin-top:6px"></nav>
+      <div id="browsePane" aria-label="文件夹内容">
         <div id="browseAddRow" class="row" style="margin-top:6px" hidden>
           <button id="browseAdd" class="small" type="button"></button>
           <button id="browseTop10" class="small" type="button" data-n="10"></button>
           <button id="browseTop30" class="small" type="button" data-n="30"></button>
+          <button id="browseTop50" class="small" type="button" data-n="50"></button>
           <span id="browseAddHint" class="hint" style="margin:0"></span>
         </div>
         <ul id="browseList" class="list"></ul>
@@ -424,7 +422,7 @@
   <div id="convFrames" hidden></div>
 
 
-  <footer><span id="ver">找文件问 AI v2.4</span>　关闭全部页面后服务自动退出；点「退出」立即结束，开着的页面一起结束。有回答正在生成（含 skill 脚本运行）或记忆正在手动更新时，服务等它结束再退出。对话不自动保存，退出即清空；记忆存在本机，可在「记忆设置」里关闭或清空。</footer>
+  <footer><span id="ver">找文件问 AI v2.5</span>　关闭全部页面后服务自动退出；点「退出」立即结束，开着的页面一起结束。有回答正在生成（含 skill 脚本运行）或记忆正在手动更新时，服务等它结束再退出。对话不自动保存，退出即清空；记忆存在本机，可在「记忆设置」里关闭或清空。</footer>
 </main>
 <script>
 'use strict';
@@ -438,17 +436,19 @@ let alive = true, state = null, maxFiles = 50, charLimit = 100000;
 let results = [], picked = [], chat = [], busy = false, controller = null, searchTimer = null, pollTimer = null;
 let savedLen = 0;      // 上次「保存对话」时的条数，用来判断有没有未保存的问答
 let skills = [], skillsDir = '';
-let resultsKey = '', indexNote = ['', 'info'], openPreviews = {}, overShown = false, searchComplete = false, addedNote = '';
-let findMode = 'search', browseDir = '', browse = null, browseKey = '', skillOpen = false;
+let crumbsKey = '', crumbsName = '', resultsKey = '', indexNote = ['', 'info'], openPreviews = {}, overShown = false, searchComplete = false, addedNote = '';
+let findMode = 'browse', browseDir = '', browse = null, browseKey = '', skillOpen = false;
 let rawResults = [], hiddenSearch = new Set(), hiddenBrowse = new Set(), regexOn = false, dedupOn = true, ignoreMd = true, openDups = {}, dupPreviews = {}, listVer = 0, addedKind = 'ok', cutAction = null;
-// 找文件停在哪个标签、按什么排序，记在本浏览器；读不到时停在「搜索」、最新在前
+// 找文件停在哪个文件夹、按什么排序，记在本浏览器；读不到时停在「全部」、最新在前
 const FIND_KEY = 'ask-local-files.find';
 const SORT_LEAD = {time_desc: '最近修改的', time_asc: '最早修改的', name_asc: '按名称排在前面的', name_desc: '按名称排在前面的'};
-const TOPS = [10, 30];      // 「加入前 N 个」
-let findPrefs = {mode: 'search', sort: 'time_desc'};
+const TOPS = [10, 30, 50];      // 「加入前 N 个」
+let findPrefs = {dir: '', sort: 'time_desc'};
 try { Object.assign(findPrefs, JSON.parse(localStorage.getItem(FIND_KEY) || '{}')); } catch (e) { /* 读不到时按默认 */ }
-if (findPrefs.mode !== 'browse') findPrefs.mode = 'search';
+if (typeof findPrefs.dir !== 'string') findPrefs.dir = '';
+delete findPrefs.mode;
 if (!SORT_LEAD[findPrefs.sort]) findPrefs.sort = 'time_desc';
+browseDir = findPrefs.dir;
 function saveFindPrefs() { try { localStorage.setItem(FIND_KEY, JSON.stringify(findPrefs)); } catch (e) { /* 存不了时只在本页有效 */ } }
 function sortArg() { return '&sort=' + findPrefs.sort; }
 const EMPTY_ASK = '请按所选 skill 的说明处理已选文件。';   // 选了 skill、没写问题时代为提问，与服务端一致
@@ -557,9 +557,20 @@ function indexText(ix) {
   return s;
 }
 
+// 关键字或扩展名有一个不空就在当前文件夹（「全部」时为全部文件夹）各层里搜，都空时显示文件夹内容
+function searching() { return !!($('q').value.trim() || $('ext').value.trim()); }
+
 function search() {
-  const q = $('q').value.trim(), ext = $('ext').value.trim();
-  return api('/api/search?q=' + encodeURIComponent(q) + '&ext=' + encodeURIComponent(ext) + (regexOn ? '&re=1' : '') + '&md=' + (ignoreMd ? 1 : 0) + sortArg()).then(r => {
+  const q = $('q').value.trim(), ext = $('ext').value.trim(), dir = browseDir;
+  return api('/api/search?q=' + encodeURIComponent(q) + '&ext=' + encodeURIComponent(ext) + (regexOn ? '&re=1' : '') + '&md=' + (ignoreMd ? 1 : 0) +
+             '&dir=' + encodeURIComponent(dir) + sortArg()).then(r => {
+    if (findMode !== 'search' || dir !== browseDir) return;
+    if (r.error) {
+      // 文件夹已不在已添加的文件夹里：回到「全部」再搜
+      setDir('');
+      return search().then(() => say('findStatus', failText('打开文件夹', r.error, ''), 'warn'));
+    }
+    renderCrumbs(r.dir, r.crumbs);
     rawResults = r.results;
     const all = dedupOn ? dedupList(rawResults) : rawResults.slice();
     results = all.filter(x => !hiddenSearch.has(x.path));
@@ -567,12 +578,11 @@ function search() {
     renderResults();
     let s = indexText(r.status);
     if (state && state.folders.length) {
-      s += q || ext ? '。找到 ' + fmtNum(r.total) + ' 个' : findPrefs.sort === 'time_desc' ? '。下面是最近修改的文件' : '。下面是全部文件';
+      s += '。' + (r.dir ? '在「' + r.crumbs[r.crumbs.length - 1].name + '」里' : '') + '找到 ' + fmtNum(r.total) + ' 个';
       if (r.total > r.results.length) s += '，显示' + SORT_LEAD[findPrefs.sort] + ' ' + r.results.length + ' 个';
       if (all.length < rawResults.length) s += '（去重后 ' + fmtNum(all.length) + ' 个）';
       if (results.length < all.length) s += '，已从列表移除 ' + (all.length - results.length) + ' 个';
     }
-    if (findMode !== 'search') return;
     indexNote = [s, r.status.error ? 'warn' : 'info'];
     showFindStatus();
     watchScan(r.status.scanning);
@@ -589,8 +599,35 @@ function search() {
   });
 }
 
-// 按当前标签页重新取结果：扫描轮询、刷新、增删文件夹后调用
+// 按当前状态重新取结果：扫描轮询、刷新、增删文件夹后调用
 function refreshFind() { return findMode === 'browse' ? loadBrowse(browseDir) : search(); }
+
+function setDir(dir) {
+  browseDir = dir;
+  if (findPrefs.dir !== dir) { findPrefs.dir = dir; saveFindPrefs(); }
+}
+
+// 路径导航：「全部 › 文件夹 › 子文件夹」，点了进入那一层；有关键字时在那一层里重搜
+function renderCrumbs(dir, crumbs) {
+  const key = JSON.stringify([dir, crumbs]);
+  if (key === crumbsKey) return;
+  crumbsKey = key;
+  crumbsName = dir ? crumbs[crumbs.length - 1].name : '';
+  qHint();
+  const nav = $('crumbs'), had = nav.contains(document.activeElement);
+  nav.textContent = '';
+  const here = (text, title) => { const x = el('span', '', text); x.setAttribute('aria-current', 'location'); if (title) x.title = title; nav.appendChild(x); };
+  if (!dir) here('全部');
+  else nav.appendChild(btn('全部', 'link', () => openBrowse('')));
+  crumbs.forEach((c, i) => {
+    nav.appendChild(el('span', 'sep', '›'));
+    if (i === crumbs.length - 1) here(c.name, c.path);
+    else { const b = btn(c.name, 'link', () => openBrowse(c.path)); b.title = c.path; nav.appendChild(b); }
+  });
+  // 点的那一层随重画消失：搜索时焦点回到搜索框，浏览时由 renderBrowse 放进列表
+  if (had && findMode === 'search') $('q').focus();
+}
+function qHint() { $('q').placeholder = regexOn ? Q_RE_HINT : crumbsName ? '在「' + crumbsName + '」里搜索：' + Q_HINT : Q_HINT; }
 
 function full() { return picked.length >= maxFiles; }
 
@@ -650,25 +687,23 @@ function samePicked(r) { return dedupOn ? picked.find(p => sameNameKey(p.name) =
 
 function setDedup(on) {
   dedupOn = on;
-  $('dedupSearch').checked = on;
-  $('dedupBrowse').checked = on;
+  $('dedup').checked = on;
 }
-// 「忽略 Markdown 文件」：搜索与浏览共用，服务端过滤；扩展名框明确填了 md 时照列
+// 「忽略 Markdown 文件」：搜索结果与文件夹内容共用，服务端过滤；扩展名框明确填了 md 时照列
 function setIgnoreMd(on) {
   ignoreMd = on;
-  $('ignoreMdSearch').checked = on;
-  $('ignoreMdBrowse').checked = on;
+  $('ignoreMd').checked = on;
 }
-['ignoreMdSearch', 'ignoreMdBrowse'].forEach(id => $(id).addEventListener('change', () => {
-  setIgnoreMd($(id).checked);
+$('ignoreMd').addEventListener('change', () => {
+  setIgnoreMd($('ignoreMd').checked);
   post('/api/settings', {ignore_md: ignoreMd}).catch(e => say('findStatus', failText('保存设置', e.message, RETRY), 'bad'));
   refreshFind();
-}));
-['dedupSearch', 'dedupBrowse'].forEach(id => $(id).addEventListener('change', () => {
-  setDedup($(id).checked);
+});
+$('dedup').addEventListener('change', () => {
+  setDedup($('dedup').checked);
   post('/api/settings', {dedup: dedupOn}).catch(e => say('findStatus', failText('保存去重设置', e.message, RETRY), 'bad'));
   refreshFind();
-}));
+});
 
 // 展开、收起同名文件或其预览后重绘列表，保留滚动与焦点
 function redrawLists() { listVer++; renderResults(); }
@@ -730,7 +765,7 @@ function restoreFocus(ul, f) {
   const rows = [...ul.querySelectorAll('li')].filter(li => li.dataset.path);
   const li = rows.find(x => x.dataset.path === f.path) || rows[Math.min(f.idx, rows.length - 1)];
   const b = li && (li.querySelector('button[data-act="' + f.act + '"]:not(:disabled)') || li.querySelector('button:not(:disabled)'));
-  (b || (findMode === 'browse' ? $('tabBrowse') : $('q'))).focus();
+  (b || $('q')).focus();
 }
 
 // 服务端找到的都已返回、列表里（去重与从列表移除之后）少于选取上限时，给「全部加入」；
@@ -801,7 +836,7 @@ function hideRow(r) {
   refreshFind();
 }
 
-// 一个文件行：文件名、所在文件夹（withFolder 时可点，跳到「浏览」里那个文件夹）、大小、时间、从列表移除、加入/移除
+// 一个文件行：文件名、所在文件夹（withFolder 时可点，进入那个文件夹，有关键字时在里面重搜）、大小、时间、从列表移除、加入/移除
 function fileRow(r, withFolder) {
   const on = isPicked(r.path);
   const li = el('li', on ? 'picked' : '');
@@ -812,7 +847,7 @@ function fileRow(r, withFolder) {
   if (withFolder) {
     const f = folderBtn(folderOf(r.rel), 'link', () => openBrowse(dirOf(r.path)));
     f.dataset.act = 'folder';
-    f.setAttribute('aria-label', '浏览文件夹 ' + folderOf(r.rel));
+    f.setAttribute('aria-label', '进入文件夹 ' + folderOf(r.rel));
     meta.appendChild(f);
     meta.appendChild(document.createTextNode('　'));
   }
@@ -881,23 +916,30 @@ function revealBtn(path, name) {
 }
 $('copyFolder').addEventListener('click', () => copyText(openFolderPath, $('copyFolder'), 'openStatus', '路径'));
 
-// 改关键字、扩展名或正则开关时，搜索里从列表移除的恢复显示
+// 改关键字、扩展名或正则开关时，搜索里从列表移除的恢复显示；两个框都清空时回到文件夹内容
 ['q', 'ext'].forEach(id => $(id).addEventListener('input', () => {
   hiddenSearch.clear();
   clearTimeout(searchTimer);
-  searchTimer = setTimeout(search, 120);
+  $('qClear').hidden = !$('q').value;
+  if (searching() !== (findMode === 'search')) setFindMode(searching() ? 'search' : 'browse');
+  else if (findMode === 'search') searchTimer = setTimeout(search, 120);
 }));
-const Q_HINT = $('q').placeholder;
+$('qClear').addEventListener('click', () => {
+  $('q').value = '';
+  $('q').dispatchEvent(new Event('input'));
+  $('q').focus();
+});
+const Q_HINT = $('q').placeholder, Q_RE_HINT = '正则表达式，如 需求.*v\\d';
 function setRegex(on) {
   regexOn = on;
   $('regex').checked = on;
-  $('q').placeholder = on ? '正则表达式，如 需求.*v\\d' : Q_HINT;
+  qHint();
 }
 $('regex').addEventListener('change', () => {
   setRegex($('regex').checked);
   hiddenSearch.clear();
   post('/api/settings', {regex: regexOn}).catch(e => say('findStatus', failText('保存正则表达式设置', e.message, RETRY), 'bad'));
-  search();
+  refreshFind();
 });
 $('q').addEventListener('keydown', ev => {
   if (ev.key === 'ArrowDown') {
@@ -905,7 +947,7 @@ $('q').addEventListener('keydown', ev => {
     if (b) { ev.preventDefault(); b.focus(); }
     return;
   }
-  if (ev.key !== 'Enter' || !results.length) return;
+  if (ev.key !== 'Enter' || findMode !== 'search' || !results.length) return;
   const r = results[0];
   if (isPicked(r.path)) say('findStatus', '第一个结果「' + r.name + '」已在已选里。', 'info');
   else if (!r.supported) say('findStatus', '第一个结果「' + r.name + '」读不了：' + r.reason + '。', 'warn');
@@ -932,28 +974,14 @@ $('refresh').addEventListener('click', () => {
 
 // ---------------- 浏览：按已添加的文件夹逐层查看，数据来自索引
 
-function setFindMode(mode, focus) {
+// search 显示搜索结果，browse 显示当前文件夹的内容
+function setFindMode(mode) {
   findMode = mode;
-  if (findPrefs.mode !== mode) { findPrefs.mode = mode; saveFindPrefs(); }
   const on = mode === 'browse';
-  $('tabSearch').setAttribute('aria-selected', String(!on));
-  $('tabBrowse').setAttribute('aria-selected', String(on));
-  $('tabSearch').tabIndex = on ? -1 : 0;
-  $('tabBrowse').tabIndex = on ? 0 : -1;
-  $('searchRow').hidden = on;
   $('searchPane').hidden = on;
   $('browsePane').hidden = !on;
-  if (focus) $(on ? 'tabBrowse' : 'tabSearch').focus();
   return refreshFind();
 }
-$('tabSearch').addEventListener('click', () => setFindMode('search'));
-$('tabBrowse').addEventListener('click', () => setFindMode('browse'));
-$('tabSearch').parentNode.addEventListener('keydown', ev => {
-  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(ev.key)) return;
-  ev.preventDefault();
-  const next = ev.key === 'Home' ? 'search' : ev.key === 'End' ? 'browse' : findMode === 'search' ? 'browse' : 'search';
-  setFindMode(next, true);
-});
 $('sortBy').value = findPrefs.sort;
 $('sortBy').addEventListener('change', () => {
   findPrefs.sort = $('sortBy').value;
@@ -961,22 +989,25 @@ $('sortBy').addEventListener('change', () => {
   refreshFind();
 });
 
+// 进入文件夹：关键字保留，有关键字时在新文件夹里重搜
 function openBrowse(dir) {
-  if (dir !== browseDir) hiddenBrowse.clear();
-  browseDir = dir;
-  return setFindMode('browse');
+  if (dir !== browseDir) { hiddenBrowse.clear(); hiddenSearch.clear(); }
+  setDir(dir);
+  return refreshFind();
 }
-// 焦点放回找文件：搜索时放在搜索框，浏览时放在标签上
-function findFocus() { (findMode === 'search' ? $('q') : $('tabBrowse')).focus(); }
+// 焦点放回找文件：放在搜索框
+function findFocus() { $('q').focus(); }
 
-function loadBrowse(dir) {
+// quiet：打开页面时恢复上次所在的文件夹，文件夹已不在索引里时静默回到「全部」
+function loadBrowse(dir, quiet) {
   return api('/api/browse?dir=' + encodeURIComponent(dir) + '&dedup=' + (dedupOn ? 1 : 0) + '&md=' + (ignoreMd ? 1 : 0) + sortArg()).then(r => {
-    if (findMode !== 'browse') return;
+    if (findMode !== 'browse' || dir !== browseDir) return;
     if (r.error) {
-      browseDir = '';
-      return loadBrowse('').then(() => say('findStatus', failText('打开文件夹', r.error, ''), 'warn'));
+      setDir('');
+      return loadBrowse('').then(() => { if (!quiet) say('findStatus', failText('打开文件夹', r.error, ''), 'warn'); });
     }
-    browseDir = r.dir;
+    setDir(r.dir);
+    renderCrumbs(r.dir, r.crumbs);
     // 去掉从列表移除的；listed 为服务端列出的个数，tree_total 相应扣掉，「全部加入」的个数随之减少
     const listed = r.files.length, treeN = r.tree.length;
     r.files = r.files.filter(f => !hiddenBrowse.has(f.path));
@@ -1045,20 +1076,12 @@ function renderBrowse() {
   if (!browse) return;
   const key = JSON.stringify([browse.dir, browse.dirs, browse.files.map(f => [f.path, (f.dups || []).map(d => d.path)]), picked.map(p => p.path), full(), listVer]);
   if (key === browseKey) return;
-  const moved = !browseKey || JSON.parse(browseKey)[0] !== browse.dir;
+  const first = !browseKey, moved = first || JSON.parse(browseKey)[0] !== browse.dir;
   browseKey = key;
-  const nav = $('crumbs');
-  nav.textContent = '';
-  const here = (text, title) => { const x = el('span', '', text); x.setAttribute('aria-current', 'location'); if (title) x.title = title; nav.appendChild(x); };
-  if (!browse.dir) here('全部');
-  else nav.appendChild(btn('全部', 'link', () => openBrowse('')));
-  browse.crumbs.forEach((c, i) => {
-    nav.appendChild(el('span', 'sep', '›'));
-    if (i === browse.crumbs.length - 1) here(c.name, c.path);
-    else { const b = btn(c.name, 'link', () => openBrowse(c.path)); b.title = c.path; nav.appendChild(b); }
-  });
   const ul = $('browseList'), top = moved ? 0 : ul.scrollTop, focus = moved ? null : focusedRow(ul);
-  const lost = moved && (!document.activeElement || document.activeElement === document.body || $('browsePane').contains(document.activeElement));
+  // 换了文件夹而焦点随被点的按钮消失时，放到列表第一个按钮；打开页面时不抢焦点
+  const lost = moved && ($('browsePane').contains(document.activeElement) ||
+                         (!first && (!document.activeElement || document.activeElement === document.body)));
   ul.textContent = '';
   browse.dirs.forEach(d => {
     const li = el('li');
@@ -1077,11 +1100,11 @@ function renderBrowse() {
     ul.appendChild(el('li', 'meta', browse.dir ? '这个文件夹里没有已索引的文件；刚放进来的文件请点「刷新」。' : '还没有添加文件夹：先点「管理文件夹」添加。'));
   }
   if (browse.here_dedup > browse.listed) {
-    ul.appendChild(el('li', 'meta', '本层共 ' + fmtNum(browse.here_dedup) + ' 个文件，只列出最近修改的 ' + browse.listed + ' 个；要找更早的文件请用「搜索」。'));
+    ul.appendChild(el('li', 'meta', '本层共 ' + fmtNum(browse.here_dedup) + ' 个文件，只列出' + SORT_LEAD[findPrefs.sort] + ' ' + browse.listed + ' 个；要找其他文件请在上方输入关键字搜索。'));
   }
   ul.scrollTop = top;
   if (focus) restoreFocus(ul, focus);
-  else if (lost && !$('browsePane').hidden) (ul.querySelector('button:not(:disabled)') || $('tabBrowse')).focus();
+  else if (lost && !$('browsePane').hidden) (ul.querySelector('button:not(:disabled)') || $('q')).focus();
 }
 // 方向键在浏览列表的按钮之间移动
 $('browseList').addEventListener('keydown', ev => {
@@ -1159,7 +1182,7 @@ function renderPicked() {
   const ul = $('picked'), focus = focusedRow(ul);
   ul.textContent = '';
   $('pickCount').textContent = picked.length + ' / ' + maxFiles + (picked.length ? '，共 ' + fmtNum(totalChars()) + ' 字' : '');
-  if (!picked.length) ul.appendChild(el('li', 'meta', '还没有选文件：在上面的「浏览文件夹」或「搜索」结果里点「加入」，可以多次浏览、搜索累加。'));
+  if (!picked.length) ul.appendChild(el('li', 'meta', '还没有选文件：在上面的「找文件」里点「加入」，可以多次浏览、搜索累加。'));
   picked.forEach((p, i) => {
     const li = el('li');
     li.dataset.path = p.path;
@@ -1466,6 +1489,13 @@ function saveOutput(f) {
 }
 
 // 文件名里的时间：年月日-时分
+// 保存对话、保存为 Word 的文件名：带上对话标题（去掉文件名里不能用的字符，最多 20 字）；还没有标题时不带
+function saveStem(stamp) {
+  const trim = x => x.replace(/^[\s.]+|[\s.]+$/g, '');
+  const t = trim(trim(convTitle().text.replace(/[\/\\:*?"<>|\x00-\x1f\x7f]/g, '')).slice(0, 20));
+  return '找文件问AI-' + (t ? t + '-' : '') + stamp;
+}
+
 function stampNow() {
   const now = new Date(), pad = n => String(n).padStart(2, '0');
   return now.getFullYear() + pad(now.getMonth() + 1) + pad(now.getDate()) + '-' + pad(now.getHours()) + pad(now.getMinutes());
@@ -1481,7 +1511,7 @@ function saveBlob(blob, name) {
 
 // 「保存为 Word」：服务端用预装 office-gen 的 make_docx.py 把 Markdown 转成 docx
 function saveDocx(markdown, title, b) {
-  const name = '找文件问AI-' + stampNow() + '.docx';
+  const name = saveStem(stampNow()) + '.docx';
   if (b) b.disabled = true;
   say('chatStatus', '正在转换为 Word……', 'info');
   return fetch('/api/docx', {method: 'POST', headers: {'X-Token': TOKEN, 'Content-Type': 'application/json'},
@@ -1535,6 +1565,7 @@ $('model').addEventListener('change', () => {
 });
 
 function renderChat() {
+  noticeTitle();
   const box = $('chat');
   box.textContent = '';
   chat.forEach((m, i) => {
@@ -1545,7 +1576,7 @@ function renderChat() {
       const c = btn('复制', 'small', () => copyText(m.content, c));
       c.setAttribute('aria-label', '复制这条回答');
       who.appendChild(c);
-      const w = btn('保存为 Word', 'small', () => saveDocx(m.content, i > 0 ? chat[i - 1].content.trim().slice(0, 30) : '', w));
+      const w = btn('保存为 Word', 'small', () => saveDocx(m.content + '\n' + refsMarkdown().join('\n'), i > 0 ? chat[i - 1].content.trim().slice(0, 30) : '', w));
       w.setAttribute('aria-label', '把这条回答保存为 Word');
       who.appendChild(w);
       if (m.answerId && !m.wrong) {
@@ -1983,13 +2014,27 @@ function layoutCards() {
   $('askSummary').textContent = m ? m.label + (n ? '，' + n + ' 轮问答' : '') : noAi() ? '没有可用的模型' : '';
 }
 
+function saveFolds() { try { localStorage.setItem(FOLD_KEY, JSON.stringify(folds)); } catch (e) { /* 存不了时只在本页有效 */ } }
 Object.keys(FOLDS).forEach(k => $(FOLDS[k]).querySelector('button.fold').addEventListener('click', () => {
   const was = isFolded(k);
   folds[k] = !was;
   if (k === 'find') findOpen = was;
-  try { localStorage.setItem(FOLD_KEY, JSON.stringify(folds)); } catch (e) { /* 存不了时只在本页有效 */ }
+  saveFolds();
   layoutCards();
 }));
+// 页头说明：默认收起，与各模块共用一份收起记录
+function layoutSub() {
+  const open = folds.sub === false;
+  $('sub').hidden = !open;
+  $('foldSub').setAttribute('aria-expanded', String(open));
+  $('foldSub').querySelector('.arrow').textContent = open ? '▾' : '▸';
+}
+$('foldSub').addEventListener('click', () => {
+  folds.sub = folds.sub === false;
+  saveFolds();
+  layoutSub();
+});
+layoutSub();
 narrow.addEventListener('change', layoutCards);
 layoutCards();
 
@@ -2093,7 +2138,7 @@ function run(action, truncate) {
       });
     }
     if (kind === 'regen') chat[chat.length - 1] = answer;
-    else { chat.push({role: 'user', content: q}); chat.push(answer); }
+    else { chat.push({role: 'user', content: q, tab: typed || (skill ? skill.label : q)}); chat.push(answer); }
     if (kind === 'send') $('ask').value = '';
     renderChat();
     return readStream(r, answer);
@@ -2114,8 +2159,41 @@ function run(action, truncate) {
     setBusy(false);
     controller = null;
     noticeLimit();
+    askTitle(answer);
     if (alive) $('ask').focus();
   });
+}
+
+// ---------------- 对话标题：标签先写第一问的前 TAB_CHARS 字，第一轮回答正常结束后换成模型概括的标题；
+// 开始新对话（清空对话、改动文件清单）后回到「对话 N」。也用在保存的文件名里
+const TAB_CHARS = 12;
+let titleKey = '\n';
+function convTitle() {
+  const first = chat[0];
+  if (!first) return {text: '', full: ''};
+  const full = (first.tab || first.content).replace(/\s+/g, ' ').trim();
+  return {text: first.aiTitle || (full.length > TAB_CHARS ? full.slice(0, TAB_CHARS) + '……' : full), full};
+}
+// 标题变了就让窗口重画对话标签（「对话 1」是窗口本身，其余标签在窗口里的 iframe 中）
+function noticeTitle() {
+  const t = convTitle(), key = t.text + '\n' + t.full;
+  if (key === titleKey) return;
+  titleKey = key;
+  try {
+    const w = EMBED ? window.parent : window;
+    if (w && typeof w.renderConvs === 'function') w.renderConvs();
+  } catch (e) { /* 窗口已关闭 */ }
+}
+// 第一轮回答正常结束后另问一次模型要标题：不带文件和记忆，失败或超时时保留第一问的前几个字，不提示
+function askTitle(answer) {
+  const first = chat[0];
+  if (!first || chat[1] !== answer || !answer.done || first.aiTitle || first.titleAsked) return;
+  first.titleAsked = true;
+  post('/api/title', {model: $('model').value, question: first.content, answer: answer.content}).then(r => {
+    if (!r.ok || chat[0] !== first) return;
+    first.aiTitle = r.title;
+    noticeTitle();
+  }).catch(() => {});
 }
 
 function readStream(r, answer) {
@@ -2216,17 +2294,21 @@ function copyText(text, b, statusId, what) {
   else fallback();
 }
 
+// 保存内容末尾的「参考文件」：路径从所添加文件夹的名字起写（与列表显示一致），编号与「文件 N」一致；没选文件时为空
+function refsMarkdown() {
+  if (!picked.length) return [];
+  return ['', '## 参考文件', ''].concat(picked.map((p, i) => (i + 1) + '. ' + (p.rel || p.name)));
+}
+
 // 整个对话写成 Markdown：「保存对话」与「保存为 Word」共用
 function chatMarkdown(stamp) {
-  const lines = ['# 找文件问 AI 对话 ' + stamp, '', '## 文件', ''];
-  picked.forEach((p, i) => lines.push((i + 1) + '. ' + p.path));
-  if (!picked.length) lines.push('（未选文件）');
+  const lines = ['# 找文件问 AI 对话 ' + stamp];
   chat.forEach(m => {
     lines.push('', m.role === 'user' ? '## 问' : '## 答' + (m.model ? '（' + m.model + (m.skill ? '，skill ' + m.skill : '') + '）' : ''));
     if (m.memory && m.memory.files.length) {
       lines.push('', memoryTitle(m.memory));
       m.memory.files.forEach(f => {
-        lines.push('', '- 文件 ' + f.n + '：' + f.path + '（' + f.paras + ' 段原文）');
+        lines.push('', '- 文件 ' + f.n + '：' + (f.shown || f.path.split('/').pop()) + '（' + f.paras + ' 段原文）');
         f.facts.forEach(x => lines.push('  - ' + x.conclusion + '（原文：「' + x.quote + '」）'));
       });
     }
@@ -2238,12 +2320,12 @@ function chatMarkdown(stamp) {
     if (m.partial) lines.push('', '（回答不完整）');
     citeNotes(m).forEach(t => lines.push('', t));
   });
-  return lines.join('\n') + '\n';
+  return lines.concat(refsMarkdown()).join('\n') + '\n';
 }
 
 $('save').addEventListener('click', () => {
   if (!chat.length) { say('chatStatus', '还没有对话可保存。', 'warn'); return; }
-  const stamp = stampNow(), name = '找文件问AI-' + stamp + '.md';
+  const stamp = stampNow(), name = saveStem(stamp) + '.md';
   saveBlob(new Blob([chatMarkdown(stamp)], {type: 'text/markdown;charset=utf-8'}), name);
   savedLen = chat.length;
   say('chatStatus', '已保存为 ' + name + '（在浏览器的下载文件夹里）。', 'ok');
@@ -2414,7 +2496,7 @@ window.addEventListener('beforeunload', ev => {
 // 「对话 1」是窗口本身；其余标签各是一个带 embed=1 的 iframe，已选和对话各自独立，文件夹索引与设置共用
 const MAX_CONVS = 8;
 let convs = [{id: 1, frame: null}], convSeq = 1, convActive = 1;
-window.askConv = {state: () => ({busy, unsaved: unsaved(), rounds: rounds()}), page: PAGE, gone: msg => serviceGone(msg)};
+window.askConv = {state: () => ({busy, unsaved: unsaved(), rounds: rounds(), title: convTitle()}), page: PAGE, gone: msg => serviceGone(msg)};
 
 function frameConv(c) {
   try { return c.frame.contentWindow.askConv; } catch (e) { return null; }
@@ -2423,17 +2505,22 @@ function frameConv(c) {
 function convStates() {
   return convs.map(c => {
     const a = c.frame ? frameConv(c) : window.askConv;
-    return Object.assign({id: c.id}, a ? a.state() : {busy: false, unsaved: false, rounds: 0});
+    return Object.assign({id: c.id}, a ? a.state() : {busy: false, unsaved: false, rounds: 0, title: {text: '', full: ''}});
   });
 }
 
+// 标签名：对话的标题，还没有时为「对话 N」
+function convLabel(s) { return (s.title && s.title.text) || '对话 ' + s.id; }
+
 function renderConvs() {
-  const box = $('convTabs');
+  const box = $('convTabs'), states = convStates();
+  const had = document.activeElement && box.contains(document.activeElement) ? document.activeElement.id : '';
   box.textContent = '';
   $('convBar').hidden = convs.length < 2;
-  convs.forEach(c => {
-    const wrap = el('span', 'convtab');
-    const t = btn('对话 ' + c.id, '', () => showConv(c.id));
+  convs.forEach((c, i) => {
+    const wrap = el('span', 'convtab'), label = convLabel(states[i]);
+    const t = btn(label, '', () => showConv(c.id));
+    if (states[i].title && states[i].title.full) t.title = states[i].title.full;
     t.setAttribute('role', 'tab');
     t.id = 'convTab' + c.id;
     t.dataset.id = c.id;
@@ -2442,11 +2529,13 @@ function renderConvs() {
     wrap.appendChild(t);
     if (c.frame) {
       const x = btn('×', 'close', () => closeConv(c.id));
-      x.setAttribute('aria-label', '关闭 对话 ' + c.id);
+      x.id = 'convClose' + c.id;
+      x.setAttribute('aria-label', '关闭 ' + label);
       wrap.appendChild(x);
     }
     box.appendChild(wrap);
   });
+  if (had && $(had)) $(had).focus();
   const full = convs.length >= MAX_CONVS;
   $('newConv').disabled = full || !alive;
   say('convStatus', full ? '最多同时开 ' + MAX_CONVS + ' 个对话，请先关闭不用的标签。' : '', full ? 'warn' : 'info');
@@ -2506,7 +2595,7 @@ function quit(pages) {
   if (tabs.some(c => c.busy)) parts.push('回答正在生成，服务会等它结束后再退出。');
   else if (memUpd.running && memUpd.mode === 'manual') parts.push('记忆正在更新，服务会等它结束后再退出。');
   const n = open.reduce((k, c) => k + c.rounds, 0);
-  if (open.length && tabs.length > 1) parts.push(open.length + ' 个对话标签共 ' + n + ' 轮问答未保存，退出后会清空，可先点「保存对话」。');
+  if (open.length && tabs.length > 1) parts.push(open.length + ' 个对话标签（' + open.map(convLabel).join('、') + '）共 ' + n + ' 轮问答未保存，退出后会清空，可先点「保存对话」。');
   else if (open.length) parts.push('当前 ' + n + ' 轮问答未保存，退出后会清空，可先点「保存对话」。');
   if (parts.length && !confirm(parts.join('\n') + '\n\n确定退出？')) return;
   post('/api/quit').then(r => serviceGone(r.waiting ? '服务将在回答生成或记忆更新结束后退出，可关闭本页。需要再用时重新双击「双击运行」。' : undefined))
@@ -2541,7 +2630,8 @@ api('/api/state').then(s => {
     post('/api/settings', {memory_notice: true}).catch(() => {});
   }
   loadDirs().then(r => renderPlaces(r.places)).catch(() => {});
-  return setFindMode(findPrefs.mode);
+  findMode = 'browse';
+  return loadBrowse(browseDir, true);
 }).catch(e => say('findStatus', failText('读取状态', e.message, '请关闭本页，重新双击「双击运行」。'), 'bad'));
 
 </script>
