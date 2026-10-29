@@ -462,9 +462,170 @@ class OpenPageTest(unittest.TestCase):
     def test_no_app_option(self):
         with mock.patch.object(fa, 'serve', return_value=0) as serve:
             fa.main(['--no-app'])
-            self.assertEqual(serve.call_args[1], {'open_browser': True, 'app': False})
-            fa.main([])
-            self.assertEqual(serve.call_args[1], {'open_browser': True, 'app': True})
+            self.assertEqual(serve.call_args[1], {'open_browser': True, 'app': False, 'port': None,
+                                                  'idle': fa.IDLE_TIMEOUT})
+            fa.main(['--port', '50001', '--idle-timeout', '0'])
+            self.assertEqual(serve.call_args[1], {'open_browser': True, 'app': True, 'port': 50001, 'idle': 0})
+        for bad in (['--port', '0'], ['--port', 'x'], ['--idle-timeout', '-1']):
+            with self.assertRaises(SystemExit), mock.patch('sys.stderr', io.StringIO()):
+                fa.main(bad)
+
+
+class TokenTest(unittest.TestCase):
+    def setUp(self):
+        self.root = tempfile.mkdtemp(dir=SANDBOX)
+        self.path = os.path.join(self.root, 'cfg', 'token')
+
+    def tearDown(self):
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def test_created_private_and_reused(self):
+        t = fa.load_token(self.path)
+        self.assertRegex(t, fa.TOKEN_RE)
+        self.assertEqual(os.stat(self.path).st_mode & 0o777, 0o600)
+        self.assertEqual(fa.load_token(self.path), t)
+        t2 = fa.load_token(self.path, new=True)
+        self.assertNotEqual(t2, t)
+        self.assertEqual(fa.load_token(self.path), t2)
+
+    def test_malformed_replaced(self):
+        os.makedirs(os.path.dirname(self.path))
+        write(self.path, 'a b')
+        t = fa.load_token(self.path)
+        self.assertRegex(t, fa.TOKEN_RE)
+        self.assertEqual(fa.load_token(self.path), t)
+
+    def test_port_in_config_kept_on_save(self):
+        path = os.path.join(self.root, 'config.json')
+        write(path, json.dumps({'port': 50002}))
+        c = fa.Config(path)
+        self.assertEqual(c.port, 50002)
+        c.save()
+        with open(path, encoding='utf-8') as f:
+            self.assertEqual(json.load(f)['port'], 50002)
+        for bad in (0, 70000, True, '50002'):
+            write(path, json.dumps({'port': bad}))
+            self.assertIsNone(fa.Config(path).port)
+        fa.Config(path).save()
+        with open(path, encoding='utf-8') as f:
+            self.assertNotIn('port', json.load(f))
+
+
+class FixedUrlTest(ServerCase):
+    def test_hello_and_state_url(self):
+        self.assertEqual(self.call('/api/hello'), (200, {'app': 'ask-local-files', 'version': fa.VERSION}))
+        self.assertEqual(self.call('/api/hello', token='bad')[0], 403)
+        self.assertEqual(self.call('/api/state')[1]['url'], self.base + '/?t=tok')
+
+    def test_probe(self):
+        port = self.server.server_address[1]
+        self.assertEqual(fa.probe_running(port, 'tok'), 'self')
+        self.assertEqual(fa.probe_running(port, 'bad'), 'other')
+        class Quiet(fa.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+        other = fa.ThreadingHTTPServer(('127.0.0.1', 0), Quiet)
+        threading.Thread(target=other.serve_forever, daemon=True).start()
+        try:
+            self.assertEqual(fa.probe_running(other.server_address[1], 'tok'), 'other')
+        finally:
+            other.shutdown()
+            other.server_close()
+        free = fa.ThreadingHTTPServer(('127.0.0.1', 0), fa.BaseHTTPRequestHandler)
+        free_port = free.server_address[1]
+        free.server_close()
+        self.assertEqual(fa.probe_running(free_port, 'tok'), 'free')
+
+    def serve_on(self, port, token):
+        out = io.StringIO()
+        with mock.patch.object(fa, 'load_token', return_value=token), \
+                mock.patch.object(fa, 'log_file_path', return_value=os.path.join(self.root, 'x.log')), \
+                mock.patch.object(fa, 'open_page', return_value=True) as op, \
+                mock.patch.object(fa, 'tell_user') as tell, mock.patch('sys.stdout', out):
+            code = fa.serve(port=port)
+        for h in list(logging.getLogger().handlers):
+            if isinstance(h, logging.FileHandler):
+                logging.getLogger().removeHandler(h)
+                h.close()
+        return code, out.getvalue(), op, tell
+
+    def test_serve_reuses_running(self):
+        port = self.server.server_address[1]
+        code, out, op, tell = self.serve_on(port, 'tok')
+        self.assertEqual(code, 0)
+        self.assertEqual(out.strip(), '网页界面：' + self.base + '/?t=tok')
+        op.assert_called_once_with(self.base + '/?t=tok', True)
+        tell.assert_not_called()
+
+    def test_serve_port_taken_by_other(self):
+        port = self.server.server_address[1]
+        code, out, op, tell = self.serve_on(port, 'other-token-xxxxxxxx')
+        self.assertEqual(code, 1)
+        op.assert_not_called()
+        self.assertIn('端口 %d 已被别的程序占用' % port, tell.call_args[0][0])
+        self.assertIn('--port', tell.call_args[0][0])
+
+    def test_print_url_and_new_token(self):
+        port = self.server.server_address[1]
+        out = io.StringIO()
+        with mock.patch.object(fa, 'TOKEN_FILE', os.path.join(self.root, 'token')), mock.patch('sys.stdout', out):
+            self.assertEqual(fa.main(['--print-url', '--port', str(port)]), 0)
+            first = out.getvalue().strip()
+            self.assertRegex(first, r'^网页界面：http://127\.0\.0\.1:%d/\?t=[\w-]{16,}$' % port)
+            fa.main(['--print-url', '--port', str(port)])
+            self.assertEqual(out.getvalue().split('\n')[1], first)    # 令牌沿用
+            self.assertEqual(fa.main(['--new-token', '--port', str(port)]), 0)     # 端口上的服务令牌对不上，不算本工具在运行
+            self.assertNotEqual(out.getvalue().split('\n')[2], first)
+            write(fa.TOKEN_FILE, 'tok-tok-tok-tok-tok\n')
+            self.st.token = 'tok-tok-tok-tok-tok'
+            err = io.StringIO()
+            with mock.patch('sys.stderr', err):
+                self.assertEqual(fa.main(['--new-token', '--port', str(port)]), 1)
+            self.assertIn('本工具正在运行', err.getvalue())
+            self.assertEqual(fa.load_token(), 'tok-tok-tok-tok-tok')
+
+
+class ExitRuleTest(ServerCase):
+    def test_closing_pages_does_not_exit(self):
+        self.st.idle = 100
+        self.st.ping('p1')
+        self.st.bye('p1')
+        self.assertIsNone(self.st.should_exit())
+        self.st.empty_since -= 101
+        self.assertEqual(self.st.should_exit(), 'idle for 100 seconds')
+
+    def test_never_opened_counts_from_start(self):
+        self.st.idle = 100
+        self.assertIsNone(self.st.should_exit())
+        self.st.empty_since -= 101
+        self.assertEqual(self.st.should_exit(), 'idle for 100 seconds')
+
+    def test_open_page_or_task_keeps_running(self):
+        self.st.idle = 100
+        self.st.ping('p1')
+        self.assertIsNone(self.st.should_exit())
+        self.st.bye('p1')
+        self.st.empty_since -= 101
+        self.st.chat_begin()
+        self.assertIsNone(self.st.should_exit())
+        self.st.chat_end()
+        self.assertIsNone(self.st.should_exit())       # 空闲从任务结束时重新算起
+
+    def test_heartbeat_lost_starts_idle(self):
+        self.st.idle = 100
+        self.st.ping('p1')
+        self.st.pages['p1'] = (time.monotonic() - fa.PING_TIMEOUT - 1, 'p1')
+        self.assertIsNone(self.st.should_exit())
+        self.assertNotIn('p1', self.st.pages)
+        self.st.empty_since -= 101
+        self.assertEqual(self.st.should_exit(), 'idle for 100 seconds')
+
+    def test_zero_never_idles_out(self):
+        self.st.idle = 0
+        self.st.empty_since -= 10 ** 6
+        self.assertIsNone(self.st.should_exit())
+        self.st.quit.set()
+        self.assertEqual(self.st.should_exit(), 'quit requested')
 
 
 class MaxFilesTest(ServerCase):
@@ -1208,7 +1369,6 @@ class MemoryUpdateTest(MemoryChatTest):
         self.assertEqual((st['result']['kind'], st['pending'], st['history'][0]['mode']), ('done', 0, 'auto'))
 
     def test_exit_waits_for_manual_only(self):
-        self.st.seen = True
         self.st.quit.set()
         up = self.st.updater
         up.running, up.mode = True, 'manual'

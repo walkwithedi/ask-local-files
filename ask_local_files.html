@@ -445,7 +445,7 @@
   <div id="convFrames" hidden></div>
 
 
-  <footer><span id="ver">找文件问 AI v2.6</span>　关闭全部页面后服务自动退出；点「退出」立即结束，开着的页面一起结束。有回答正在生成（含 skill 脚本运行）或记忆正在手动更新时，服务等它结束再退出。对话不自动保存，退出即清空；记忆存在本机，可在「记忆设置」里关闭或清空。</footer>
+  <footer><span id="ver">找文件问 AI v2.7</span>　<button id="copyUrl" type="button" class="small">复制网址</button>　网址固定不变，可收藏或复制到浏览器打开。关闭页面后服务继续运行，没有页面、也没有任务 30 分钟后自动退出；点「退出」立即结束，开着的页面一起结束。有回答正在生成（含 skill 脚本运行）或记忆正在手动更新时，服务等它结束再退出。对话不自动保存，退出即清空；记忆存在本机，可在「记忆设置」里关闭或清空。<div id="urlStatus" class="status info" aria-live="polite"></div></footer>
 </main>
 <script>
 'use strict';
@@ -2697,8 +2697,13 @@ function quit(pages) {
     .catch(() => serviceGone());
 }
 
+// 「复制网址」：服务给出的固定网址，取不到时按本页地址拼出
+let pageUrl = location.origin + '/?t=' + encodeURIComponent(TOKEN);
+$('copyUrl').addEventListener('click', () => copyText(pageUrl, $('copyUrl'), 'urlStatus', '网址'));
+
 api('/api/state').then(s => {
   maxFiles = s.max_files;
+  if (s.url) pageUrl = s.url;
   $('ver').textContent = '找文件问 AI v' + s.version;
   setDedup(s.dedup !== false);
   setRegex(s.regex === true);

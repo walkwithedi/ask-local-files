@@ -3,8 +3,10 @@
 """
 ask_local_files  --  找文件问 AI
 
-纯 Python 3 标准库实现。双击「双击运行」即启动本程序：只监听 127.0.0.1 的随机端口，
-网址带一次性令牌，用浏览器打开同目录的 ask_local_files.html。页面全部关闭约 5 秒后自动退出；
+纯 Python 3 标准库实现。双击「双击运行」即启动本程序：只监听 127.0.0.1 的固定端口（默认 47821），
+网址带持久令牌（~/.config/ask-local-files/token，权限 600），用浏览器打开同目录的 ask_local_files.html；
+网址跨重启不变，可收藏或复制到任意浏览器。本工具已在运行时只打开页面，不另起一份。
+关闭页面后服务继续运行，没有页面、也没有任务 30 分钟后自动退出；点「退出」立即结束，
 有回答正在生成时，退出等它结束。
 
 功能:
@@ -31,7 +33,9 @@ ask_local_files  --  找文件问 AI
     - 按文件名去重：同名（不区分大小写，去掉一个副本标记后相同也算）只列修改时间最新的一个。
 
 用法:
-    python3 ask_local_files.py [--no-browser] [--no-app] [--log-level LEVEL]
+    python3 ask_local_files.py [--no-browser] [--no-app] [--port N] [--idle-timeout 秒] [--log-level LEVEL]
+    python3 ask_local_files.py --print-url     只打印网址，不启动
+    python3 ask_local_files.py --new-token     重新生成令牌（旧网址作废），打印新网址
 """
 
 import argparse
@@ -69,7 +73,7 @@ from urllib.parse import parse_qs, urlsplit
 LOG_FORMAT = '%(asctime)s [%(levelname)s] %(name)s.%(funcName)s:%(lineno)d - %(message)s'
 log = logging.getLogger('ask_local_files')
 
-VERSION = '2.6'
+VERSION = '2.7'
 HERE = os.path.dirname(os.path.abspath(__file__))
 PAGE_FILE = os.path.join(HERE, 'ask_local_files.html')
 LOG_NAME = 'ask_local_files.log'
@@ -80,6 +84,7 @@ XDG_DATA = os.environ.get('XDG_DATA_HOME') or os.path.join(HOME, '.local', 'shar
 CONFIG_FILE = os.path.join(XDG_CONFIG, 'ask-local-files', 'config.json')
 CACHE_FILE = os.path.join(XDG_CACHE, 'ask-local-files', 'index.json')
 MEMORY_FILE = os.path.join(XDG_DATA, 'ask-local-files', 'memory.sqlite')
+TOKEN_FILE = os.path.join(XDG_CONFIG, 'ask-local-files', 'token')
 MEMORY_SHARE = 3        # 选了文件时，记忆至多占发送字数上限（扣除 skill 与对话后）的几分之一
 MEMORY_IDLE = 600       # 空闲时自动更新记忆：多少秒没有提问后开始
 OPENCODE_DIR = os.path.join(XDG_CONFIG, 'opencode')
@@ -89,8 +94,10 @@ DOCX_SCRIPT = os.path.join(HERE, 'skills', 'office-gen', 'scripts', 'make_docx.p
 DOCX_TYPE = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
 
 PING_TIMEOUT = 600      # 页面停止心跳多少秒后视为已关闭（浏览器未发出关页通知时兜底）
-OPEN_TIMEOUT = 120      # 页面始终未打开时多少秒退出
-BYE_GRACE = 5           # 页面全部关闭后等多少秒退出，刷新页面时新页面在此期间重新登记
+DEFAULT_PORT = 47821    # 固定端口，可由 --port 或设置文件的 port 改
+IDLE_TIMEOUT = 1800     # 没有页面、也没有任务多少秒后退出；0 表示不自动退出
+HELLO_TIMEOUT = 3       # 探测端口上是否已有本工具在运行时最多等多少秒
+APP_ID = 'ask-local-files'
 MAX_BODY = 8 * 1024 * 1024
 CHECK_EVERY = 30        # 搜索时至多每多少秒校验一次文件夹变化
 PUBLISH_EVERY = 2.0     # 首次扫描时每多少秒放出一次部分结果
@@ -234,13 +241,18 @@ class Config:
         self.use_memory = data.get('use_memory') is not False   # 「问 AI」里的「参考记忆」，默认开
         self.memory_notice = data.get('memory_notice') is True  # 已提示过记忆默认打开
         self.memory_auto = data.get('memory_auto') is not False     # 空闲时自动更新记忆，默认开
+        port = data.get('port')         # 只能手改设置文件，页面不提供
+        self.port = port if isinstance(port, int) and not isinstance(port, bool) and 0 < port < 65536 else None
 
     def save(self):
-        write_private(self.path, {'folders': self.folders, 'char_limit': self.char_limit, 'dedup': self.dedup,
-                                  'ignore_md': self.ignore_md,
-                                  'regex': self.regex, 'memory': self.memory, 'use_memory': self.use_memory,
-                                  'memory_notice': self.memory_notice, 'memory_auto': self.memory_auto,
-                                  'custom': self.custom, 'model': self.model})
+        data = {'folders': self.folders, 'char_limit': self.char_limit, 'dedup': self.dedup,
+                'ignore_md': self.ignore_md,
+                'regex': self.regex, 'memory': self.memory, 'use_memory': self.use_memory,
+                'memory_notice': self.memory_notice, 'memory_auto': self.memory_auto,
+                'custom': self.custom, 'model': self.model}
+        if self.port:
+            data['port'] = self.port
+        write_private(self.path, data)
 
     def public(self):
         return {'folders': list(self.folders), 'char_limit': self.char_limit, 'model': self.model, 'dedup': self.dedup,
@@ -1993,10 +2005,12 @@ def log_file_path():
 
 
 class WebState:
-    def __init__(self, port, token, config, index, memory=None):
+    def __init__(self, port, token, config, index, memory=None, idle=IDLE_TIMEOUT):
         self.port = port
         self.token = token
         self.origin = 'http://127.0.0.1:%d' % port
+        self.url = '%s/?t=%s' % (self.origin, token)
+        self.idle = idle        # 没有页面、也没有任务多少秒后退出，0 为不自动退出
         self.config = config
         self.index = index
         self.texts = TextCache()
@@ -2004,8 +2018,7 @@ class WebState:
         self.started = time.monotonic()
         self.lock = threading.Lock()
         self.pages = {}         # 页面编号 -> (最近一次心跳时间, 所在窗口编号)
-        self.seen = False
-        self.empty_since = None
+        self.empty_since = self.started     # 从何时起没有页面开着；有页面时为 None
         self.quit = threading.Event()
         self.chats = 0          # 正在生成的回答数
         self.out_root = None    # skill 脚本输出的临时目录，退出时删除
@@ -2018,7 +2031,6 @@ class WebState:
         """登记心跳，返回当前开着的窗口数：同一窗口里各标签的页面（shell 相同）算一个。"""
         with self.lock:
             self.pages[page] = (time.monotonic(), shell or page)
-            self.seen = True
             self.empty_since = None
             return len({s for _, s in self.pages.values()})
 
@@ -2026,7 +2038,7 @@ class WebState:
         self.picker.close(page)
         with self.lock:
             self.pages.pop(page, None)
-            if self.seen and not self.pages and self.empty_since is None:
+            if not self.pages and self.empty_since is None:
                 self.empty_since = time.monotonic()
 
     def new_output_dir(self, prefix='tmp'):
@@ -2066,28 +2078,30 @@ class WebState:
             self.chats -= 1
 
     def should_exit(self):
-        """返回退出原因，不该退出时返回 None；有回答正在生成或选择框开着时一律不退出。"""
+        """返回退出原因，不该退出时返回 None；有回答正在生成或选择框开着时一律不退出。
+        关闭页面不退出：没有页面、也没有任务持续 idle 秒后才退出，空闲从最后一个页面关闭或任务结束时算起。"""
+        now = time.monotonic()
         if self.picker.busy():      # 选择框开着时也不按心跳把页面判为已关闭
             return None
-        now = time.monotonic()
         with self.lock:
             for page, (t, _) in list(self.pages.items()):
                 if now - t > PING_TIMEOUT:
                     log.info('page %s heartbeat lost', page)
                     del self.pages[page]
                     if not self.pages:
-                        self.empty_since = now - BYE_GRACE
+                        self.empty_since = now
             if self.chats or self.updater.busy_manual():
+                if not self.pages:
+                    self.empty_since = now
                 return None
-            if self.quit.is_set() or (not self.pages and self.empty_since is not None):
-                self.updater.stop()     # 自动更新不拖住退出：正在处理的那一批不写入
             if self.quit.is_set():
-                return 'quit requested'
-            if not self.seen:
-                return 'page never opened' if now - self.started > OPEN_TIMEOUT else None
-            if not self.pages and self.empty_since is not None and now - self.empty_since >= BYE_GRACE:
-                return 'all pages closed'
-        return None
+                reason = 'quit requested'
+            elif self.idle and not self.pages and now - self.empty_since >= self.idle:
+                reason = 'idle for %d seconds' % self.idle
+            else:
+                return None
+        self.updater.stop()     # 自动更新不拖住退出：正在处理的那一批不写入
+        return reason
 
 
 def tell_user(msg):
@@ -2182,11 +2196,14 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header('Cache-Control', 'no-store')
             self.end_headers()
             self.wfile.write(body)
+        elif url.path == '/api/hello':
+            # 启动时探测端口上是否已是本工具在运行（令牌对得上）
+            self.send_json(200, {'app': APP_ID, 'version': VERSION})
         elif url.path == '/api/state':
             st.local_models.refresh()
             out = st.config.public()
             out.update(models_public(st.config, st.local_models))
-            out.update({'index': st.index.status(), 'version': VERSION, 'max_files': MAX_FILES,
+            out.update({'index': st.index.status(), 'version': VERSION, 'max_files': MAX_FILES, 'url': st.url,
                         'picker': bool(st.picker.kind),
                         'pdftotext': bool(shutil.which('pdftotext')), 'doc2kb': doc2kb_core is not None})
             out['memory_stats'] = self.memory_stats()
@@ -2885,7 +2902,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def watchdog(server, st, interval=2):
-    """退出按钮、页面全部关闭或页面始终未打开时关闭服务；有回答正在生成时等它结束再退出。"""
+    """退出按钮或空闲超时时关闭服务；有回答正在生成时等它结束再退出。"""
     while True:
         st.quit.wait(interval)
         reason = st.should_exit()
@@ -2962,7 +2979,65 @@ def open_page(url, app=True):
     return webbrowser.open(url)
 
 
-def serve(open_browser=True, app=True):
+TOKEN_RE = re.compile(r'^[A-Za-z0-9_-]{16,128}$')
+
+
+def load_token(path=None, new=False):
+    """读持久令牌（默认 TOKEN_FILE）；文件不存在、内容不合规或 new 为真时生成新令牌写入（权限 600）。"""
+    path = path or TOKEN_FILE
+    if not new:
+        try:
+            with open(path, encoding='utf-8') as f:
+                token = f.read().strip()
+            if TOKEN_RE.match(token):
+                return token
+            log.warning('token file %s is malformed, generating a new one', path)
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            log.warning('cannot read token file %s: %s', path, e)
+    token = secrets.token_urlsafe(24)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + '.tmp'
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, 'w', encoding='utf-8') as f:
+        f.write(token + '\n')
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, path)
+    log.info('new token written to %s', path)
+    return token
+
+
+def page_url(port, token):
+    return 'http://127.0.0.1:%d/?t=%s' % (port, token)
+
+
+def probe_running(port, token, timeout=HELLO_TIMEOUT):
+    """端口上是否已有本工具在运行：带令牌请求 /api/hello。返回 'self'（本工具）、'other'（别的程序或令牌对不上）、
+    'free'（没有程序在监听）。不走代理。"""
+    req = urllib.request.Request('http://127.0.0.1:%d/api/hello' % port, headers={'X-Token': token})
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with opener.open(req, timeout=timeout) as r:
+            data = json.loads(r.read(4096).decode('utf-8'))
+        return 'self' if isinstance(data, dict) and data.get('app') == APP_ID else 'other'
+    except urllib.error.HTTPError:
+        return 'other'
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        reason = getattr(e, 'reason', e)
+        if isinstance(reason, ConnectionRefusedError):
+            return 'free'
+        log.info('probe port %d: %s', port, e)
+        return 'other'
+
+
+def port_taken_message(port, error=None):
+    why = '无法监听端口 %d（%s）' % (port, error) if error else '端口 %d 已被别的程序占用' % port
+    return ('启动失败：%s。请用 --port 指定其他端口，或在设置文件 %s 里加 "port": 端口号，再重新运行。'
+            % (why, CONFIG_FILE))
+
+
+def serve(open_browser=True, app=True, port=None, idle=IDLE_TIMEOUT):
     if not os.path.isfile(PAGE_FILE):
         tell_user('找不到页面文件 %s，请重新解压完整的工具目录。' % PAGE_FILE)
         return 1
@@ -2972,13 +3047,27 @@ def serve(open_browser=True, app=True):
     if logging.getLogger().level > logging.INFO:
         logging.getLogger().setLevel(logging.INFO)
     config = Config()
+    port = port or config.port or DEFAULT_PORT
+    token = load_token()
+    url = page_url(port, token)
+    try:
+        server = ThreadingHTTPServer(('127.0.0.1', port), Handler)
+    except OSError as e:
+        found = probe_running(port, token)
+        if found == 'self':
+            log.info('already running on port %d', port)
+            print('网页界面：' + url, flush=True)
+            if open_browser and not open_page(url, app):
+                tell_user('未能自动打开浏览器，请在浏览器中打开：' + url)
+            return 0
+        log.error('cannot listen on port %d: %s (%s)', port, e, found)
+        tell_user(port_taken_message(port, None if found == 'other' else e))
+        return 1
     index = FileIndex(config)
     index.refresh()
-    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
-    st = WebState(server.server_address[1], secrets.token_urlsafe(24), config, index)
+    st = WebState(port, token, config, index, idle=idle)
     Handler.state = st
-    url = '%s/?t=%s' % (st.origin, st.token)
-    log.info('serving on %s', st.origin)
+    log.info('serving on %s, idle timeout %ss', st.origin, idle)
     print('网页界面：' + url, flush=True)
     threading.Thread(target=watchdog, args=(server, st), daemon=True).start()
     threading.Thread(target=memory_timer, args=(st.updater,), daemon=True).start()
@@ -2995,17 +3084,64 @@ def serve(open_browser=True, app=True):
     return 0
 
 
+def print_url(port=None):
+    """只打印网址，不启动服务；还没有令牌时先生成。"""
+    port = port or Config().port or DEFAULT_PORT
+    print('网页界面：' + page_url(port, load_token()), flush=True)
+    return 0
+
+
+def new_token(port=None):
+    """重新生成令牌，旧网址作废；本工具正在运行时不改，提示先退出。"""
+    port = port or Config().port or DEFAULT_PORT
+    if os.path.isfile(TOKEN_FILE) and probe_running(port, load_token()) == 'self':
+        print('重新生成令牌失败：本工具正在运行。请先在页面上点「退出」，再重新运行 --new-token。', file=sys.stderr)
+        return 1
+    print('网页界面：' + page_url(port, load_token(new=True)), flush=True)
+    return 0
+
+
+def port_arg(text):
+    try:
+        n = int(text)
+    except ValueError:
+        n = 0
+    if not 0 < n < 65536:
+        raise argparse.ArgumentTypeError('端口须为 1 到 65535 的整数')
+    return n
+
+
+def seconds_arg(text):
+    try:
+        n = int(text)
+    except ValueError:
+        n = -1
+    if n < 0:
+        raise argparse.ArgumentTypeError('须为不小于 0 的整数秒数')
+    return n
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description='找文件问 AI：快速找出文件，交给 AI 提问、改写、总结（双击运行即此程序）。')
     ap.add_argument('--no-browser', action='store_true', help='不自动打开浏览器，只打印网址')
     ap.add_argument('--no-app', action='store_true',
                     help='用默认浏览器的普通窗口打开，不用 Chromium 系浏览器的应用窗口模式')
+    ap.add_argument('--port', type=port_arg,
+                    help='监听的端口，默认取设置文件里的 port，没有时为 %d' % DEFAULT_PORT)
+    ap.add_argument('--idle-timeout', type=seconds_arg, default=IDLE_TIMEOUT, metavar='SECONDS',
+                    help='没有页面、也没有任务多少秒后退出，默认 %d，0 表示不自动退出' % IDLE_TIMEOUT)
+    ap.add_argument('--print-url', action='store_true', help='只打印网址，不启动服务')
+    ap.add_argument('--new-token', action='store_true', help='重新生成令牌（旧网址作废），打印新网址后结束')
     ap.add_argument('--log-level', default=os.environ.get('LOG_LEVEL', 'WARNING').upper(),
                     choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
                     help='日志级别，默认 WARNING，可由环境变量 LOG_LEVEL 覆盖')
     args = ap.parse_args(argv)
     logging.basicConfig(level=args.log_level, format=LOG_FORMAT, stream=sys.stderr)
-    return serve(open_browser=not args.no_browser, app=not args.no_app)
+    if args.new_token:
+        return new_token(args.port)
+    if args.print_url:
+        return print_url(args.port)
+    return serve(open_browser=not args.no_browser, app=not args.no_app, port=args.port, idle=args.idle_timeout)
 
 
 if __name__ == '__main__':

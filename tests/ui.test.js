@@ -6,6 +6,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const net = require('node:net');
 const {spawn, execSync, execFileSync} = require('node:child_process');
 const {chromium} = require('playwright');
 
@@ -23,6 +24,15 @@ function firstLine(proc, re) {
       if (m) { clearTimeout(timer); resolve(m[1]); }
     });
     proc.on('exit', code => { clearTimeout(timer); reject(new Error('进程退出 ' + code + '：' + buf)); });
+  });
+}
+
+// 取一个空闲端口：服务默认用固定端口，各测试各起一份，互不占用
+function freePort() {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer();
+    srv.on('error', reject);
+    srv.listen(0, '127.0.0.1', () => { const {port} = srv.address(); srv.close(() => resolve(port)); });
   });
 }
 
@@ -69,7 +79,8 @@ async function launch(t, opts) {
     XDG_CACHE_HOME: path.join(home, '.cache'), LOG_LEVEL: 'ERROR'});
   if (opts.noPdf) env.PATH = '';
   Object.assign(env, opts.env || {});
-  const proc = spawn(PYTHON, [path.join(TOOL, 'ask_local_files.py'), '--no-browser'], {env, stdio: ['ignore', 'pipe', 'ignore']});
+  const args = [path.join(TOOL, 'ask_local_files.py'), '--no-browser', '--port', String(await freePort())];
+  const proc = spawn(PYTHON, args.concat(opts.args || []), {env, stdio: ['ignore', 'pipe', 'ignore']});
   const url = await firstLine(proc, /网页界面：(\S+)/);
   const context = await browser.newContext({viewport: {width: opts.width, height: opts.height || 800}});
   const page = await context.newPage();
@@ -85,7 +96,7 @@ async function launch(t, opts) {
     proc.kill();
     fs.rmSync(home, {recursive: true, force: true});
   });
-  return {page, home, docs, url};
+  return {page, home, docs, url, proc, context, env, args};
 }
 
 // 取出的文字开头的文件信息（路径、文件名、修改时间各一行，空一行）有多少字；测试文件没有作者
@@ -896,6 +907,42 @@ test('心跳连续 3 次失败才判定服务已退出', async t => {
   await page.waitForSelector('#closed', {state: 'visible'});
 });
 
+test('复制网址：复制固定网址并提示', async t => {
+  const {page, url} = await launch(t);
+  await page.locator('#ver').getByText(/v\d/).waitFor();
+  await page.click('#copyUrl');
+  await page.locator('#urlStatus.ok').waitFor();
+  assert.strictEqual(await page.evaluate(() => navigator.clipboard.readText()), url);
+  assert.match(await page.textContent('#urlStatus'), /^已复制网址：/);
+});
+
+test('关页后服务不退出，同一网址可再打开；再次启动只打印网址不另起一份', async t => {
+  const {page, url, proc, context, env, args} = await launch(t);
+  await page.locator('#ver').getByText(/v\d/).waitFor();
+  await page.close();
+  await new Promise(r => setTimeout(r, 7000));     // 超过原来关页后 5 秒退出的时限
+  assert.strictEqual(proc.exitCode, null, '服务仍在运行');
+  const again = await context.newPage();
+  await again.goto(url);
+  await again.locator('#ver').getByText(/v\d/).waitFor();
+  const second = spawn(PYTHON, args, {env, stdio: ['ignore', 'pipe', 'ignore']});
+  assert.strictEqual(await firstLine(second, /网页界面：(\S+)/), url);
+  const code = await new Promise(r => (second.exitCode !== null ? r(second.exitCode) : second.on('exit', r)));
+  assert.strictEqual(code, 0);
+  assert.strictEqual(proc.exitCode, null);
+});
+
+test('空闲超时后服务退出', async t => {
+  const {page, proc} = await launch(t, {args: ['--idle-timeout', '3']});
+  await page.locator('#ver').getByText(/v\d/).waitFor();
+  await page.close();
+  const code = await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('未在时限内退出')), 15000);
+    proc.on('exit', c => { clearTimeout(timer); resolve(c); });
+  });
+  assert.strictEqual(code, 0);
+});
+
 test('失败提示写明下一步', async t => {
   const {page} = await launch(t);
   await page.route(u => u.pathname === '/api/refresh', r => r.abort());
@@ -1439,7 +1486,7 @@ test('顶部描述写明新对话与支持格式，页脚写明多页面的退�
   assert.match(sub, /选用 skill.*「＋ 新对话」/);
   assert.match(sub, /Word（docx）、Excel（xlsx、xlsm）、PowerPoint（pptx）、旧版 doc、xls、ppt（wps、et、dps 按同类格式试读）、PDF、邮件（eml）、网页（html、htm）、纯文本与代码文件/);
   assert.match(sub, /压缩包等读不了的文件可点「打开文件夹」自己处理/);
-  assert.match(await page.textContent('footer'), /关闭全部页面后服务自动退出/);
+  assert.match(await page.textContent('footer'), /关闭页面后服务继续运行，没有页面、也没有任务 30 分钟后自动退出/);
 });
 
 test('另开的浏览器页面算一个页面；开着多个页面时退出先确认并写明个数', async t => {

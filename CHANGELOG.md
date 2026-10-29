@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.7.0
+
+- Fixed address: the server listens on port 47821 by default (`--port`, or `"port"` in `~/.config/ask-local-files/config.json`), and its token is kept in `~/.config/ask-local-files/token` (mode 600), so the address stays the same across restarts and can be bookmarked or pasted into any browser. 复制网址 ("copy address") in the footer copies it. `--new-token` replaces the token, invalidating the old address; `--print-url` prints the address without starting the server.
+- Starting the tool while it is already running opens a page on the running server instead of starting a second one. When the port is taken by another program, it says so and suggests `--port`.
+- Closing the page no longer stops the server. It exits after 30 minutes with no page open and nothing running (`--idle-timeout` in seconds, 0 to never exit on its own), or at once on 退出 ("quit"), still waiting for answers in progress.
+
 ## 2.6.0
 
 - Browsing a folder with both boxes empty now works like an empty search of that folder: files from all its subfolders are listed together, sorted before the 300-file limit, each with its folder (click it to go there). Subfolders still come first. De-duplication spans the levels. Files with the same modification time are ordered by path, so the order stays fixed.
