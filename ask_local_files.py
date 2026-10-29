@@ -2993,7 +2993,7 @@ def load_token(path=None, new=False):
                 return token
             log.warning('token file %s is malformed, generating a new one', path)
         except FileNotFoundError:
-            pass
+            log.info('no token file yet, creating %s', path)     # 首次启动：往下生成
         except OSError as e:
             log.warning('cannot read token file %s: %s', path, e)
     token = secrets.token_urlsafe(24)
