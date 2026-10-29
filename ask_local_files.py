@@ -959,7 +959,7 @@ def unpack_skill_zip(data, dest):
         except (zipfile.BadZipFile, NotImplementedError, RuntimeError) as e:
             raise ValueError('解不开 %s（%s）' % ('/'.join(parts)[:200], e))
         if os.path.splitext(parts[-1])[1].lower() in SCRIPT_EXT:
-            os.chmod(path, 0o755)
+            os.chmod(path, 0o700)     # 脚本只给当前用户读写、运行
 
 
 def copy_skill_dir(src, dest):
@@ -1009,7 +1009,6 @@ def install_skill(fill, confirm=False, skills_dir=None):
                 'bundled': os.path.isfile(os.path.join(BUNDLED_SKILLS, name, 'SKILL.md'))}
         if (replaced or scripts) and not confirm:
             raise SkillConfirm(info)
-        os.chmod(tmp, 0o755)
         if replaced:
             backup = tempfile.mkdtemp(prefix='.%s.old.' % name, dir=skills_dir)
             os.rmdir(backup)

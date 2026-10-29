@@ -99,7 +99,7 @@ A skill is a folder holding `SKILL.md`: `name:` and `description:` between two `
   - Create: a name (lowercase letters, digits and hyphens, up to 64 characters), a description (up to 1,024 characters) and the instructions (up to 50,000 characters) become `SKILL.md`. Missing fields or a bad name are reported and nothing is written.
   - Install: a `.zip` file, clicked, dropped or opened with Enter on the focused drop area (up to 5 MB), or a folder path (选择…… opens a folder picker where available). `SKILL.md` must sit at the top, or in the zip's single top folder, with a valid name and description. Absolute paths, `..` or links in the package, links in the folder, more than 200 files or more than 20 MB unpacked are refused.
   - Replacing a skill of your own with the same name asks first, naming the folder and how many files it holds; so does installing a skill with `.py` or `.sh` scripts, saying how many and what scripts may do. A bundled skill with the same name stays, and yours takes precedence.
-  - Files are staged in a temporary folder and checked before they replace anything, so a failure leaves no partial skill and keeps the old one.
+  - Files are staged in a temporary folder and checked before they replace anything, so a failure leaves no partial skill and keeps the old one. The installed folder and its scripts are accessible to the current user only.
   - A `.zip` written by a script under an answer that holds a skill gets an 安装 ("install") button with the same rules; the model cannot install anything itself.
 
 - The skill's instructions open the system message and count towards the character limit. With files picked, quotes are still required; statements taken from script output or reference files are marked 「（脚本输出）」 ("script output").
