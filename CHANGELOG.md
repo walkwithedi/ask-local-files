@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.6.0
+
+- Browsing a folder with both boxes empty now works like an empty search of that folder: files from all its subfolders are listed together, sorted before the 300-file limit, each with its folder (click it to go there). Subfolders still come first. De-duplication spans the levels. Files with the same modification time are ordered by path, so the order stays fixed.
+- 管理 skill ("manage skills") next to the skill menu creates a skill from a name, a description and instructions, or installs one from a .zip file (click, drop or keyboard) or a folder into `~/.config/opencode/skills/`. Packages with absolute paths, `..`, links, more than 200 files or over 20 MB unpacked are refused. Replacing a skill of your own with the same name, and installing one with scripts, ask first and say what will be replaced or run. Files are staged and checked first, so a failure leaves nothing behind. The new skill is selected afterwards.
+- New bundled skill `skill-create` (创建 skill): the model drafts a skill, writes it once you agree, and `scripts/pack_skill.py` checks it and packs `<name>.zip` (instructions and .md/.txt references only, no scripts). A skill package listed under an answer gets an 安装 ("install") button; nothing is installed until you click it.
+
 ## 2.5.0
 
 - Find files is one view instead of two tabs: a folder path on top, then the search and extension boxes. With both boxes empty it lists the current folder; with either filled it searches the current folder and all its subfolders (everything when at 全部), matching keywords and regular expressions against the path below that folder. Moving to another folder keeps the keywords, and the page reopens in the folder used last. 按文件名去重, 正则表达式 and 忽略 Markdown 文件 sit together above the list. 加入前 50 个 ("add the first 50") joins 10 and 30.

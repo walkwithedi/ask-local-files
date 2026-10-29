@@ -190,5 +190,62 @@ class OfficeGenTest(ScriptCase):
             self.assertIn('--log-level', out)
 
 
+class SkillCreateTest(ScriptCase):
+    MD = '---\nname: %s\ndescription: %s\n---\n\n%s\n'
+
+    def setUp(self):
+        super().setUp()
+        self.skill = os.path.join(self.root, 'work', 'skill')
+
+    def pack(self):
+        return self.run_script('skill-create', 'scripts/pack_skill.py', ['skill'], [])
+
+    def test_pack_and_installable_layout(self):
+        write(os.path.join(self.skill, 'SKILL.md'), self.MD % ('weekly-report', '写周报', '按周汇总要点。'))
+        write(os.path.join(self.skill, 'references', '术语.md'), '术语表')
+        rc, out = self.pack()
+        self.assertEqual(rc, 0, out)
+        self.assertIn('已打包 weekly-report.zip：2 个文件', out)
+        with zipfile.ZipFile(os.path.join(self.out, 'weekly-report.zip')) as z:
+            self.assertEqual(sorted(z.namelist()), ['weekly-report/SKILL.md', 'weekly-report/references/术语.md'])
+        # 重名不覆盖
+        rc, out = self.pack()
+        self.assertIn('weekly-report-2.zip', out)
+
+    def test_rejects(self):
+        cases = [
+            ({'SKILL.md': self.MD % ('ok', '用途', '正文'), 'scripts/run.py': 'print(1)'}, '不打包脚本'),
+            ({'SKILL.md': self.MD % ('Bad_Name', '用途', '正文')}, '小写字母'),
+            ({'SKILL.md': '---\nname: ok\n---\n\n正文'}, '缺少 name 或 description'),
+            ({'SKILL.md': self.MD % ('ok', '用' * 1025, '正文')}, 'description 超过'),
+            ({'SKILL.md': self.MD % ('ok', '用途', '')}, '没有说明正文'),
+            ({'readme.md': 'x'}, '没有 SKILL.md'),
+        ]
+        for files, msg in cases:
+            shutil.rmtree(self.skill, ignore_errors=True)
+            for rel, text in files.items():
+                write(os.path.join(self.skill, rel), text)
+            rc, out = self.pack()
+            self.assertEqual(rc, 2, out)
+            self.assertIn('打包失败', out)
+            self.assertIn(msg, out)
+        self.assertEqual(os.listdir(self.out), [])
+
+    def test_rejects_link_and_missing_folder(self):
+        write(os.path.join(self.skill, 'SKILL.md'), self.MD % ('ok', '用途', '正文'))
+        os.symlink('/etc/hostname', os.path.join(self.skill, 'x.md'))
+        rc, out = self.pack()
+        self.assertEqual(rc, 2)
+        self.assertIn('链接', out)
+        rc, out = self.run_script('skill-create', 'scripts/pack_skill.py', ['没有'], [])
+        self.assertEqual(rc, 2)
+        self.assertIn('找不到文件夹', out)
+
+    def test_help(self):
+        rc, out = self.run_script('skill-create', 'scripts/pack_skill.py', ['--help'], [])
+        self.assertEqual(rc, 0)
+        self.assertIn('--log-level', out)
+
+
 if __name__ == '__main__':
     unittest.main()

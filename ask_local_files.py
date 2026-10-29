@@ -35,9 +35,12 @@ ask_local_files  --  找文件问 AI
 """
 
 import argparse
+import base64
+import binascii
 import bisect
 import hmac
 import importlib.util
+import io
 import json
 import logging
 import os
@@ -49,6 +52,7 @@ import shutil
 import signal
 import socket
 import sqlite3
+import stat
 import subprocess
 import sys
 import tempfile
@@ -58,13 +62,14 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import webbrowser
+import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
 LOG_FORMAT = '%(asctime)s [%(levelname)s] %(name)s.%(funcName)s:%(lineno)d - %(message)s'
 log = logging.getLogger('ask_local_files')
 
-VERSION = '2.5'
+VERSION = '2.6'
 HERE = os.path.dirname(os.path.abspath(__file__))
 PAGE_FILE = os.path.join(HERE, 'ask_local_files.html')
 LOG_NAME = 'ask_local_files.log'
@@ -128,9 +133,13 @@ WRITE_TOOL = 'write_work_file'
 SCRIPT_EXT = {'.py', '.sh'}
 # 预装 skill 在页面上显示的中文名；SKILL.md 的 name 不变，自建 skill 显示原名
 BUNDLED_LABELS = {'doc-compare': '文档对比', 'summarize-meeting': '会议纪要', 'office-gen': '生成 Word 与 Excel',
-                  'prompt-optimize': '提示词优化', 'clarify-needs': '需求澄清'}
+                  'prompt-optimize': '提示词优化', 'clarify-needs': '需求澄清', 'skill-create': '创建 skill'}
 EMPTY_ASK = '请按所选 skill 的说明处理已选文件。'   # 选了 skill、没写问题时代为提问
 SKILL_META_FILES = {'skill.md', 'upstream.md'}   # 不算参考文件；另有 LICENSE*
+SKILL_DESC_MAX = 1024           # 新建 skill 的用途最多多少字
+SKILL_ZIP_MAX = 5 * 1024 * 1024     # 安装用的 .zip 最大多少字节（页面以 base64 传入，须小于 MAX_BODY）
+SKILL_UNPACK_MAX = 20 * 1024 * 1024     # 安装的 skill 解压后合计最多多少字节
+SKILL_FILES_MAX = 200           # 安装的 skill 最多多少个文件
 MD_EXTS = {'md', 'markdown'}    # 「忽略 Markdown 文件」不列的扩展名
 SKIP_DIRS = {'node_modules', '__pycache__', '$RECYCLE.BIN', 'System Volume Information', 'lost+found'}
 TEXT_EXT = {'.txt', '.md', '.markdown', '.csv', '.tsv', '.log', '.json', '.xml', '.yaml', '.yml', '.ini',
@@ -172,6 +181,7 @@ APP_BROWSERS = ('chromium', 'chromium-browser', 'google-chrome', 'google-chrome-
 APP_DESKTOP_FILES = ('qaxbrowser-safe.desktop', 'qaxbrowser.desktop', 'browser360-cn.desktop',
                      'com.360.browser-stable.desktop', 'browser360.desktop', 'deepin-browser.desktop',
                      'uos-browser.desktop')
+SKILL_NAME_RE = re.compile(r'^[a-z0-9]+(-[a-z0-9]+)*$')   # OpenCode 对 skill 名称的要求
 
 import ask_memory   # noqa: E402  同目录的记忆模块
 
@@ -445,7 +455,7 @@ class FileIndex:
                         continue
                     seen.add(path)
                     entries.append((path, os.path.relpath(path, parent), size, mtime))
-        entries.sort(key=lambda e: e[3], reverse=True)
+        entries.sort(key=lambda e: (-e[3], e[0]))     # 修改时间相同时按路径，先后固定
         return Snapshot(entries)
 
     def status(self):
@@ -581,7 +591,8 @@ class FileIndex:
 
     def browse(self, folder, dedup=False, order=DEFAULT_SORT, skip_md=False):
         """按文件夹逐层浏览。folder 为空时列出已添加的文件夹；否则须是已添加的文件夹或其中的子文件夹。
-        本层文件与含子文件夹的清单都按 order（见 SORTS）排序后再去重、截取。dedup 时本层文件与含子文件夹的清单各自按文件名去重（含子文件夹时跨层），每个文件带其余同名文件 dups。
+        files 与在该文件夹里做一次空关键字搜索相同：含各层子文件夹的全部文件按 order（见 SORTS）排序后再去重、截取；
+        here 为其总数，here_dedup 为去重后的个数。dedup 时跨层按文件名去重，每个文件带其余同名文件 dups。
         tree 为「全部加入」用的可读文件，最多 TREE_SHOWN 个：已选最多 MAX_FILES 个，扣掉已选的同名后
         仍能判断能否全部加入、算出个数。skip_md 时不列也不计 Markdown 文件。"""
         self.maybe_refresh()
@@ -594,11 +605,11 @@ class FileIndex:
         crumbs = self.crumbs(folder)
         if crumbs is None:
             return {'error': FOLDER_GONE, 'status': self.status()}
-        subs, files, tree = snap.browse(folder, skip_md)
-        files, tree = sort_entries(files, order), sort_entries(tree, order)
+        subs, _, tree = snap.browse(folder, skip_md)
+        tree = sort_entries(tree, order)
         reasons = {}
-        layer = dedup_entries(files) if dedup else [(e, []) for e in files]
-        kept = [e for e, _ in dedup_entries(tree)] if dedup else tree
+        layer = dedup_entries(tree) if dedup else [(e, []) for e in tree]
+        kept = [e for e, _ in layer]
         readable = [e for e in kept if not reason_of(e[0], reasons)]
         shown = []
         for e, others in layer[:RESULT_LIMIT]:
@@ -608,7 +619,7 @@ class FileIndex:
             shown.append(item)
         return {'dir': folder, 'crumbs': crumbs,
                 'dirs': [{'path': os.path.join(folder, n), 'name': n, 'files': subs[n]} for n in sorted(subs)],
-                'files': shown, 'here': len(files), 'here_dedup': len(layer), 'dedup': dedup,
+                'files': shown, 'here': len(tree), 'here_dedup': len(layer), 'dedup': dedup,
                 'tree': [entry_public(e, reasons) for e in readable[:TREE_SHOWN]], 'tree_total': len(readable),
                 'status': self.status()}
 
@@ -632,8 +643,8 @@ class FileIndex:
 
 
 def sort_entries(entries, order):
-    """按 order 排序：time_desc 最新在前（索引本来的顺序），time_asc 最旧在前，name_asc、name_desc 按文件名
-    （不区分大小写，同名再按路径）。"""
+    """按 order 排序：time_desc 最新在前（索引本来的顺序），time_asc 最旧在前，修改时间相同时都按路径；
+    name_asc、name_desc 按文件名（不区分大小写，同名再按路径）。"""
     if order == 'time_asc':
         return sorted(entries, key=lambda e: (e[3], e[0]))
     if order in ('name_asc', 'name_desc'):
@@ -874,6 +885,177 @@ def skills_public(skills):
              'chars': len(s['body']),
              'scripts': len(s['scripts']), 'refs': len(s['refs']), 'too_long': s['too_long']}
             for s in sorted(skills.values(), key=lambda s: (s['source'] != 'bundled', s['name']))]
+
+
+class SkillConfirm(Exception):
+    """安装或新建 skill 前须使用者确认：info 写明要替换的文件夹与文件数、要装的脚本个数。"""
+
+    def __init__(self, info):
+        super().__init__(info.get('target'))
+        self.info = info
+
+
+def skill_meta(text):
+    """SKILL.md 文字里的 (name, description, 正文)；格式不对时抛 ValueError。"""
+    meta, body = parse_front_matter(text)
+    name, desc = meta.get('name', '').strip(), meta.get('description', '').strip()
+    if not name or not desc:
+        raise ValueError('SKILL.md 开头缺少 name 或 description')
+    if len(name) > 64 or not SKILL_NAME_RE.match(name):
+        raise ValueError('skill 名称「%s」不合要求：只能用小写字母、数字和连字符，不超过 64 个字符' % name[:80])
+    if len(body) > SKILL_MAX_CHARS:
+        raise ValueError('说明正文超过 %d 字' % SKILL_MAX_CHARS)
+    return name, desc, body
+
+
+def skill_md_text(name, description, body):
+    """新建 skill 的 SKILL.md：用途写成折叠块，引号、冒号等不影响读取。"""
+    desc = ' '.join(description.split())
+    return '---\nname: %s\ndescription: >\n  %s\n---\n\n%s\n' % (name, desc, body.strip())
+
+
+def unpack_skill_zip(data, dest):
+    """把 .zip 解到 dest：拒绝绝对路径、..、链接与超出大小或个数上限的包。SKILL.md 不在根上而在唯一的
+    顶层文件夹里时去掉这一层。出错时抛 ValueError。"""
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(data))
+        infos = zf.infolist()
+    except (zipfile.BadZipFile, OSError, ValueError) as e:
+        raise ValueError('不是有效的 .zip 文件（%s）' % e)
+    files, total = [], 0
+    for info in infos:
+        name = info.filename.replace('\\', '/')
+        parts = [x for x in name.split('/') if x not in ('', '.')]
+        if name.startswith('/') or re.match(r'^[A-Za-z]:', name) or '..' in parts:
+            raise ValueError('包里有超出 skill 文件夹的路径：%s' % name[:200])
+        if stat.S_ISLNK(info.external_attr >> 16):
+            raise ValueError('包里有链接：%s' % name[:200])
+        if info.is_dir() or not parts:
+            continue
+        files.append((info, parts))
+        total += info.file_size
+    if len(files) > SKILL_FILES_MAX:
+        raise ValueError('文件超过 %d 个' % SKILL_FILES_MAX)
+    if total > SKILL_UNPACK_MAX:
+        raise ValueError('解压后超过 %d MB' % (SKILL_UNPACK_MAX // 1024 // 1024))
+    tops = {p[0] for _, p in files}
+    if not any(p == ['SKILL.md'] for _, p in files) and len(tops) == 1 and \
+            any(p[1:] == ['SKILL.md'] for _, p in files if len(p) > 1):
+        files = [(i, p[1:]) for i, p in files if len(p) > 1]
+    written = 0     # 按实际解出的字节数再算一遍，不只信包里登记的大小
+    for info, parts in files:
+        path = os.path.join(dest, *parts)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        try:
+            with zf.open(info) as src, open(path, 'wb') as out:
+                while True:
+                    chunk = src.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    written += len(chunk)
+                    if written > SKILL_UNPACK_MAX:
+                        raise ValueError('解压后超过 %d MB' % (SKILL_UNPACK_MAX // 1024 // 1024))
+                    out.write(chunk)
+        except (zipfile.BadZipFile, NotImplementedError, RuntimeError) as e:
+            raise ValueError('解不开 %s（%s）' % ('/'.join(parts)[:200], e))
+        if os.path.splitext(parts[-1])[1].lower() in SCRIPT_EXT:
+            os.chmod(path, 0o755)
+
+
+def copy_skill_dir(src, dest):
+    """把文件夹 src 复制到 dest；有链接或超出大小、个数上限时抛 ValueError。"""
+    count, total = 0, 0
+    for root, dirs, names in os.walk(src):
+        for n in dirs + names:
+            if os.path.islink(os.path.join(root, n)):
+                raise ValueError('文件夹里有链接：%s' % os.path.relpath(os.path.join(root, n), src))
+        for n in names:
+            count += 1
+            total += os.path.getsize(os.path.join(root, n))
+        if count > SKILL_FILES_MAX:
+            raise ValueError('文件超过 %d 个' % SKILL_FILES_MAX)
+        if total > SKILL_UNPACK_MAX:
+            raise ValueError('合计超过 %d MB' % (SKILL_UNPACK_MAX // 1024 // 1024))
+    shutil.copytree(src, dest, dirs_exist_ok=True)
+
+
+def count_files(d):
+    return sum(len(names) for _, _, names in os.walk(d))
+
+
+def install_skill(fill, confirm=False, skills_dir=None):
+    """把 skill 装进自建目录，返回 {name, target, replaced, bundled, scripts}。fill(临时目录) 负责放入文件。
+    先在自建目录里的临时目录备齐、校验，再换到目标位置，中途出错不留半成品。已有同名自建 skill
+    或带脚本时，confirm 为假则抛 SkillConfirm；不合要求时抛 ValueError。"""
+    skills_dir = skills_dir or USER_SKILLS
+    os.makedirs(skills_dir, exist_ok=True)
+    tmp = tempfile.mkdtemp(prefix='.install.', dir=skills_dir)
+    try:
+        fill(tmp)
+        md = os.path.join(tmp, 'SKILL.md')
+        if not os.path.isfile(md):
+            raise ValueError('没有找到 SKILL.md（须在包的根上或唯一的顶层文件夹里）')
+        try:
+            with open(md, encoding='utf-8-sig') as f:
+                text = f.read(SKILL_MAX_CHARS * 4 + 1)
+        except UnicodeDecodeError:
+            raise ValueError('SKILL.md 不是 UTF-8 文字')
+        name, _, _ = skill_meta(text)
+        scripts, _ = skill_files(tmp)
+        target = os.path.join(skills_dir, name)
+        replaced = os.path.lexists(target)
+        info = {'name': name, 'target': target, 'replaced': replaced,
+                'old_files': count_files(target) if replaced else 0, 'scripts': len(scripts),
+                'bundled': os.path.isfile(os.path.join(BUNDLED_SKILLS, name, 'SKILL.md'))}
+        if (replaced or scripts) and not confirm:
+            raise SkillConfirm(info)
+        os.chmod(tmp, 0o755)
+        if replaced:
+            backup = tempfile.mkdtemp(prefix='.%s.old.' % name, dir=skills_dir)
+            os.rmdir(backup)
+            os.rename(target, backup)
+            try:
+                os.rename(tmp, target)
+            except OSError:
+                os.rename(backup, target)
+                raise
+            shutil.rmtree(backup, ignore_errors=True)
+        else:
+            os.rename(tmp, target)
+    except BaseException:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise
+    log.info('skill installed: %s', target)
+    return info
+
+
+def create_skill(name, description, body, confirm=False, skills_dir=None):
+    """按页面填的名称、用途与正文新建 skill；校验与替换同 install_skill。"""
+    name, description, body = (name or '').strip(), (description or '').strip(), (body or '').strip()
+    if not name or not description or not body:
+        raise ValueError('名称、用途和说明正文都要填')
+    if len(name) > 64 or not SKILL_NAME_RE.match(name):
+        raise ValueError('名称只能用小写字母、数字和连字符，不超过 64 个字符，如 weekly-report')
+    if len(description) > SKILL_DESC_MAX:
+        raise ValueError('用途超过 %d 字' % SKILL_DESC_MAX)
+
+    def fill(tmp):
+        with open(os.path.join(tmp, 'SKILL.md'), 'w', encoding='utf-8') as f:
+            f.write(skill_md_text(name, description, body))
+    return install_skill(fill, confirm, skills_dir)
+
+
+def is_skill_zip(path):
+    """输出文件是不是 skill 包：.zip 里根上或唯一的顶层文件夹里有 SKILL.md。"""
+    if not path.lower().endswith('.zip'):
+        return False
+    try:
+        with zipfile.ZipFile(path) as zf:
+            names = [n.replace('\\', '/').strip('/') for n in zf.namelist()]
+    except (zipfile.BadZipFile, OSError, ValueError):
+        return False
+    tops = {n.split('/')[0] for n in names if n}
+    return 'SKILL.md' in names or (len(tops) == 1 and any(n.count('/') == 1 and n.endswith('/SKILL.md') for n in names))
 
 
 def skill_tools(skill):
@@ -1865,7 +2047,10 @@ class WebState:
             fid = secrets.token_urlsafe(12)
             with self.lock:
                 self.outputs[fid] = (os.path.join(out_dir, rel), os.path.basename(rel))
-            out.append({'id': fid, 'name': rel, 'size': size})
+            item = {'id': fid, 'name': rel, 'size': size}
+            if is_skill_zip(os.path.join(out_dir, rel)):
+                item['skill'] = True
+            out.append(item)
         return out
 
     def cleanup(self):
@@ -2122,6 +2307,10 @@ class Handler(BaseHTTPRequestHandler):
             self.post_docx(data)
         elif url.path == '/api/export':
             self.post_export(data)
+        elif url.path == '/api/skill-create':
+            self.post_skill(data, 'create')
+        elif url.path == '/api/skill-install':
+            self.post_skill(data, 'install')
         else:
             self.send_json(404, {'error': '没有这个地址'})
 
@@ -2323,6 +2512,62 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(500, {'error': str(e), 'folder': folder})
             return
         self.send_json(200, {'ok': True, 'folder': folder, 'selected': selected})
+
+    def post_skill(self, data, kind):
+        """新建（name、description、body）或安装（zip 为 base64、dir 为文件夹、output 为回答下方的输出文件 id）
+        skill。须确认时返回 confirm（见 SkillConfirm），使用者确认后页面带 confirm: true 重发。"""
+        confirm = data.get('confirm') is True
+        try:
+            if kind == 'create':
+                info = create_skill(*(str(data.get(k) or '') for k in ('name', 'description', 'body')), confirm=confirm)
+            else:
+                info = install_skill(self.skill_source(data), confirm)
+        except SkillConfirm as e:
+            self.send_json(200, {'ok': False, 'confirm': e.info})
+            return
+        except ValueError as e:
+            self.send_json(200, {'ok': False, 'error': str(e)})
+            return
+        except OSError as e:
+            log.warning('skill %s failed: %s', kind, e)
+            self.send_json(200, {'ok': False, 'error': '写不进 %s（%s）' % (USER_SKILLS, e.strerror or e)})
+            return
+        self.send_json(200, dict(info, ok=True))
+
+    def skill_source(self, data):
+        """安装来源换成往临时目录里放文件的函数；来源不对时抛 ValueError。"""
+        if isinstance(data.get('zip'), str):
+            try:
+                raw = base64.b64decode(data['zip'], validate=True)
+            except (binascii.Error, ValueError):
+                raise ValueError('上传的文件内容不完整')
+            if len(raw) > SKILL_ZIP_MAX:
+                raise ValueError('.zip 超过 %d MB' % (SKILL_ZIP_MAX // 1024 // 1024))
+            return lambda tmp: unpack_skill_zip(raw, tmp)
+        if isinstance(data.get('output'), str):
+            with self.state.lock:
+                hit = self.state.outputs.get(data['output'])
+            if not hit or not os.path.isfile(hit[0]):
+                raise ValueError('文件已不存在（服务重启后输出文件会删除），请重新提问生成')
+            if os.path.getsize(hit[0]) > SKILL_ZIP_MAX:
+                raise ValueError('.zip 超过 %d MB' % (SKILL_ZIP_MAX // 1024 // 1024))
+            with open(hit[0], 'rb') as f:
+                raw = f.read()
+            return lambda tmp: unpack_skill_zip(raw, tmp)
+        folder = data.get('dir')
+        if not isinstance(folder, str) or not folder.strip():
+            raise ValueError('请先选择 .zip 文件或文件夹')
+        src = os.path.expanduser(folder.strip())
+        if src.startswith('file://'):
+            src = urllib.parse.unquote(urlsplit(src).path)
+        if not os.path.isabs(src) or not os.path.isdir(src):
+            raise ValueError('找不到文件夹 %s' % folder.strip()[:200])
+        if not os.path.isfile(os.path.join(src, 'SKILL.md')):
+            raise ValueError('文件夹里没有 SKILL.md')
+        real, base = os.path.realpath(src), os.path.realpath(USER_SKILLS)
+        if real == base or real.startswith(base + os.sep):
+            raise ValueError('这个文件夹已在自建 skill 目录里，点「重新读取」即可')
+        return lambda tmp: copy_skill_dir(src, tmp)
 
     def post_pick_folder(self, data):
         """弹出目录选择框，只把选中的路径交给页面，不添加、不保存；取消时 path 为 null。"""

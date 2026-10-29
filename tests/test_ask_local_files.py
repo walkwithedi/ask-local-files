@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 """ask_local_files.py 的服务端测试，只用标准库：python3 -m unittest discover -s ask-local-files/tests"""
 
+import base64
 import importlib.util
 import io
 import json
@@ -279,8 +280,9 @@ class BrowseTest(ServerCase):
         self.index.refresh(full=True, wait=True)
         r = self.browse(self.docs)
         self.assertEqual([(d['name'], d['files']) for d in r['dirs']], [('子目录', 2)])
-        self.assertEqual(sorted(f['name'] for f in r['files']), ['季度总结.txt', '资料包.zip'])
-        self.assertEqual(r['here'], 2)
+        # 列出的文件与在该文件夹里空关键字搜索相同：含各层子文件夹
+        self.assertEqual(sorted(f['name'] for f in r['files']), ['会议记录.md', '季度总结.txt', '纪要.txt', '资料包.zip'])
+        self.assertEqual(r['here'], 4)
         self.assertEqual([c['name'] for c in r['crumbs']], ['资料'])
         # 全部加入含子文件夹，只算读得了的
         self.assertEqual(r['tree_total'], 3)
@@ -329,6 +331,30 @@ class SortTest(ServerCase):
         self.assertEqual(self.names(path, 'name_asc'), ['a.txt', 'b.txt', 'C.txt'])
         r = self.call(path + '&sort=time_asc')[1]
         self.assertEqual([x['name'] for x in r['tree']], ['b.txt', 'C.txt', 'a.txt'])
+
+    def test_browse_sorts_all_layers(self):
+        # 子文件夹里的文件与本层的一起排序
+        path = os.path.join(self.docs, '排序', '下层', 'm.txt')
+        write(path, 'x')
+        os.utime(path, (1700000050, 1700000050))
+        self.index.refresh(full=True, wait=True)
+        path = '/api/browse?dir=' + q(os.path.join(self.docs, '排序'))
+        self.assertEqual(self.names(path, 'time_desc'), ['a.txt', 'C.txt', 'm.txt', 'b.txt'])
+        self.assertEqual(self.names(path, 'time_asc'), ['b.txt', 'm.txt', 'C.txt', 'a.txt'])
+        self.assertEqual(self.names(path, 'name_asc'), ['a.txt', 'b.txt', 'C.txt', 'm.txt'])
+        r = self.call(path + '&sort=time_desc')[1]
+        self.assertEqual(r['here'], 4)
+        self.assertEqual([d['name'] for d in r['dirs']], ['下层'])
+
+    def test_same_mtime_ordered_by_path(self):
+        for name in ('y.txt', 'x.txt', 'z.txt'):
+            path = os.path.join(self.docs, '同时', name)
+            write(path, 'x')
+            os.utime(path, (1600000000, 1600000000))
+        self.index.refresh(full=True, wait=True)
+        for path in ('/api/browse?dir=' + q(os.path.join(self.docs, '同时')), '/api/search?q=' + q('同时')):
+            self.assertEqual(self.names(path, 'time_desc'), ['x.txt', 'y.txt', 'z.txt'])
+            self.assertEqual(self.names(path, 'time_asc'), ['x.txt', 'y.txt', 'z.txt'])
 
     def test_sort_before_limit(self):
         for i in range(5):
@@ -1671,24 +1697,25 @@ class BrowseDedupTest(ServerCase):
 
     def test_dedup_layer_and_tree(self):
         r = self.browse('1')
-        self.assertEqual((r['here'], r['here_dedup']), (5, 3))
+        self.assertEqual((r['here'], r['here_dedup']), (7, 4))
+        # 跨层去重：留子目录里最新的那个
         rep = next(f for f in r['files'] if f['name'].startswith('报告'))
-        self.assertEqual(rep['name'], '报告 (1).txt')
-        self.assertEqual([d['name'] for d in rep['dups']], ['报告.txt', '报告 - 副本.txt'])
+        self.assertEqual(rep['name'], '报告_副本.txt')
+        self.assertEqual([d['name'] for d in rep['dups']], ['报告 (1).txt', '报告.txt', '报告 - 副本.txt'])
         # 含子文件夹时跨层去重：留子目录里最新的那个；读不了的资料包.zip 不算
         self.assertEqual(r['tree_total'], 3)
         self.assertEqual(sorted(f['name'] for f in r['tree']), ['会议记录.md', '季度总结.txt', '报告_副本.txt'])
 
     def test_off(self):
         r = self.browse('0')
-        self.assertEqual((r['here'], r['here_dedup']), (5, 5))
+        self.assertEqual((r['here'], r['here_dedup']), (7, 7))
         self.assertFalse(any(f.get('dups') for f in r['files']))
         self.assertEqual(r['tree_total'], 6)
 
     def test_default_follows_setting(self):
-        self.assertEqual(self.call('/api/browse?dir=' + q(self.docs))[1]['here_dedup'], 3)
+        self.assertEqual(self.call('/api/browse?dir=' + q(self.docs))[1]['here_dedup'], 4)
         self.config.dedup = False
-        self.assertEqual(self.call('/api/browse?dir=' + q(self.docs))[1]['here_dedup'], 5)
+        self.assertEqual(self.call('/api/browse?dir=' + q(self.docs))[1]['here_dedup'], 7)
 
     def test_search_results_carry_mtime(self):
         r = self.call('/api/search?q=' + q('报告'))[1]
@@ -1804,6 +1831,130 @@ class PageVersionTest(unittest.TestCase):
     def test_footer_default_matches_version(self):
         with open(os.path.join(TOOL, 'ask_local_files.html'), encoding='utf-8') as f:
             self.assertIn('<span id="ver">找文件问 AI v%s</span>' % fa.VERSION, f.read())
+
+
+def zip_bytes(entries, links=()):
+    """{包内路径: 文字} 打成 .zip 的字节；links 里的路径写成链接。"""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w') as zf:
+        for name, text in entries.items():
+            zf.writestr(name, text)
+        for name in links:
+            info = zipfile.ZipInfo(name)
+            info.external_attr = (0o120777 << 16)
+            zf.writestr(info, '/etc')
+    return buf.getvalue()
+
+
+class SkillManageTest(SkillCase):
+    """管理 skill：新建与安装（.zip、文件夹、回答下方的输出文件）。"""
+
+    def install(self, **body):
+        return self.call('/api/skill-install', body)[1]
+
+    def zip64(self, entries, links=()):
+        return base64.b64encode(zip_bytes(entries, links)).decode('ascii')
+
+    def test_create_and_listed(self):
+        r = self.call('/api/skill-create', {'name': 'weekly-report', 'description': '写周报："要点" 与下周计划',
+                                            'body': '按周汇总。'})[1]
+        self.assertTrue(r['ok'], r)
+        self.assertEqual((r['name'], r['replaced']), ('weekly-report', False))
+        k = fa.load_skills()[0]['weekly-report']
+        self.assertEqual((k['source'], k['description'], k['body']), ('user', '写周报："要点" 与下周计划', '按周汇总。'))
+        self.assertEqual(os.listdir(self.user), ['weekly-report'])     # 不留临时目录
+
+    def test_create_rejects_bad_input(self):
+        for body in ({'name': 'Bad Name', 'description': 'd', 'body': 'b'},
+                     {'name': 'ok', 'description': '', 'body': 'b'},
+                     {'name': 'ok', 'description': 'd' * (fa.SKILL_DESC_MAX + 1), 'body': 'b'},
+                     {'name': 'ok', 'description': 'd', 'body': '字' * (fa.SKILL_MAX_CHARS + 1)}):
+            r = self.call('/api/skill-create', body)[1]
+            self.assertFalse(r['ok'])
+            self.assertIn('error', r)
+        self.assertFalse(os.path.isdir(self.user) and os.listdir(self.user))
+
+    def test_replace_needs_confirm(self):
+        self.make('plain', '旧的', '旧正文', {'a.md': '1', 'b.md': '2'}, base=self.user)
+        body = {'name': 'plain', 'description': '新的', 'body': '新正文'}
+        r = self.call('/api/skill-create', body)[1]
+        self.assertFalse(r['ok'])
+        c = r['confirm']
+        self.assertEqual((c['replaced'], c['old_files'], c['bundled']), (True, 3, True))
+        self.assertEqual(c['target'], os.path.join(self.user, 'plain'))
+        self.assertEqual(fa.load_skills()[0]['plain']['body'], '旧正文')
+        r = self.call('/api/skill-create', dict(body, confirm=True))[1]
+        self.assertTrue(r['ok'] and r['replaced'] and r['bundled'])
+        self.assertEqual(sorted(os.listdir(os.path.join(self.user, 'plain'))), ['SKILL.md'])
+        self.assertEqual(fa.load_skills()[0]['plain']['body'], '新正文')
+
+    def test_install_zip_with_top_folder(self):
+        data = self.zip64({'mine/SKILL.md': SKILL_MD % ('mine', '我的', '正文'), 'mine/ref/说明.md': '参考'})
+        r = self.install(zip=data)
+        self.assertTrue(r['ok'], r)
+        self.assertEqual(fa.load_skills()[0]['mine']['refs'], ['ref/说明.md'])
+
+    def test_install_zip_with_scripts_confirms(self):
+        data = self.zip64({'SKILL.md': SKILL_MD % ('tool', '带脚本', '正文'), 'scripts/a.py': 'print(1)',
+                           'scripts/b.sh': 'echo 1'})
+        r = self.install(zip=data)
+        self.assertEqual((r['ok'], r['confirm']['scripts'], r['confirm']['replaced']), (False, 2, False))
+        self.assertFalse(os.path.exists(os.path.join(self.user, 'tool')))
+        self.assertTrue(self.install(zip=data, confirm=True)['ok'])
+        self.assertTrue(os.access(os.path.join(self.user, 'tool', 'scripts', 'a.py'), os.X_OK))
+
+    def test_install_zip_rejects_escape_link_and_missing(self):
+        md = SKILL_MD % ('evil', '坏包', '正文')
+        for entries, links in (({'SKILL.md': md, '../x.md': '跳出'}, ()),
+                               ({'SKILL.md': md, '/abs.md': '绝对路径'}, ()),
+                               ({'SKILL.md': md}, ('link',)),
+                               ({'readme.md': '没有 SKILL.md'}, ()),
+                               ({'SKILL.md': '---\nname: Evil Name\ndescription: d\n---\n正文'}, ())):
+            r = self.install(zip=self.zip64(entries, links))
+            self.assertFalse(r['ok'])
+            self.assertIn('error', r, entries)
+        self.assertFalse(self.install(zip='不是 base64')['ok'])
+        self.assertEqual(self.install(zip=base64.b64encode(b'not zip').decode())['ok'], False)
+        self.assertEqual(os.listdir(self.user), [])
+        self.assertFalse(os.path.exists(os.path.join(self.root, 'x.md')))
+
+    def test_install_zip_size_limits(self):
+        md = SKILL_MD % ('big', '大包', '正文')
+        with mock.patch.object(fa, 'SKILL_UNPACK_MAX', 1000):
+            r = self.install(zip=self.zip64({'SKILL.md': md, 'a.md': '0' * 2000}))
+        self.assertIn('超过', r['error'])
+        with mock.patch.object(fa, 'SKILL_FILES_MAX', 2):
+            r = self.install(zip=self.zip64({'SKILL.md': md, 'a.md': '1', 'b.md': '2'}))
+        self.assertIn('超过', r['error'])
+        self.assertEqual(os.listdir(self.user), [])
+
+    def test_install_folder(self):
+        src = self.make('fromdir', '从文件夹', '正文', {'ref.md': '参考'}, base=os.path.join(self.root, 'src'))
+        r = self.install(dir=src)
+        self.assertTrue(r['ok'], r)
+        self.assertEqual(fa.load_skills()[0]['fromdir']['refs'], ['ref.md'])
+        os.symlink(os.path.join(self.root, 'secret.txt'), os.path.join(src, 'link.md'))
+        r = self.install(dir=src, confirm=True)
+        self.assertIn('链接', r['error'])
+        self.assertEqual(sorted(os.listdir(os.path.join(self.user, 'fromdir'))), ['SKILL.md', 'ref.md'])
+        self.assertIn('error', self.install(dir=os.path.join(self.root, '没有')))
+        self.assertIn('error', self.install(dir=os.path.join(self.user, 'fromdir')))
+        self.assertIn('error', self.install(dir=''))
+
+    def test_install_from_output(self):
+        out = self.st.new_output_dir()
+        with open(os.path.join(out, 'made.zip'), 'wb') as f:
+            f.write(zip_bytes({'made/SKILL.md': SKILL_MD % ('made', 'AI 写的', '正文')}))
+        with open(os.path.join(out, '表格.zip'), 'wb') as f:
+            f.write(zip_bytes({'a.txt': 'x'}))
+        listed = {x['name']: x for x in self.st.register_outputs(out)}
+        self.assertTrue(listed['made.zip'].get('skill'))
+        self.assertNotIn('skill', listed['表格.zip'])
+        r = self.install(output=listed['made.zip']['id'])
+        self.assertTrue(r['ok'], r)
+        self.assertIn('made', fa.load_skills()[0])
+        self.assertIn('error', self.install(output='没有这个'))
+
 
 
 if __name__ == '__main__':
