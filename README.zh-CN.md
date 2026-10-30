@@ -141,9 +141,9 @@ skill 是一个文件夹，内有 `SKILL.md`：开头两行 `---` 之间写 `nam
 
 双击时优先用 Chromium 系浏览器（含奇安信、360、统信等国产 Chromium 系浏览器）的应用窗口模式（`--app`）打开，不显示地址栏；命令不在 PATH 里时按这些浏览器的桌面文件找到程序；都找不到时用默认浏览器的普通窗口。
 
-服务只监听 127.0.0.1 的随机端口，网址带一次性令牌并校验 Host、Origin。点右上角「退出」立即结束；关闭页面约 5 秒后自动退出，页面挂在后台不影响；有回答正在生成、脚本在运行或「更新记忆」正在进行时等它结束再退出；空闲时自动更新不拖住退出。日志写在程序目录下的 `ask_local_files.log`（目录不可写时写到 `~/.cache/ask-local-files/`）。
+服务只监听 127.0.0.1，默认端口 47821（可用 `--port` 或在 `~/.config/ask-local-files/config.json` 里加 `"port": 端口号` 改）；网址带令牌并校验 Host、Origin，令牌首次启动生成，存在 `~/.config/ask-local-files/token`（权限 600），之后沿用，所以网址跨重启不变，可收藏或复制到任意浏览器，页脚「复制网址」可复制。`--new-token` 生成新令牌，旧网址作废（本工具运行时不改）。本工具已在运行时再次启动只打开页面；端口被别的程序占用时提示用 `--port` 换端口。点右上角「退出」立即结束；关闭页面后服务继续运行，没有页面、也没有任务 30 分钟后自动退出（`--idle-timeout` 改秒数，0 不自动退出），页面挂在后台不影响；有回答正在生成、脚本在运行或「更新记忆」正在进行时等它结束再退出；空闲时自动更新不拖住退出。日志写在程序目录下的 `ask_local_files.log`（目录不可写时写到 `~/.cache/ask-local-files/`）。
 
-命令行：`python3 ask_local_files.py [--no-browser] [--no-app] [--log-level DEBUG|INFO|WARNING|ERROR]`，`--no-browser` 只打印网址，`--no-app` 用默认浏览器的普通窗口打开；日志级别默认 WARNING，可由环境变量 `LOG_LEVEL` 覆盖。
+命令行：`python3 ask_local_files.py [--no-browser] [--no-app] [--port N] [--idle-timeout 秒] [--print-url] [--new-token] [--log-level DEBUG|INFO|WARNING|ERROR]`，`--no-browser` 只打印网址，`--no-app` 用默认浏览器的普通窗口打开，`--port` 指定端口，`--idle-timeout` 指定空闲多少秒后退出（默认 1800，0 不自动退出），`--print-url` 只打印网址不启动，`--new-token` 重新生成令牌并打印新网址；都在标准输出打印一行「网页界面：网址」；日志级别默认 WARNING，可由环境变量 `LOG_LEVEL` 覆盖。
 
 测试：`python3 -m unittest discover -s tests`；装有 Playwright 时 `node --test tests/ui.test.js`。
 
