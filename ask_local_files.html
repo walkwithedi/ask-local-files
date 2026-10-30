@@ -28,6 +28,10 @@
   #q { flex:3 1 220px; font-size:15px; }
   #ext { flex:1 1 90px; }
   textarea { width:100%; min-height:5.5em; resize:vertical; }
+  .vh { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+  label.drop { display:block; border:1px dashed var(--line); border-radius:6px; padding:10px; text-align:center; cursor:pointer; color:var(--muted); font-size:13px; }
+  label.drop.over { border-color:var(--accent); color:var(--text); }
+  #skillPanel .row input[type=text] { flex:1 1 180px; }
   select { max-width:100%; }
   button { padding:6px 12px; font:inherit; font-size:14px; border:1px solid var(--line); border-radius:6px; background:var(--card); color:var(--text); cursor:pointer; }
   button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
@@ -345,11 +349,30 @@
       <label for="skillSel" class="hint" style="margin:0">skill</label>
       <select id="skillSel"><option value="">不用 skill</option></select>
       <button id="skillReload" class="link" type="button">重新读取</button>
+      <button id="skillManage" class="toggle" type="button" aria-expanded="false" aria-controls="skillPanel">管理 skill<span class="arrow" aria-hidden="true">▸</span></button>
     </div>
     <span class="mem-row"><label id="useMemRow" class="dedup" style="margin-top:0"><input id="useMemory" type="checkbox" checked>参考记忆</label><button id="memSettings" class="toggle" type="button" aria-expanded="false" aria-controls="memSettingsPanel">记忆设置<span class="arrow" aria-hidden="true">▸</span></button></span>
     </div>
     <div id="localStatus" class="status" aria-live="polite"></div>
     <div id="skillHint" class="hint" aria-live="polite"></div>
+    <div id="skillPanel" class="panel" hidden>
+      <p class="hint">新建或安装的 skill 放进自建目录 <span id="skUserDir" style="word-break:break-all"></span>，装好后自动选中。也可以选预装的「创建 skill」，在对话里让 AI 写一个，写好后点回答下方的「安装」。</p>
+      <h3>新建</h3>
+      <div class="row">
+        <input id="skName" type="text" placeholder="名称：小写字母、数字和连字符，如 weekly-report" autocomplete="off" aria-label="skill 名称">
+        <input id="skDesc" type="text" placeholder="用途：做什么、什么时候用" autocomplete="off" aria-label="skill 用途">
+      </div>
+      <textarea id="skBody" aria-label="skill 说明正文" placeholder="说明正文：写给模型的做法、步骤和输出格式"></textarea>
+      <div class="row"><button id="skCreate" type="button">新建</button></div>
+      <h3>安装</h3>
+      <label id="skDrop" class="drop" tabindex="0">点击选择或拖入 skill 的 .zip 包（最大 5 MB）<input id="skZip" class="vh" type="file" accept=".zip,application/zip" tabindex="-1"></label>
+      <div class="row" style="margin-top:6px">
+        <input id="skDir" type="text" placeholder="或填 skill 文件夹的路径（内有 SKILL.md）" autocomplete="off" aria-label="要安装的 skill 文件夹">
+        <button id="skPickDir" type="button" aria-label="选择要安装的 skill 文件夹" hidden>选择……</button>
+        <button id="skInstallDir" type="button">安装文件夹</button>
+      </div>
+      <div id="skStatus" class="status" aria-live="polite"></div>
+    </div>
     <div id="dest" class="hint"></div>
     <div id="modelPanel" class="panel" hidden>
       <h3>发送字数上限</h3>
@@ -422,7 +445,7 @@
   <div id="convFrames" hidden></div>
 
 
-  <footer><span id="ver">找文件问 AI v2.5</span>　关闭全部页面后服务自动退出；点「退出」立即结束，开着的页面一起结束。有回答正在生成（含 skill 脚本运行）或记忆正在手动更新时，服务等它结束再退出。对话不自动保存，退出即清空；记忆存在本机，可在「记忆设置」里关闭或清空。</footer>
+  <footer><span id="ver">找文件问 AI v2.6</span>　关闭全部页面后服务自动退出；点「退出」立即结束，开着的页面一起结束。有回答正在生成（含 skill 脚本运行）或记忆正在手动更新时，服务等它结束再退出。对话不自动保存，退出即清空；记忆存在本机，可在「记忆设置」里关闭或清空。</footer>
 </main>
 <script>
 'use strict';
@@ -1018,8 +1041,8 @@ function loadBrowse(dir, quiet) {
     renderBrowse();
     let s = indexText(r.status);
     if (state && state.folders.length) {
-      s += r.dir ? '。本层 ' + fmtNum(r.here) + ' 个文件' + (r.here_dedup < r.here ? '（去重后 ' + fmtNum(r.here_dedup) + ' 个）' : '') +
-        '、' + r.dirs.length + ' 个子文件夹' + (r.here_dedup > listed ? '，列出' + SORT_LEAD[findPrefs.sort] + ' ' + listed + ' 个' : '') +
+      s += r.dir ? '。共 ' + fmtNum(r.here) + ' 个文件（含子文件夹）' + (r.here_dedup < r.here ? '，去重后 ' + fmtNum(r.here_dedup) + ' 个' : '') +
+        '，' + r.dirs.length + ' 个子文件夹' + (r.here_dedup > listed ? '，列出' + SORT_LEAD[findPrefs.sort] + ' ' + listed + ' 个' : '') +
         (listed > r.files.length ? '，已从列表移除 ' + (listed - r.files.length) + ' 个' : '')
         : '。已添加 ' + r.dirs.length + ' 个文件夹，点文件夹逐层查看';
     }
@@ -1095,12 +1118,12 @@ function renderBrowse() {
     li.appendChild(box);
     ul.appendChild(li);
   });
-  browse.files.forEach(r => ul.appendChild(fileRow(r, false)));
+  browse.files.forEach(r => ul.appendChild(fileRow(r, true)));
   if (!browse.dirs.length && !browse.listed) {
     ul.appendChild(el('li', 'meta', browse.dir ? '这个文件夹里没有已索引的文件；刚放进来的文件请点「刷新」。' : '还没有添加文件夹：先点「管理文件夹」添加。'));
   }
   if (browse.here_dedup > browse.listed) {
-    ul.appendChild(el('li', 'meta', '本层共 ' + fmtNum(browse.here_dedup) + ' 个文件，只列出' + SORT_LEAD[findPrefs.sort] + ' ' + browse.listed + ' 个；要找其他文件请在上方输入关键字搜索。'));
+    ul.appendChild(el('li', 'meta', '共 ' + fmtNum(browse.here_dedup) + ' 个文件（含子文件夹），只列出' + SORT_LEAD[findPrefs.sort] + ' ' + browse.listed + ' 个；要找其他文件请在上方输入关键字搜索。'));
   }
   ul.scrollTop = top;
   if (focus) restoreFocus(ul, focus);
@@ -1444,7 +1467,7 @@ function renderSkillHint() {
       box.appendChild(el('div', '', '选了 skill 时可以不选文件，也可以不写问题直接发送（代为提问「' + EMPTY_ASK + '」）。'));
     }
   } else if (skillsDir) {
-    box.appendChild(el('div', '', '自建 skill 放在 ' + skillsDir + '/<名称>/SKILL.md，放好后点「重新读取」。'));
+    box.appendChild(el('div', '', '自建 skill 放在 ' + skillsDir + '/<名称>/SKILL.md，放好后点「重新读取」；也可以点「管理 skill」新建或安装。'));
   }
   renderDest();
   noticeLimit();
@@ -1455,6 +1478,7 @@ function loadSkills(manual) {
   return api('/api/skills').then(r => {
     skills = r.skills;
     skillsDir = r.user_dir;
+    $('skUserDir').textContent = r.user_dir;
     renderSkills();
     if (manual) say('chatStatus', '已读取 ' + skills.length + ' 个 skill' + (r.problems.length ? '，跳过 ' + r.problems.length + ' 个格式不对的（原因见日志）' : '') + '。', r.problems.length ? 'warn' : 'ok');
   }).catch(e => say('chatStatus', failText('读取 skill', e.message, '请点「重新读取」重试。'), 'bad'))
@@ -1462,6 +1486,72 @@ function loadSkills(manual) {
 }
 
 $('skillSel').addEventListener('change', () => { skillOpen = false; renderSkillHint(); });
+
+// ---------------- 管理 skill：新建、安装。已有同名自建 skill 或带脚本时服务端先返回 confirm，确认后带 confirm 重发
+function skillConfirmText(c, what) {
+  const parts = [];
+  if (c.replaced) parts.push('替换已有的同名自建 skill：\n' + c.target + '\n其中的 ' + c.old_files + ' 个文件会被删除，换成' + what + '的内容。');
+  if (c.scripts) parts.push('这个 skill 带 ' + c.scripts + ' 个脚本：选用它提问时，模型会运行这些脚本，脚本以当前用户身份运行，能读写当前用户能访问的文件。只装来源可信的 skill。');
+  return parts.join('\n\n') + '\n\n确定' + (what === '新建' ? '新建' : '安装') + '？';
+}
+function skillDone(r, statusId, what) {
+  return loadSkills(false).then(() => {
+    const k = skills.find(x => x.name === r.name);
+    if (k && !k.too_long) { $('skillSel').value = r.name; skillOpen = false; renderSkillHint(); }
+    say(statusId, '已' + what + ' skill「' + r.name + '」并选中' + (r.replaced ? '，替换了原来的同名 skill' : '') +
+        (r.bundled ? '；它与预装 skill 同名，自建的优先' : '') + '。', 'ok');
+  });
+}
+function skillCall(path, body, b, statusId, what) {
+  b.disabled = true;
+  say(statusId, '正在' + what + '……', 'info');
+  const go = confirmed => post(path, Object.assign({}, body, confirmed ? {confirm: true} : {})).then(r => {
+    if (r.ok) return skillDone(r, statusId, what);
+    if (r.confirm) {
+      if (!confirm(skillConfirmText(r.confirm, what))) { say(statusId, '没有' + what + '。', 'info'); return; }
+      return go(true);
+    }
+    say(statusId, failText(what, r.error, what === '新建' ? '请改好后再点「新建」。' : '请换一个 skill 包或文件夹再试。'), 'bad');
+  });
+  return go(false).catch(e => say(statusId, failText(what, e.message, '请重试。'), 'bad'))
+    .then(() => { b.disabled = !alive; });
+}
+function installSkill(body, b, statusId) { return skillCall('/api/skill-install', body, b, statusId, '安装'); }
+
+$('skillManage').addEventListener('click', () => togglePanel($('skillManage'), $('skillPanel')));
+$('skCreate').addEventListener('click', () => {
+  const body = {name: $('skName').value.trim(), description: $('skDesc').value.trim(), body: $('skBody').value};
+  const miss = [['名称', body.name], ['用途', body.description], ['说明正文', body.body.trim()]].filter(x => !x[1]).map(x => x[0]);
+  if (miss.length) { say('skStatus', failText('新建', '还没填' + miss.join('、'), '请填好后再点「新建」。'), 'bad'); return; }
+  if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(body.name) || body.name.length > 64) {
+    say('skStatus', failText('新建', '名称只能用小写字母、数字和连字符，不超过 64 个字符', '例如 weekly-report。'), 'bad');
+    return;
+  }
+  skillCall('/api/skill-create', body, $('skCreate'), 'skStatus', '新建');
+});
+function installZipFile(file) {
+  if (!file) return;
+  if (!/\.zip$/i.test(file.name)) { say('skStatus', failText('安装', file.name + ' 不是 .zip 文件', '请选择 skill 的 .zip 包。'), 'bad'); return; }
+  if (file.size > 5 * 1024 * 1024) { say('skStatus', failText('安装', file.name + ' 超过 5 MB', '请改用「安装文件夹」。'), 'bad'); return; }
+  const reader = new FileReader();
+  reader.onload = () => {
+    const data = String(reader.result), i = data.indexOf(',');
+    installSkill({zip: data.slice(i + 1)}, $('skInstallDir'), 'skStatus');
+  };
+  reader.onerror = () => say('skStatus', failText('安装', '读不了 ' + file.name, '请重新选择。'), 'bad');
+  reader.readAsDataURL(file);
+}
+$('skZip').addEventListener('change', () => { const f = $('skZip').files[0]; $('skZip').value = ''; installZipFile(f); });
+$('skDrop').addEventListener('keydown', ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); $('skZip').click(); } });
+['dragenter', 'dragover'].forEach(t => $('skDrop').addEventListener(t, ev => { ev.preventDefault(); $('skDrop').classList.add('over'); }));
+['dragleave', 'drop'].forEach(t => $('skDrop').addEventListener(t, ev => { ev.preventDefault(); $('skDrop').classList.remove('over'); }));
+$('skDrop').addEventListener('drop', ev => installZipFile(ev.dataTransfer.files[0]));
+$('skInstallDir').addEventListener('click', () => {
+  if (!$('skDir').value.trim()) { say('skStatus', failText('安装', '还没填文件夹', '请填 skill 文件夹的路径，或点「选择……」。'), 'bad'); return; }
+  installSkill({dir: $('skDir').value.trim()}, $('skInstallDir'), 'skStatus');
+});
+$('skDir').addEventListener('keydown', ev => { if (ev.key === 'Enter') $('skInstallDir').click(); });
+$('skPickDir').addEventListener('click', () => pickInto($('skDir'), $('skPickDir'), 'skStatus', '选择要安装的 skill 文件夹'));
 $('skillReload').addEventListener('click', () => loadSkills(true));
 
 const TOOL_VERB = {read: '读取：', run: '运行：', write: '写入：'};
@@ -1547,6 +1637,11 @@ function toolsNode(m) {
       t.files.forEach(f => {
         const b = btn('保存 ' + f.name, 'small', () => saveOutputs([f]));
         row.appendChild(b);
+        if (f.skill) {
+          const ins = btn('安装 ' + f.name, 'small', () => installSkill({output: f.id}, ins, 'chatStatus'));
+          ins.dataset.act = 'install-skill';
+          row.appendChild(ins);
+        }
       });
       if (t.files.length > 1) row.appendChild(btn('全部保存', 'small', () => saveOutputs(t.files)));
       d.appendChild(row);
@@ -2609,6 +2704,7 @@ api('/api/state').then(s => {
   setRegex(s.regex === true);
   setIgnoreMd(s.ignore_md !== false);
   $('pickFolder').hidden = !s.picker;
+  $('skPickDir').hidden = !s.picker;
   applyState(s);
   renderFolders();
   renderChat();

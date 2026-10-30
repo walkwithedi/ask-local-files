@@ -1185,10 +1185,10 @@ test('「忽略 Markdown 文件」默认勾选，搜索与浏览都不列 .md，
   await page.locator('#browseList button.dir').first().click();
   await page.locator('#browseList li', {hasText: '季度总结.txt'}).waitFor();
   assert.strictEqual(await page.locator('#browseList li', {hasText: '说明.markdown'}).count(), 0);
-  assert.strictEqual(await page.locator('#browseList li', {hasText: '子目录'}).count(), 0);   // 只有 .md 的子文件夹不列
+  assert.strictEqual(await page.locator('#browseList li:has(button.dir)', {hasText: '子目录'}).count(), 0);   // 只有 .md 的子文件夹不列
   await page.uncheck('#ignoreMd');
   await page.locator('#browseList li', {hasText: '说明.markdown'}).waitFor();
-  await page.locator('#browseList li', {hasText: '子目录'}).waitFor();
+  await page.locator('#browseList li:has(button.dir)', {hasText: '子目录'}).waitFor();
   await page.waitForTimeout(300);
   await page.goto(url);
   await page.locator('#findStatus:not(:empty)').waitFor();
@@ -1466,7 +1466,18 @@ test('浏览：搜索框为空时显示文件夹内容，逐层进入文件夹�
   await page.locator('#browseList button.dir').first().click();
   await page.locator('#crumbs [aria-current]', {hasText: '资料'}).waitFor();
   await page.getByRole('button', {name: '打开文件夹 子目录'}).waitFor();
-  assert.match(await page.locator('#browseList li', {hasText: '子目录'}).textContent(), /2 个文件/);
+  assert.match(await page.locator('#browseList li:has(button.dir)', {hasText: '子目录'}).textContent(), /2 个文件/);
+  // 与在这个文件夹里空关键字搜索相同：各层文件都列出，写明所在文件夹，点它进入
+  const deep = page.locator('#browseList li', {hasText: '纪要.txt'});
+  assert.strictEqual(await deep.locator('[data-act="folder"]').textContent(), '资料/子目录/深一层');
+  assert.match(await page.textContent('#findStatus'), /共 4 个文件（含子文件夹），1 个子文件夹/);
+  const files = () => page.$$eval('#browseList li .name', els => els.map(e => e.textContent));
+  await page.selectOption('#sortBy', 'name_asc');
+  await page.waitForFunction(() => document.querySelector('#browseList li .name').textContent === '会议记录.md');
+  assert.deepStrictEqual(await files(), ['会议记录.md', '季度总结.txt', '纪要.txt', '资料包.zip']);
+  await page.selectOption('#sortBy', 'name_desc');
+  await page.waitForFunction(() => document.querySelector('#browseList li .name').textContent === '资料包.zip');
+  assert.deepStrictEqual(await files(), ['资料包.zip', '纪要.txt', '季度总结.txt', '会议记录.md']);
   assert.ok(await page.locator('#browseList li', {hasText: '资料包.zip'}).locator('[data-act="open-folder"]').isEnabled());
   assert.strictEqual(await page.textContent('#browseAdd'), '全部加入（3 个，含子文件夹）');
   await page.getByRole('button', {name: '打开文件夹 子目录'}).click();
@@ -1704,7 +1715,7 @@ test('搜索的全部加入只加去重后留下的，跳过已选里有同名�
 test('浏览在服务端去重：状态行写出去重前后数量，全部加入按去重后计数，关掉后恢复', async t => {
   const {page} = await launch(t, {files: {'报告.txt': '甲', '报告 (1).txt': '乙', '子目录/报告_副本.txt': '丙'}});
   await page.locator('#browseList button.dir').first().click();
-  await page.locator('#findStatus').getByText('本层 4 个文件（去重后 3 个）、1 个子文件夹').waitFor();
+  await page.locator('#findStatus').getByText('共 6 个文件（含子文件夹），去重后 4 个，1 个子文件夹').waitFor();
   await page.locator('#browseAdd', {hasText: '全部加入（3 个，含子文件夹）'}).waitFor();
   assert.strictEqual(await page.locator('#browseList [data-act="dups"]').count(), 1);
   await page.uncheck('#dedup');
@@ -2237,4 +2248,102 @@ test('加入前 50 个：可加入的多于 50 个时出现，已选不为空时
   await page.waitForFunction(() => document.querySelectorAll('#picked > li').length === 50);
   await page.setViewportSize({width: 360, height: 800});
   await noHorizontalScroll(page);
+});
+
+// ---------------- v2.6 管理 skill：新建、安装
+
+// 用 Python 标准库打一个 .zip：entries 为 {包内路径: 文字}
+function makeZip(file, entries) {
+  execFileSync(PYTHON, ['-c', 'import json,sys,zipfile\nz=zipfile.ZipFile(sys.argv[1],"w")\n' +
+    'for k,v in json.loads(sys.argv[2]).items(): z.writestr(k,v)\nz.close()', file, JSON.stringify(entries)]);
+  return file;
+}
+const PACK_SKILL = {
+  'SKILL.md': '---\nname: packer\ndescription: 测试用，打出一个 skill 包\n---\n运行脚本。\n',
+  'scripts/pack.py': "import os, zipfile\nz = zipfile.ZipFile(os.path.join(os.environ['ASK_OUT'], 'made.zip'), 'w')\n" +
+    "z.writestr('made/SKILL.md', chr(10).join(['---', 'name: made', 'description: AI 写的 skill', '---', '正文', '']))\nz.close()\nprint('已打包')\n"
+};
+
+test('管理 skill：新建后选中，同名时确认写明替换的文件夹与文件数，取消则不改', async t => {
+  const {page, home} = await launch(t, {skills: {weekly: {'SKILL.md': '---\nname: weekly\ndescription: 旧的\n---\n旧正文\n', 'a.md': '1'}}});
+  await page.locator('#skillSel option', {hasText: 'weekly（自建'}).waitFor({state: 'attached'});
+  assert.ok(await page.isHidden('#skillPanel'));
+  await page.click('#skillManage');
+  assert.strictEqual(await page.getAttribute('#skillManage', 'aria-expanded'), 'true');
+  await page.click('#skCreate');
+  await page.locator('#skStatus.bad', {hasText: '新建失败：还没填名称、用途、说明正文'}).waitFor();
+  await page.fill('#skName', 'Bad Name');
+  await page.fill('#skDesc', '写周报');
+  await page.fill('#skBody', '按周汇总要点。');
+  await page.click('#skCreate');
+  await page.locator('#skStatus.bad', {hasText: '名称只能用小写字母'}).waitFor();
+  await page.fill('#skName', 'report');
+  await page.click('#skCreate');
+  await page.locator('#skStatus.ok', {hasText: '已新建 skill「report」并选中'}).waitFor();
+  assert.strictEqual(await page.inputValue('#skillSel'), 'report');
+  assert.match(await page.textContent('#skillHint'), /写周报/);
+  assert.ok(fs.existsSync(path.join(home, '.config', 'opencode', 'skills', 'report', 'SKILL.md')));
+  // 同名：取消则不改
+  let msg = '';
+  page.onDialog = d => { msg = d.message(); d.dismiss(); };
+  await page.fill('#skName', 'weekly');
+  await page.click('#skCreate');
+  await page.locator('#skStatus', {hasText: '没有新建'}).waitFor();
+  assert.match(msg, /替换已有的同名自建 skill/);
+  assert.match(msg, /weekly/);
+  assert.match(msg, /2 个文件会被删除/);
+  assert.ok(fs.existsSync(path.join(home, '.config', 'opencode', 'skills', 'weekly', 'a.md')));
+  page.onDialog = d => d.accept();
+  await page.click('#skCreate');
+  await page.locator('#skStatus.ok', {hasText: '替换了原来的同名 skill'}).waitFor();
+  assert.ok(!fs.existsSync(path.join(home, '.config', 'opencode', 'skills', 'weekly', 'a.md')));
+  assert.strictEqual(await page.inputValue('#skillSel'), 'weekly');
+});
+
+test('管理 skill：安装 .zip（键盘打开选文件、带脚本先确认）与文件夹，失败写明原因', async t => {
+  const {page, home} = await launch(t);
+  await page.locator('#skillSel option', {hasText: '创建 skill（预装，1 个脚本）'}).waitFor({state: 'attached'});
+  await page.click('#skillManage');
+  const zip = makeZip(path.join(home, 'tool.zip'), {'tool/SKILL.md': '---\nname: tool\ndescription: 带脚本的\n---\n正文\n',
+                                                    'tool/scripts/a.py': 'print(1)'});
+  let msg = '';
+  page.onDialog = d => { msg = d.message(); d.accept(); };
+  await page.focus('#skDrop');
+  const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.keyboard.press('Enter')]);
+  await chooser.setFiles(zip);
+  await page.locator('#skStatus.ok', {hasText: '已安装 skill「tool」并选中'}).waitFor();
+  assert.match(msg, /带 1 个脚本/);
+  assert.match(msg, /当前用户身份运行/);
+  assert.strictEqual(await page.inputValue('#skillSel'), 'tool');
+  // 不是 skill 包
+  await page.setInputFiles('#skZip', makeZip(path.join(home, 'bad.zip'), {'readme.md': 'x'}));
+  await page.locator('#skStatus.bad', {hasText: '安装失败：没有找到 SKILL.md'}).waitFor();
+  await page.setInputFiles('#skZip', {name: 'a.txt', mimeType: 'text/plain', buffer: Buffer.from('x')});
+  await page.locator('#skStatus.bad', {hasText: 'a.txt 不是 .zip 文件'}).waitFor();
+  // 文件夹
+  const dir = path.join(home, '下载', 'notes');
+  fs.mkdirSync(dir, {recursive: true});
+  fs.writeFileSync(path.join(dir, 'SKILL.md'), '---\nname: notes\ndescription: 文件夹里的\n---\n正文\n');
+  await page.click('#skInstallDir');
+  await page.locator('#skStatus.bad', {hasText: '还没填文件夹'}).waitFor();
+  await page.fill('#skDir', dir);
+  await page.press('#skDir', 'Enter');
+  await page.locator('#skStatus.ok', {hasText: '已安装 skill「notes」并选中'}).waitFor();
+  assert.strictEqual(await page.inputValue('#skillSel'), 'notes');
+  await page.setViewportSize({width: 360, height: 800});
+  await noHorizontalScroll(page);
+});
+
+test('回答下方的 skill 包有「安装」，点了才装上并选中', async t => {
+  const {page, home} = await launch(t, {model: 'call:run_script:{"script": "scripts/pack.py", "args": []}', skills: {packer: PACK_SKILL}});
+  await page.locator('#skillSel option', {hasText: 'packer（自建'}).waitFor({state: 'attached'});
+  await page.selectOption('#skillSel', 'packer');
+  await page.fill('#ask', '打包');
+  await page.click('#send');
+  const ins = page.getByRole('button', {name: '安装 made.zip'});
+  await ins.waitFor();
+  assert.ok(!fs.existsSync(path.join(home, '.config', 'opencode', 'skills', 'made')), '点之前不安装');
+  await ins.click();
+  await page.locator('#chatStatus.ok', {hasText: '已安装 skill「made」并选中'}).waitFor();
+  assert.strictEqual(await page.inputValue('#skillSel'), 'made');
 });
