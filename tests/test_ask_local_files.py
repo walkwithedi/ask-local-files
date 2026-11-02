@@ -585,6 +585,217 @@ class FixedUrlTest(ServerCase):
             self.assertEqual(fa.load_token(), 'tok-tok-tok-tok-tok')
 
 
+class DataDirTest(ServerCase):
+    """保存位置：记忆、设置与令牌放在位置文件记的目录，可移动或改用已有的。"""
+
+    TOKEN = 'cur-token-cur-token-1'
+
+    def setUp(self):
+        super().setUp()
+        self.cur = os.path.join(self.root, 'cur')
+        self.dest = os.path.join(self.root, 'dest')
+        os.makedirs(self.cur)
+        os.makedirs(self.dest)
+        self.pointer = os.path.join(self.root, 'tool', 'data-dir.txt')
+        os.makedirs(os.path.dirname(self.pointer))
+        for name in ('CONFIG_FILE', 'MEMORY_FILE', 'TOKEN_FILE'):
+            p = mock.patch.object(fa, name, getattr(fa, name))
+            p.start()
+            self.addCleanup(p.stop)
+        p = mock.patch.object(fa, 'DATA_DIR_FILE', self.pointer)
+        p.start()
+        self.addCleanup(p.stop)
+        p = mock.patch.dict(fa.DATA)
+        p.start()
+        self.addCleanup(p.stop)
+        fa.write_data_dir(self.cur, self.pointer)
+        fa.init_data_dir()
+        self.config.path = fa.CONFIG_FILE
+        self.config.save()
+        write(fa.TOKEN_FILE, self.TOKEN + '\n')
+        self.st.token = self.TOKEN
+        self.st.url = '%s/?t=%s' % (self.st.origin, self.TOKEN)
+        self.memory.close()
+        self.memory = self.st.memory = fa.ask_memory.Memory(fa.MEMORY_FILE)
+        path = os.path.join(self.docs, '季度总结.txt')
+        self.memory.remember_file(path, os.stat(path), '甲' * 100)
+
+    def tearDown(self):
+        self.memory = self.st.memory
+        super().tearDown()
+
+    def api(self, body):
+        return self.call('/api/data-dir', body, token=self.st.token)
+
+    def test_state_shows_location(self):
+        d = self.call('/api/state', token=self.TOKEN)[1]['data']
+        self.assertEqual((d['path'], d['custom'], d['ok']), (self.cur, True, True))
+
+    def test_move_to_empty_folder(self):
+        code, r = self.api({'path': self.dest})
+        self.assertEqual(code, 200)
+        self.assertEqual(r['plan']['mode'], 'move')
+        self.assertEqual(sorted(i['name'] for i in r['plan']['items']), ['config.json', 'memory.sqlite', 'token'])
+        self.assertTrue(os.path.isfile(os.path.join(self.cur, 'memory.sqlite')))      # 只检查不动
+        code, r = self.api({'path': self.dest, 'confirm': True})
+        self.assertEqual(code, 200, r)
+        self.assertEqual(r['mode'], 'move')
+        self.assertFalse(r['url_changed'])
+        for n in fa.DATA_NAMES:
+            self.assertTrue(os.path.isfile(os.path.join(self.dest, n)), n)
+            self.assertFalse(os.path.exists(os.path.join(self.cur, n)), n)
+        self.assertEqual(oct(os.stat(os.path.join(self.dest, 'memory.sqlite')).st_mode & 0o777), '0o600')
+        self.assertEqual(fa.read_data_dir(self.pointer), os.path.realpath(self.dest))
+        self.assertEqual(self.st.memory.stats()['files'], 1)
+        self.assertEqual(self.st.config.folders, [self.docs])
+        self.assertEqual(self.call('/api/state', token=self.TOKEN)[1]['data']['path'], os.path.realpath(self.dest))
+
+    def test_use_existing_data(self):
+        other = fa.Config(os.path.join(self.dest, 'config.json'))
+        other.folders = [os.path.join(self.docs, '子目录')]
+        other.save()
+        write(os.path.join(self.dest, 'token'), 'new-token-new-token-2\n')
+        code, r = self.api({'path': self.dest})
+        self.assertEqual(r['plan']['mode'], 'use')
+        self.assertTrue(r['plan']['url_change'])
+        self.assertEqual(sorted(i['name'] for i in r['plan']['items']), ['config.json', 'token'])
+        code, r = self.api({'path': self.dest, 'confirm': True})
+        self.assertEqual(code, 200, r)
+        self.assertTrue(r['url_changed'])
+        self.assertEqual(self.st.token, 'new-token-new-token-2')
+        self.assertTrue(r['url'].endswith('?t=new-token-new-token-2'))
+        self.assertEqual(self.st.config.folders, [os.path.join(self.docs, '子目录')])
+        for n in fa.DATA_NAMES:      # 当前位置的保留不动，不合并
+            self.assertTrue(os.path.isfile(os.path.join(self.cur, n)), n)
+        self.assertEqual(self.st.memory.stats()['files'], 0)
+
+    def test_refused(self):
+        self.assertEqual(self.api({'path': 'relative/dir'})[0], 400)
+        self.assertIn('不存在', self.api({'path': os.path.join(self.root, 'nope')})[1]['error'])
+        self.assertIn('当前', self.api({'path': self.cur})[1]['error'])
+        self.st.chats = 1
+        code, r = self.api({'path': self.dest, 'confirm': True})
+        self.st.chats = 0
+        self.assertEqual(code, 409)
+        self.assertIn('回答正在生成', r['error'])
+        self.assertTrue(os.path.isfile(os.path.join(self.cur, 'memory.sqlite')))
+
+    def test_pointer_write_fails_rolls_back(self):
+        with mock.patch.object(fa, 'write_data_dir', side_effect=OSError(13, 'Permission denied')):
+            code, r = self.api({'path': self.dest, 'confirm': True})
+        self.assertEqual(code, 500)
+        self.assertIn('位置文件', r['error'])
+        for n in fa.DATA_NAMES:
+            self.assertTrue(os.path.isfile(os.path.join(self.cur, n)), n)
+            self.assertFalse(os.path.exists(os.path.join(self.dest, n)), n)
+        self.assertEqual(fa.read_data_dir(self.pointer), self.cur)
+        self.assertEqual(self.st.memory.stats()['files'], 1)
+
+    def test_copy_fails_rolls_back(self):
+        real = fa.copy_private
+        calls = []
+
+        def flaky(src, dst):
+            calls.append(dst)
+            if len(calls) == 2:
+                raise OSError(28, 'No space left on device')
+            real(src, dst)
+        self.st.memory.close()
+        with mock.patch.object(fa, 'copy_private', flaky):
+            with self.assertRaises(OSError):
+                fa.change_data_dir(os.path.realpath(self.dest), self.pointer)
+        self.assertEqual(os.listdir(self.dest), [])
+        for n in fa.DATA_NAMES:
+            self.assertTrue(os.path.isfile(os.path.join(self.cur, n)), n)
+
+    def test_unavailable_location(self):
+        fa.write_data_dir(os.path.join(self.root, 'unmounted'), self.pointer)
+        fa.init_data_dir()
+        self.assertFalse(fa.DATA['ok'])
+        self.assertIn('不存在', fa.DATA['error'])
+        code, r = self.call('/api/settings', {'memory': True}, token=self.TOKEN)
+        self.assertEqual(code, 409)
+        err = io.StringIO()
+        with mock.patch('sys.stderr', err):
+            self.assertEqual(fa.print_url(), 1)
+        self.assertIn('保存位置不可用', err.getvalue())
+
+    def test_unavailable_serve_keeps_nothing(self):
+        fa.write_data_dir(os.path.join(self.root, 'unmounted'), self.pointer)
+        fa.init_data_dir()
+        seen = {}
+
+        class Stop(Exception):
+            pass
+
+        def fake_state(port, token, config, index, memory=None, idle=0):
+            seen.update(token=token, config=config, memory=memory)
+            raise Stop()
+        with mock.patch.object(fa, 'WebState', fake_state), \
+                mock.patch.object(fa, 'log_file_path', return_value=os.path.join(self.root, 'x.log')), \
+                mock.patch.object(fa, 'ThreadingHTTPServer'), \
+                mock.patch.object(fa.FileIndex, 'refresh'), mock.patch('sys.stdout', io.StringIO()):
+            with self.assertRaises(Stop):
+                fa.serve(open_browser=False)
+        for h in list(logging.getLogger().handlers):
+            if isinstance(h, logging.FileHandler):
+                logging.getLogger().removeHandler(h)
+                h.close()
+        cfg = seen['config']
+        self.assertTrue(cfg.readonly)
+        self.assertFalse(cfg.memory or cfg.use_memory or cfg.memory_auto)
+        self.assertNotEqual(seen['token'], self.TOKEN)
+        self.assertNotIn('unmounted', seen['memory'].path)
+        cfg.folders = ['/x']
+        cfg.save()
+        self.assertFalse(os.path.exists(os.path.join(self.root, 'unmounted')))
+
+    def test_cli_data_dir(self):
+        self.st.memory.close()
+        err = io.StringIO()
+        with mock.patch('sys.stderr', err), mock.patch('sys.stdout', io.StringIO()), \
+                mock.patch.object(fa, 'probe_running', return_value='free'):
+            self.assertEqual(fa.main(['--data-dir', self.dest, '--print-url', '--port', '1']), 0)
+            self.assertIn('移到', err.getvalue())
+            self.assertTrue(os.path.isfile(os.path.join(self.dest, 'memory.sqlite')))
+            self.assertEqual(fa.read_data_dir(self.pointer), os.path.realpath(self.dest))
+            self.assertEqual(fa.main(['--data-dir', self.dest, '--print-url', '--port', '1']), 0)     # 已是当前位置
+            self.assertEqual(fa.main(['--data-dir', 'relative', '--print-url']), 1)
+        self.st.memory = fa.ask_memory.Memory(fa.MEMORY_FILE)
+
+    def test_cli_refuses_while_running(self):
+        err = io.StringIO()
+        with mock.patch('sys.stderr', err), mock.patch.object(fa, 'probe_running', return_value='self'):
+            self.assertEqual(fa.main(['--data-dir', self.dest, '--print-url', '--port', '1']), 1)
+        self.assertIn('正在运行', err.getvalue())
+        self.assertEqual(os.listdir(self.dest), [])
+
+    def test_cli_pointer_not_writable(self):
+        self.st.memory.close()
+        err = io.StringIO()
+        with mock.patch('sys.stderr', err), mock.patch('sys.stdout', io.StringIO()), \
+                mock.patch.object(fa, 'probe_running', return_value='free'), \
+                mock.patch.object(fa, 'write_data_dir', side_effect=OSError(30, 'Read-only file system')):
+            self.assertEqual(fa.main(['--data-dir', self.dest, '--print-url', '--port', '1']), 0)
+        self.assertIn('没能记住', err.getvalue())
+        self.assertEqual(fa.MEMORY_FILE, os.path.join(os.path.realpath(self.dest), 'memory.sqlite'))
+        self.st.memory = fa.ask_memory.Memory(fa.MEMORY_FILE)
+
+
+class DataDirDefaultTest(unittest.TestCase):
+    def test_no_pointer_keeps_defaults(self):
+        root = tempfile.mkdtemp(dir=SANDBOX)
+        before = (fa.CONFIG_FILE, fa.MEMORY_FILE, fa.TOKEN_FILE)
+        with mock.patch.dict(fa.DATA):
+            fa.init_data_dir(os.path.join(root, 'none.txt'))
+            self.assertEqual((fa.DATA['dir'], fa.DATA['ok']), (None, True))
+            self.assertEqual((fa.CONFIG_FILE, fa.MEMORY_FILE, fa.TOKEN_FILE), before)
+            self.assertFalse(fa.data_public()['custom'])
+        write(os.path.join(root, 'blank.txt'), '\n')
+        self.assertIsNone(fa.read_data_dir(os.path.join(root, 'blank.txt')))
+        shutil.rmtree(root, ignore_errors=True)
+
+
 class ExitRuleTest(ServerCase):
     def test_closing_pages_does_not_exit(self):
         self.st.idle = 100

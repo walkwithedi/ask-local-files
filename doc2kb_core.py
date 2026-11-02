@@ -378,6 +378,25 @@ LABELS.update({
     'files_done': ('Done. Output folder: %s', '完成。输出目录: %s'),
     'files_counts': ('  done %d, failed %d', '  成功 %d 份，失败 %d 份'),
     'skip_dup': ('[%d/%d] same file as %s, not parsed again: %s', '[%d/%d] 与 %s 完全相同，不再解析: %s'),
+    # batches and volumes
+    'batch_start': ('Batch %d/%d: %d files', '第 %d/%d 批：%d 个文件'),
+    'batch_kept': ('[%d/%d] batch %d/%d finished in an earlier run, kept (%d files)',
+                   '[%d/%d] 第 %d/%d 批已在上次运行中完成，沿用（%d 个文件）'),
+    'resume_found': ('Continuing an unfinished run: %d of %d batches are kept.',
+                     '接着上次未完成的运行：沿用 %d 批，共 %d 批。'),
+    'resume_reset': ('The options differ from the unfinished run; starting again from the first batch.',
+                     '选项与上次未完成的运行不同，从第一批重新开始。'),
+    'volumes_at': ('  %d volumes: %s … %s', '  共 %d 卷: %s …… %s'),
+    'vol_index_at': ('  index of all volumes: %s', '  分卷总索引: %s'),
+    'vol_index_suffix': ('-index', '-索引'),
+    'vol_index_title': ('%s: index of all volumes', '%s：分卷总索引'),
+    'vol_index_note': ('%d documents in %d volumes. Each line names the volume holding the document.',
+                       '共 %d 份文档，分在 %d 卷中。每行写明文档所在的分卷。'),
+    'vol_index_head': ('| Document | Volume | Last modified | Original path | Characters | Images |',
+                       '| 文档 | 分卷 | 文档最后修改 | 原始路径 | 字符数 | 图片 |'),
+    'rep_volumes': ('Volumes: %d of up to %d documents each\n', '分卷：%d 卷，每卷最多 %d 份文档\n'),
+    'rep_resumed': ('Continued an unfinished run: %d batches (%d files) kept\n',
+                    '接着上次未完成的运行：沿用 %d 批（%d 个文件）\n'),
     # archives
     'arc_bad': ('archive damaged or not readable: %s', '压缩包损坏或无法读取：%s'),
     'arc_unsupported': ('%s archives need a tool outside the standard library; extract it and run again',
@@ -2741,7 +2760,7 @@ def dedup_entries(entries, md_dir, img_root, report, merge=False):
             continue
         note = T('dup_note', len(others), T('list_sep').join(o['rel'] for o in others))
         if merge:
-            keeper['body'] = _insert_after_header(keeper.get('body', ''), note)
+            keeper['dup_note'] = note   # inserted when the text is written (entry_body)
         else:
             try:
                 p = os.path.join(md_dir, keeper['stat']['md'])
@@ -2754,6 +2773,14 @@ def dedup_entries(entries, md_dir, img_root, report, merge=False):
 
     kept = [e for e in entries if id(e) not in dropped]
     return kept, dup_groups
+
+
+def entry_body(e):
+    """An entry's Markdown with the note on its other copies, if dedup_entries() left one."""
+    body = e.get('body', '')
+    if e.get('dup_note'):
+        body = _insert_after_header(body, e['dup_note'])
+    return body
 
 
 def _insert_after_header(md, note):
@@ -3390,7 +3417,10 @@ def add_byte_duplicates(entries, dups):
             continue
         if e['stat']['status'] == FAILED:
             for o in others:
-                extra.append(failed_entry(o['rel'], o['path'], '', e['stat']['note']))
+                f = failed_entry(o['rel'], o['path'], '', e['stat']['note'])
+                if 'vol' in e:
+                    f['vol'] = e['vol']     # same volume (writer call) as the copy kept
+                extra.append(f)
         else:
             e['byte_dups'] = [o['rel'] for o in others]
     return entries + extra
@@ -3641,7 +3671,7 @@ def write_merged(entries, md_dir, ts, src_root, out_name, moved=None):
             f.write(T('section_modified', st.get('doc_mtime') or T('unknown'),
                       src_label(st.get('mtime_src') or 'unknown')))
             f.write(T('section_extracted', ts))
-            body = e.get('body', '')
+            body = entry_body(e)
             # drop the single-file header (the quoted lines above say the same)
             body = re.sub(r'^(> [^\n]*\n)+\n', '', body)
             # demote every heading by one level so they sit under the section heading
@@ -3735,8 +3765,9 @@ def write_manifest_all(entries, md_dir, images_saved=True):
 
 def write_batch_report(entries, md_dir, ts, src_root, skipped, legacy,
                        filtered=None, since=None, dup_groups=None,
-                       moved=None):
-    """The batch report."""
+                       moved=None, resumed=None, volumes=None):
+    """The batch report. resumed: (batches, files) kept from an unfinished run;
+    volumes: (merged files, documents per batch) when there is more than one."""
     path = os.path.join(md_dir, T('report_file'))
     ok = [e for e in entries if e['stat']['status'] in (OK, SKIPPED)]
     fresh = [e for e in entries if e['stat']['status'] == OK]
@@ -3751,6 +3782,10 @@ def write_batch_report(entries, md_dir, ts, src_root, skipped, legacy,
         f.write(T('rep_done', ts))
         if since:
             f.write(T('rep_since', since))
+        if volumes:
+            f.write(T('rep_volumes', volumes[0], volumes[1]))
+        if resumed:
+            f.write(T('rep_resumed', resumed[0], resumed[1]))
         f.write(T('rep_counts', len(fresh), len(skipped), len(fail), len(legacy)))
         f.write(T('rep_filtered_n', len(filtered or [])))
         n_dup = sum(len(g['others']) for g in (dup_groups or []))
@@ -3912,8 +3947,135 @@ def call_writer(writer, entries, md_dir, ts, src_root, out_name):
     (path, file_of, finish): path of the main output file or None; file_of maps rel to the output
     file name holding that document (used for fingerprint lines); finish(report_path), or None,
     prints the writer's own summary lines and may add to the report."""
+    for e in entries:
+        if e.get('dup_note'):
+            e['body'] = entry_body(e)
+            del e['dup_note']
     path, file_of, finish = writer(entries, md_dir, ts, src_root, out_name)
     return path, file_of or {}, finish
+
+
+DEFAULT_BATCH_SIZE = 1000
+WORK_DIR = '.doc2kb_work'   # in the output folder: the batches of an unfinished merged run
+STATE_FILE = 'state.json'
+STATE_VERSION = 1
+
+
+def item_key(it):
+    """What tells whether a file changed between runs: its size and modification time (for a
+    document inside an archive, the archive's time)."""
+    try:
+        mt = os.stat(it['path']).st_mtime_ns
+    except OSError:
+        mt = 0
+    return [it.get('size', 0), mt]
+
+
+def plan_batches(old, now, size):
+    """Split this run's files into batches.
+    old : the batches of an unfinished run, [{'id', 'members': [rel], 'keys': {rel: key}, 'done'}]
+    now : [(rel, key)] in processing order
+    size: files per batch; 0 puts every file in one batch
+    A batch of the earlier run whose files are all still there, unchanged, is kept as it was.
+    One that lost files or has changed ones keeps its remaining files in its place and is done
+    again under a new id; one with no file left is dropped. Files in no earlier batch form new
+    batches after the last one, so volume numbers stay put. Returns the batches."""
+    keys = dict(now)
+    next_id = max([b['id'] for b in old] + [0]) + 1
+    out, placed = [], set()
+    for b in old:
+        keep = [r for r in b['members'] if r in keys]
+        if not keep:
+            continue
+        placed.update(keep)
+        if len(keep) == len(b['members']) and all(keys[r] == b['keys'].get(r) for r in keep):
+            out.append(b)
+            continue
+        out.append({'id': next_id, 'members': keep, 'keys': {r: keys[r] for r in keep},
+                    'done': False})
+        next_id += 1
+    rest = [r for r, _ in now if r not in placed]
+    step = size if size > 0 else max(len(rest), 1)
+    for i in range(0, len(rest), step):
+        chunk = rest[i:i + step]
+        out.append({'id': next_id, 'members': chunk, 'keys': {r: keys[r] for r in chunk},
+                    'done': False})
+        next_id += 1
+    return out
+
+
+def load_state(work_dir):
+    """The batches of an unfinished merged run, or None."""
+    try:
+        with open(os.path.join(work_dir, STATE_FILE), encoding='utf-8') as f:
+            st = json.load(f)
+    except (OSError, ValueError):
+        return None     # no state, or a broken one: start from the first batch
+    if isinstance(st, dict) and st.get('version') == STATE_VERSION \
+            and isinstance(st.get('batches'), list):
+        return st
+    return None
+
+
+def save_state(work_dir, st):
+    tmp = os.path.join(work_dir, STATE_FILE + '.tmp')
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(st, f, ensure_ascii=False)
+    os.replace(tmp, os.path.join(work_dir, STATE_FILE))
+
+
+def batch_file(work_dir, b):
+    return os.path.join(work_dir, 'batch-%d.jsonl' % b['id'])
+
+
+def save_batch(path, entries):
+    """A finished batch's entries, text included, one JSON line each; renamed into place last,
+    so a cancelled batch leaves no file that looks finished."""
+    tmp = path + '.part'
+    with open(tmp, 'w', encoding='utf-8', errors='replace') as f:
+        for e in entries:
+            f.write(json.dumps(e, ensure_ascii=False) + '\n')
+    os.replace(tmp, path)
+
+
+def read_batch(path):
+    """The entries of a finished batch, text included."""
+    out = []
+    with open(path, encoding='utf-8', errors='replace') as f:
+        for ln in f:
+            if ln.strip():
+                out.append(json.loads(ln))
+    return out
+
+
+def volume_names(out_name, n):
+    """Merged file names: one batch keeps the plain name, more get -01, -02, …"""
+    if n <= 1:
+        return [out_name]
+    width = max(2, len(str(n)))
+    return ['%s-%0*d' % (out_name, width, k) for k in range(1, n + 1)]
+
+
+def write_volume_index(entries, vol_of, md_dir, ts, src_root, out_name, n_vol, moved=None):
+    """With more than one volume: every document and the volume holding it."""
+    ok = sorted_ok(entries)
+    path = os.path.join(md_dir, out_name + T('vol_index_suffix') + '.md')
+    buf = ['# %s\n' % T('vol_index_title', out_name),
+           T('src_root', src_root), T('generated', ts),
+           T('vol_index_note', len(ok), n_vol),
+           T('index_order'), T('index_fs_mark') + '\n',
+           T('index_list'), T('vol_index_head'), '| --- | --- | --- | --- | --- | --- |']
+    for e in ok:
+        st = e['stat']
+        buf.append('| %s | %s | %s | %s | %d | %d |' % (
+            st['md'], vol_of.get(e['rel'], '') + '.md', fmt_mtime(st), e['rel'],
+            st['chars'], st['imgs']))
+    text = '\n'.join(buf) + '\n'
+    if moved:
+        text += moved_section_text(moved)
+    with open(path, 'w', encoding='utf-8', errors='replace') as f:
+        f.write(text)
+    return path
 
 
 def _run_batch(args, cache, writer=None):
@@ -3969,6 +4131,7 @@ def _run_batch(args, cache, writer=None):
     img_root = os.path.join(md_dir, 'images')
     os.makedirs(md_dir, exist_ok=True)
     merge = getattr(args, 'merge', False)
+    out_name = args.merge_name or safe_name(os.path.basename(src_root))
 
     ts = datetime.datetime.now().strftime('%Y-%m-%d %H:%M')
     entries, skipped = [], []
@@ -3976,6 +4139,7 @@ def _run_batch(args, cache, writer=None):
     # same names get a number; counted over every file, so names stay stable between runs
     bases = base_names(files)
     by_rel = {it['rel']: b for it, b in zip(files, bases)}
+    item_of = {it['rel']: it for it in files}
 
     def output_exists(it):
         return os.path.exists(os.path.join(md_dir, by_rel[it['rel']] + '.md')) \
@@ -3987,91 +4151,155 @@ def _run_batch(args, cache, writer=None):
         dups = byte_duplicates(files, cache, keep_first=output_exists)
     dup_of = {o['rel']: k for k, others in dups.items() for o in others}
 
-    total = len(files)
-    for i, (it, base) in enumerate(zip(files, bases), 1):
-        rel = it['rel']
-        rel_dir = os.path.dirname(rel)
-
-        if rel in dup_of:
-            print(T('skip_dup', i, total, dup_of[rel], fs_text(rel)), flush=True)
-            continue
-
-        if it.get('error'):
-            print('[%d/%d] %s' % (i, total, fs_text(rel)), flush=True)
-            entries.append(failed_entry(rel, it['path'], base, it['error']))
-            continue
-        try:
-            src = item_source(it, cache)
-        except ArchiveError as e:
-            print('[%d/%d] %s' % (i, total, fs_text(rel)), flush=True)
-            entries.append(failed_entry(rel, it['path'], base, T('arc_bad', e)))
-            continue
-
-        md_path = os.path.join(md_dir, base + '.md')
-
-        # incremental: an existing output is kept (not in merged mode, which rewrites everything)
-        if output_exists(it):
-            skipped.append(rel)
-            print(T('skip_exists', i, total, fs_text(rel)), flush=True)
-            try:
-                entries.append(_kept_entry(src, rel, rel_dir, base, md_path, img_root))
-            except OSError:
-                pass  # output vanished meanwhile: left out of the summary
-            continue
-
-        print('[%d/%d] %s' % (i, total, fs_text(rel)), flush=True)
-        report = Report()
-        report.log(T('log_source', fs_text(
-            os.path.join(src_root, rel) if it.get('arc') else src)))
-        report.log(T('log_output', base + '.md'))
-        report.log('')
-
-        stat, md, manifest = process_one(
-            src, md_dir, report, args,
-            img_root=img_root, rel_dir=rel_dir, md_basename=base)
-
-        summary, headings, truncated = ('', [], False)
-        sub0 = img_sub(rel_dir, base)
-        if md:
-            summary, headings, truncated = extract_outline(md)
-            # sidecar file: later incremental runs restore the image list from it
-            if not getattr(args, 'no_images', False):
+    # batches: each one's texts leave memory when it ends. In merged mode they go to a work folder
+    # first, so a cancelled run continues with its first unfinished batch.
+    size = getattr(args, 'batch_size', None)
+    size = DEFAULT_BATCH_SIZE if size is None else max(0, int(size))
+    now = [(it['rel'], item_key(it)) for it in files]
+    work_dir, state, old, sig = None, None, [], None
+    if merge:
+        work_dir = os.path.join(md_dir, WORK_DIR, safe_component(out_name))
+        sig = {'lang': LANG, 'inline': not getattr(args, 'no_inline', False),
+               'images': not getattr(args, 'no_images', False),
+               'dedup': not getattr(args, 'no_dedup', False),
+               'sheets': bool(getattr(args, 'sheets', False))}
+        if args.force:
+            shutil.rmtree(work_dir, ignore_errors=True)
+        state = load_state(work_dir)
+        if state and state.get('sig') != sig:
+            print(T('resume_reset'), flush=True)
+            shutil.rmtree(work_dir, ignore_errors=True)
+            state = None
+        old = state['batches'] if state else []
+    batches = plan_batches(old, now, size)
+    resumed = None
+    if merge:
+        os.makedirs(work_dir, exist_ok=True)
+        live = {b['id'] for b in batches}
+        for b in old:
+            if b['id'] not in live:
                 try:
-                    d0 = os.path.join(img_root, sub0)
-                    os.makedirs(d0, exist_ok=True)
-                    with open(os.path.join(d0, '.manifest.json'),
-                              'w', encoding='utf-8', errors='replace') as g:
-                        json.dump({'manifest': manifest,
-                                   'doc_mtime': stat.get('doc_mtime', ''),
-                                   'mtime_src': stat.get('mtime_src', '')},
-                                  g, ensure_ascii=False)
+                    os.remove(batch_file(work_dir, b))
                 except OSError:
-                    pass  # no sidecar: the next run reads the times again
+                    pass  # never finished, or removed already
+        kept = [b for b in batches if b['done'] and os.path.isfile(batch_file(work_dir, b))]
+        if kept:
+            resumed = (len(kept), sum(len(b['members']) for b in kept))
+            print(T('resume_found', len(kept), len(batches)), flush=True)
+        state = {'version': STATE_VERSION, 'sig': sig, 'batches': batches}
+        save_state(work_dir, state)
 
-        entries.append({
-            'rel': rel, 'stat': stat, 'summary': summary,
-            'headings': headings, 'truncated': truncated,
-            'manifest': manifest if md else [],
-            'img_ref': 'images/' + sub0.replace(os.sep, '/'),
-            'body': md if merge else '',
-            'fingerprint': content_fingerprint(md, manifest) if md else '',
-            'text_fp': text_fingerprint(md) if md else '',
-            'log': report.lines, 'warnings': report.warnings,
-        })
+    total, i, nb = len(files), 0, len(batches)
+    for k, b in enumerate(batches, 1):
+        print('BATCH\t%d\t%d' % (k, nb), flush=True)
+        if work_dir and b['done'] and os.path.isfile(batch_file(work_dir, b)):
+            for e in read_batch(batch_file(work_dir, b)):
+                e['body'] = ''      # read again when its volume is written
+                e['vol'] = k
+                entries.append(e)
+            i += len(b['members'])
+            print(T('batch_kept', i, total, k, nb, len(b['members'])), flush=True)
+            continue
+        if nb > 1:
+            print(T('batch_start', k, nb, len(b['members'])), flush=True)
+        batch_entries = []
+        for rel in b['members']:
+            i += 1
+            it, base = item_of[rel], by_rel[rel]
+            rel_dir = os.path.dirname(rel)
 
-        # remove picture folders left empty (failed files, documents without pictures)
-        try:
-            d = os.path.join(img_root, sub0)
-            while os.path.isdir(d) and not os.listdir(d) \
-                    and os.path.abspath(d) != os.path.abspath(img_root):
-                os.rmdir(d)
-                d = os.path.dirname(d)
-        except OSError:
-            pass  # a folder that cannot be removed stays
+            if rel in dup_of:
+                print(T('skip_dup', i, total, dup_of[rel], fs_text(rel)), flush=True)
+                continue
 
-        # write the report after every document, so a cancelled run keeps what it finished
+            if it.get('error'):
+                print('[%d/%d] %s' % (i, total, fs_text(rel)), flush=True)
+                batch_entries.append(dict(failed_entry(rel, it['path'], base, it['error']), vol=k))
+                continue
+            try:
+                src = item_source(it, cache)
+            except ArchiveError as e:
+                print('[%d/%d] %s' % (i, total, fs_text(rel)), flush=True)
+                batch_entries.append(dict(failed_entry(rel, it['path'], base, T('arc_bad', e)),
+                                          vol=k))
+                continue
+
+            md_path = os.path.join(md_dir, base + '.md')
+
+            # incremental: an existing output is kept (not in merged mode, which rewrites everything)
+            if output_exists(it):
+                skipped.append(rel)
+                print(T('skip_exists', i, total, fs_text(rel)), flush=True)
+                try:
+                    batch_entries.append(dict(
+                        _kept_entry(src, rel, rel_dir, base, md_path, img_root), vol=k))
+                except OSError:
+                    pass  # output vanished meanwhile: left out of the summary
+                continue
+
+            print('[%d/%d] %s' % (i, total, fs_text(rel)), flush=True)
+            report = Report()
+            report.log(T('log_source', fs_text(
+                os.path.join(src_root, rel) if it.get('arc') else src)))
+            report.log(T('log_output', base + '.md'))
+            report.log('')
+
+            stat, md, manifest = process_one(
+                src, md_dir, report, args,
+                img_root=img_root, rel_dir=rel_dir, md_basename=base)
+
+            summary, headings, truncated = ('', [], False)
+            sub0 = img_sub(rel_dir, base)
+            if md:
+                summary, headings, truncated = extract_outline(md)
+                # sidecar file: later incremental runs restore the image list from it
+                if not getattr(args, 'no_images', False):
+                    try:
+                        d0 = os.path.join(img_root, sub0)
+                        os.makedirs(d0, exist_ok=True)
+                        with open(os.path.join(d0, '.manifest.json'),
+                                  'w', encoding='utf-8', errors='replace') as g:
+                            json.dump({'manifest': manifest,
+                                       'doc_mtime': stat.get('doc_mtime', ''),
+                                       'mtime_src': stat.get('mtime_src', '')},
+                                      g, ensure_ascii=False)
+                    except OSError:
+                        pass  # no sidecar: the next run reads the times again
+
+            batch_entries.append({
+                'rel': rel, 'stat': stat, 'summary': summary,
+                'headings': headings, 'truncated': truncated,
+                'manifest': manifest if md else [],
+                'img_ref': 'images/' + sub0.replace(os.sep, '/'),
+                'body': md if merge else '',
+                'fingerprint': content_fingerprint(md, manifest) if md else '',
+                'text_fp': text_fingerprint(md) if md else '',
+                'log': report.lines, 'warnings': report.warnings,
+                'vol': k,
+            })
+
+            # remove picture folders left empty (failed files, documents without pictures)
+            try:
+                d = os.path.join(img_root, sub0)
+                while os.path.isdir(d) and not os.listdir(d) \
+                        and os.path.abspath(d) != os.path.abspath(img_root):
+                    os.rmdir(d)
+                    d = os.path.dirname(d)
+            except OSError:
+                pass  # a folder that cannot be removed stays
+
+        # merged mode: the batch's texts go to the work folder and leave memory
+        if work_dir:
+            save_batch(batch_file(work_dir, b), batch_entries)
+            for e in batch_entries:
+                e['body'] = ''
+            b['done'] = True
+            save_state(work_dir, state)
+        entries.extend(batch_entries)
+
+        # the report after every batch, so a cancelled run keeps what it finished
         write_batch_report(entries, md_dir, ts, src_root, skipped, legacy,
-                           filtered=filtered, since=since)
+                           filtered=filtered, since=since, resumed=resumed)
 
     dup_groups = []
     if not getattr(args, 'no_dedup', False):
@@ -4085,18 +4313,44 @@ def _run_batch(args, cache, writer=None):
         entries, moved = drop_known_entries(entries, load_fp_db(fp_db), md_dir, img_root)
 
     ts_end = datetime.datetime.now().strftime('%Y-%m-%d %H:%M')
+    names = volume_names(out_name, nb)
+    # batches left with no document (all duplicates, failed or moved) give no volume
+    used = sorted({e['vol'] for e in entries
+                   if e.get('vol') and e['stat']['status'] in (OK, SKIPPED)}) if nb > 1 else [1]
+    used = used or [1]
     rp = write_batch_report(entries, md_dir, ts_end, src_root, skipped, legacy,
                             filtered=filtered, since=since,
-                            dup_groups=dup_groups, moved=moved)
+                            dup_groups=dup_groups, moved=moved, resumed=resumed,
+                            volumes=(len(used), size) if (merge or writer) and nb > 1 else None)
     written = sum(1 for e in entries if e['stat']['status'] in (OK, SKIPPED))
-    file_of, finish = {}, None
-    if writer:
-        out_name = args.merge_name or safe_name(os.path.basename(src_root))
-        ip, file_of, finish = call_writer(writer, entries, md_dir, ts_end, src_root, out_name)
-        print(T('written_n', written))
-    elif merge:
-        out_name = args.merge_name or safe_name(os.path.basename(src_root))
-        ip = write_merged(entries, md_dir, ts_end, src_root, out_name, moved=moved)
+    file_of, finishes, ip, vip = {}, [], None, None
+    if merge or writer:
+        # one merged file (or writer call) per batch; only one volume's texts are read at a time
+        for k in used:
+            name = names[k - 1]
+            vol = [e for e in entries if e.get('vol') == k]
+            if work_dir:
+                bodies = {e['rel']: e.get('body', '')
+                          for e in read_batch(batch_file(work_dir, batches[k - 1]))}
+                for e in vol:
+                    e['body'] = bodies.get(e['rel'], '')
+            if writer:
+                p, fo, fin = call_writer(writer, vol, md_dir, ts_end, src_root, name)
+                file_of.update(fo)
+                if fin:
+                    finishes.append(fin)
+            else:
+                p = write_merged(vol, md_dir, ts_end, src_root, name,
+                                 moved=moved if nb == 1 else None)
+                for e in vol:
+                    file_of[e['rel']] = os.path.basename(p)
+            ip = ip or p
+            for e in vol:
+                e['body'] = ''
+        if merge and not writer and nb > 1:
+            vip = write_volume_index(entries, {e['rel']: names[e['vol'] - 1] for e in entries
+                                               if e.get('vol')},
+                                     md_dir, ts_end, src_root, out_name, len(used), moved=moved)
         print(T('written_n', written))
     else:
         ip = write_index(entries, md_dir, ts_end, src_root)
@@ -4112,6 +4366,13 @@ def _run_batch(args, cache, writer=None):
         except OSError as e:
             log.error('%s', T('fpdb_failed', e))
     write_manifest_all(entries, md_dir, images_saved=not getattr(args, 'no_images', False))
+    if work_dir:
+        # finished: nothing left to continue
+        shutil.rmtree(work_dir, ignore_errors=True)
+        try:
+            os.rmdir(os.path.dirname(work_dir))
+        except OSError:
+            pass  # work folders of other unfinished runs stay
 
     ok_n = sum(1 for e in entries if e['stat']['status'] == OK)
     fail_n = sum(1 for e in entries if e['stat']['status'] == FAILED)
@@ -4132,8 +4393,11 @@ def _run_batch(args, cache, writer=None):
     print(T('totals', tot_c, tot_i))
     print(T('report_at', os.path.basename(rp)))
     if writer:
-        if finish:
-            finish(rp)
+        for fin in finishes:
+            fin(rp)
+    elif vip:
+        print(T('volumes_at', len(used), names[used[0] - 1] + '.md', names[used[-1] - 1] + '.md'))
+        print(T('vol_index_at', os.path.basename(vip)))
     else:
         print(T('merged_at' if merge else 'index_at', os.path.basename(ip)))
     print_stats(new=ok_n, kept=len(skipped), failed=fail_n, legacy=len(legacy),
@@ -4377,7 +4641,13 @@ def build_parser():
                          'are not written again (only their paths are listed); new ones are '
                          'appended. Incremental runs use it so moved folders are not filed twice')
     ap.add_argument('--force', action='store_true',
-                    help='batch mode: process everything again, ignoring existing results')
+                    help='batch mode: process everything again, ignoring existing results and '
+                         'the batches of an unfinished merged run')
+    ap.add_argument('--batch-size', metavar='N', type=int, default=DEFAULT_BATCH_SIZE,
+                    help='batch mode: files per batch (default %d; 0 = one batch). Each batch\'s '
+                         'texts leave memory when it ends; in merged mode each batch is a volume '
+                         '(name-01.md, name-02.md, …) and a cancelled run continues with its first '
+                         'unfinished batch' % DEFAULT_BATCH_SIZE)
     ap.add_argument('--log-level', default=os.environ.get('LOG_LEVEL', 'WARNING').upper(),
                     type=str.upper, choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
                     help='default: environment variable LOG_LEVEL, else WARNING')

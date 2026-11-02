@@ -25,8 +25,10 @@ ask_local_files  --  找文件问 AI
     - skill：可选一个 OpenCode 格式的 skill（工具目录 skills/ 里预装的，或 ~/.config/opencode/skills/
       里自建的），正文并进系统消息；模型可用函数调用读 skill 目录里的文件、运行其中的 .py/.sh 脚本
       （自动运行，单次 60 秒，每问最多 5 次），脚本写进临时输出目录的文件可在页面上保存。
+    - 保存位置：记忆、设置与令牌默认在家目录（XDG 目录），可在页面或用 --data-dir 一起改到指定文件夹，
+      位置记在工具目录的 data-dir.txt；位置不可用时不回退家目录，本次不记入记忆、不保存设置。
     - 记忆（ask_memory.py，默认开，设置里可关）：提问时选过的文件按段落存进本机 SQLite 记忆
-      （~/.local/share/ask-local-files/memory.sqlite，权限 600），回答里核对通过的摘句连同结论记下；
+      （保存位置里的 memory.sqlite，权限 600），回答里核对通过的摘句连同结论记下；
       之后提问时按关键字检索记忆，结论与原文段落排在已选文件之后一起发给模型，取用前按文件当前内容复核。
       「更新记忆」或空闲时自动把记忆分批交给模型，整理成主题页，合并重复、以新代旧、改写文件改过的结论，可撤销。
     - 文件夹输入框接受 file:/// 地址；可由本机服务弹出系统的目录选择框（zenity、kdialog 或 tkinter）。
@@ -73,7 +75,7 @@ from urllib.parse import parse_qs, urlsplit
 LOG_FORMAT = '%(asctime)s [%(levelname)s] %(name)s.%(funcName)s:%(lineno)d - %(message)s'
 log = logging.getLogger('ask_local_files')
 
-VERSION = '2.7'
+VERSION = '2.9'
 HERE = os.path.dirname(os.path.abspath(__file__))
 PAGE_FILE = os.path.join(HERE, 'ask_local_files.html')
 LOG_NAME = 'ask_local_files.log'
@@ -224,10 +226,15 @@ def write_private(path, data):
 class Config:
     """本工具的设置：索引的文件夹、字数上限、自定义模型接口。"""
 
-    def __init__(self, path=CONFIG_FILE):
-        self.path = path
+    def __init__(self, path=None):
+        self.path = path or CONFIG_FILE
         self.lock = threading.Lock()
-        data = load_json(path, {})
+        self.readonly = False   # 保存位置不可用时为真：改动只留在内存，不写盘
+        self.load()
+
+    def load(self):
+        """按 self.path 重新读取全部设置（更改保存位置、改用新位置已有的设置时用）。"""
+        data = load_json(self.path, {})
         self.folders = [f for f in data.get('folders', []) if isinstance(f, str)]
         limit = data.get('char_limit')
         self.char_limit = limit if isinstance(limit, int) and limit > 0 else DEFAULT_CHAR_LIMIT
@@ -241,6 +248,7 @@ class Config:
         self.use_memory = data.get('use_memory') is not False   # 「问 AI」里的「参考记忆」，默认开
         self.memory_notice = data.get('memory_notice') is True  # 已提示过记忆默认打开
         self.memory_auto = data.get('memory_auto') is not False     # 空闲时自动更新记忆，默认开
+        self.data_notice = data.get('data_notice') is True      # 已提示过可改保存位置
         port = data.get('port')         # 只能手改设置文件，页面不提供
         self.port = port if isinstance(port, int) and not isinstance(port, bool) and 0 < port < 65536 else None
 
@@ -249,9 +257,12 @@ class Config:
                 'ignore_md': self.ignore_md,
                 'regex': self.regex, 'memory': self.memory, 'use_memory': self.use_memory,
                 'memory_notice': self.memory_notice, 'memory_auto': self.memory_auto,
+                'data_notice': self.data_notice,
                 'custom': self.custom, 'model': self.model}
         if self.port:
             data['port'] = self.port
+        if self.readonly:
+            return
         write_private(self.path, data)
 
     def public(self):
@@ -259,9 +270,183 @@ class Config:
                 'ignore_md': self.ignore_md,
                 'regex': self.regex, 'memory': self.memory, 'use_memory': self.use_memory,
                 'memory_notice': self.memory_notice, 'memory_auto': self.memory_auto,
+                'data_notice': self.data_notice, 'data': data_public(),
                 'custom': {'base': self.custom['base'], 'model': self.custom['model'],
                            'has_key': bool(self.custom['key'])},
                 }
+
+
+# ---------------------------------------------------------------- 保存位置
+
+# 记忆、设置与令牌的保存位置记在工具目录的位置文件里（一行绝对路径），不放家目录，家目录被清理时也不丢。
+# 没有位置文件时用默认位置（XDG 目录）；位置文件里的目录不可用时不回退家目录，本次只在内存里运行。
+DATA_DIR_FILE = os.path.join(HERE, 'data-dir.txt')
+DATA_NAMES = ('memory.sqlite', 'config.json', 'token')
+DATA_LABELS = {'memory.sqlite': '记忆', 'config.json': '设置', 'token': '网址令牌'}
+DATA = {'dir': None, 'ok': True, 'error': ''}     # dir 为 None 时是默认位置
+
+
+def data_paths(d):
+    """保存位置 d（None 为默认）下三个文件的路径。"""
+    if d is None:
+        return {'memory.sqlite': os.path.join(XDG_DATA, 'ask-local-files', 'memory.sqlite'),
+                'config.json': os.path.join(XDG_CONFIG, 'ask-local-files', 'config.json'),
+                'token': os.path.join(XDG_CONFIG, 'ask-local-files', 'token')}
+    return {n: os.path.join(d, n) for n in DATA_NAMES}
+
+
+def use_data_dir(d, ok=True, error=''):
+    """把 CONFIG_FILE、MEMORY_FILE、TOKEN_FILE 指向保存位置 d。"""
+    global CONFIG_FILE, MEMORY_FILE, TOKEN_FILE
+    p = data_paths(d)
+    CONFIG_FILE, MEMORY_FILE, TOKEN_FILE = p['config.json'], p['memory.sqlite'], p['token']
+    DATA.update({'dir': d, 'ok': ok, 'error': error})
+
+
+def read_data_dir(path=None):
+    """位置文件里记的目录；没有位置文件或内容为空时返回 None。"""
+    path = path or DATA_DIR_FILE
+    try:
+        with open(path, encoding='utf-8') as f:
+            lines = f.read().strip().splitlines()
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as e:
+        log.warning('cannot read %s: %s', path, e)
+        return None
+    return lines[0].strip() if lines and lines[0].strip() else None
+
+
+def write_data_dir(d, path=None):
+    """把保存位置写进位置文件（原子写入）；写不进时抛 OSError。"""
+    path = path or DATA_DIR_FILE
+    tmp = '%s.%d.tmp' % (path, os.getpid())
+    with open(tmp, 'w', encoding='utf-8') as f:
+        f.write(d + '\n')
+    os.replace(tmp, path)
+
+
+def check_data_dir(d):
+    """保存位置可用时返回空串，否则返回原因。"""
+    if not os.path.isabs(d):
+        return '不是绝对路径'
+    if not os.path.isdir(d):
+        return '文件夹不存在（数据盘可能没有挂载）'
+    if not os.access(d, os.W_OK | os.X_OK):
+        return '文件夹不可写'
+    return ''
+
+
+def init_data_dir(path=None):
+    """启动时按位置文件定下保存位置。"""
+    d = read_data_dir(path)
+    if d is None:       # 默认位置：CONFIG_FILE 等保持导入时按 XDG 定下的值
+        DATA.update({'dir': None, 'ok': True, 'error': ''})
+        return
+    why = check_data_dir(d)
+    use_data_dir(d, not why, why)
+    if why:
+        log.warning('data dir %s unusable: %s', d, why)
+
+
+def data_public():
+    d = DATA['dir']
+    if d is None:
+        shown = '%s 与 %s' % (os.path.dirname(MEMORY_FILE), os.path.dirname(CONFIG_FILE))
+    else:
+        shown = d
+    return {'path': shown, 'custom': d is not None, 'ok': DATA['ok'], 'error': DATA['error'],
+            'file': DATA_DIR_FILE}
+
+
+def norm_data_dir(value):
+    """页面或命令行给的目录：去引号、展开 ~，须为可用的绝对路径，返回规范化后的路径；不可用时抛 ValueError。"""
+    try:
+        d = os.path.expanduser(local_path(str(value or '')))
+    except ValueError as e:
+        raise ValueError('路径写法不对（%s）' % e)
+    if not d:
+        raise ValueError('没有填写保存位置')
+    why = check_data_dir(d)
+    if why:
+        raise ValueError('%s：%s' % (why, d[:300]))
+    return os.path.realpath(d)
+
+
+def same_data_dir(d):
+    """d 是否就是当前的保存位置（按真实路径比较）。"""
+    cur = DATA['dir']
+    return cur is not None and os.path.realpath(cur) == d
+
+
+def data_plan(dest):
+    """更改到 dest 的计划：新位置已有三个文件中任一个时为 use（直接改用，不合并），否则为 move（把当前的移过去）。
+    返回 (方式, [(文件名, 字节数)])；move 只列当前位置实际存在的文件。"""
+    have = [n for n in DATA_NAMES if os.path.exists(os.path.join(dest, n))]
+    if have:
+        return 'use', [(n, os.path.getsize(os.path.join(dest, n))) for n in have]
+    cur = data_paths(DATA['dir']) if DATA['ok'] else {}
+    return 'move', [(n, os.path.getsize(cur[n])) for n in DATA_NAMES if n in cur and os.path.isfile(cur[n])]
+
+
+def copy_private(src, dst):
+    """复制文件，目标不得已存在，权限 600。"""
+    with open(src, 'rb') as fi:
+        fd = os.open(dst, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, 'wb') as fo:
+            shutil.copyfileobj(fi, fo)
+
+
+def move_data(src_paths, dest, names):
+    """把 names 从 src_paths 移到 dest：先全部复制，都成功后再删原处；中途失败删掉已复制的，原处不动。"""
+    done = []
+    try:
+        for n in names:
+            dst = os.path.join(dest, n)
+            copy_private(src_paths[n], dst)
+            done.append(dst)
+    except OSError:
+        for p in done:
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+        raise
+    for n in names:
+        try:
+            os.remove(src_paths[n])
+        except OSError as e:
+            log.warning('moved %s but cannot remove the old copy: %s', n, e)
+
+
+def change_data_dir(dest, pointer=None, need_pointer=True):
+    """把保存位置改到 dest（已经 norm_data_dir）：按 data_plan 移动或改用，再写位置文件，最后切换路径。
+    调用前须关闭记忆库。写不进位置文件且 need_pointer 为真时撤回移动并抛 OSError；need_pointer 为假时只记日志，
+    本次照样用 dest。返回 (方式, [(文件名, 字节数)], 位置文件是否写入)。"""
+    pointer = pointer or DATA_DIR_FILE
+    mode, items = data_plan(dest)
+    if need_pointer and not os.access(os.path.dirname(pointer), os.W_OK):
+        raise OSError('工具目录不可写')
+    src = data_paths(DATA['dir'])
+    names = [n for n, _ in items]
+    if mode == 'move' and names:
+        move_data(src, dest, names)
+    written = True
+    try:
+        write_data_dir(dest, pointer)
+    except OSError as e:
+        written = False
+        if need_pointer:
+            if mode == 'move' and names:
+                for n in names:     # 撤回：移回原处
+                    os.makedirs(os.path.dirname(src[n]), mode=0o700, exist_ok=True)
+                    copy_private(os.path.join(dest, n), src[n])
+                    os.remove(os.path.join(dest, n))
+            raise OSError('写不进位置文件（%s）' % (e.strerror or e))
+        log.warning('cannot write %s: %s; using %s for this run only', pointer, e, dest)
+    use_data_dir(dest)
+    log.info('data dir changed to %s (%s %s)', dest, mode, ','.join(names) or '-')
+    return mode, items, written
 
 
 
@@ -2027,6 +2212,27 @@ class WebState:
         self.local_models = LocalModels()
         self.updater = MemoryUpdater(self)
 
+    def busy_reason(self):
+        """不能更改保存位置的原因，可以改时返回空串。"""
+        if self.chats > 0:
+            return '有回答正在生成，等它结束后再改'
+        if self.updater.running:
+            return '记忆正在更新，等它结束或点「停止」后再改'
+        return ''
+
+    def apply_data_dir(self):
+        """保存位置改了之后：按新位置重新读设置、打开记忆库、读令牌（网址可能随之改变），刷新文件夹索引。"""
+        cfg = self.config
+        with cfg.lock:
+            cfg.path, cfg.readonly = CONFIG_FILE, False
+            cfg.load()
+        self.memory = ask_memory.Memory(MEMORY_FILE)
+        token = load_token()
+        with self.lock:
+            self.token = token
+            self.url = '%s/?t=%s' % (self.origin, token)
+        self.index.refresh()
+
     def ping(self, page, shell=None):
         """登记心跳，返回当前开着的窗口数：同一窗口里各标签的页面（shell 相同）算一个。"""
         with self.lock:
@@ -2317,6 +2523,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(200, out)
         elif url.path == '/api/pick-folder':
             self.post_pick_folder(data)
+        elif url.path == '/api/data-dir':
+            self.post_data_dir(data)
         elif url.path == '/api/open-folder':
             self.post_open_folder(data)
         elif url.path == '/api/docx':
@@ -2502,7 +2710,10 @@ class Handler(BaseHTTPRequestHandler):
                 cfg.regex = bool(data['regex'])
             if 'ignore_md' in data:
                 cfg.ignore_md = bool(data['ignore_md'])
-            for k in ('memory', 'use_memory', 'memory_notice', 'memory_auto'):
+            if not DATA['ok'] and any(data.get(k) for k in ('memory', 'use_memory', 'memory_auto')):
+                self.send_json(409, {'error': '保存位置不可用，本次不能打开记忆'})
+                return
+            for k in ('memory', 'use_memory', 'memory_notice', 'memory_auto', 'data_notice'):
                 if k in data:
                     setattr(cfg, k, bool(data[k]))
             cfg.save()
@@ -2584,6 +2795,50 @@ class Handler(BaseHTTPRequestHandler):
         if real == base or real.startswith(base + os.sep):
             raise ValueError('这个文件夹已在自建 skill 目录里，点「重新读取」即可')
         return lambda tmp: copy_skill_dir(src, tmp)
+
+    def post_data_dir(self, data):
+        """更改保存位置。不带 confirm 时只检查并返回计划（plan），带 confirm 时执行：新位置为空就把当前的记忆、设置
+        与令牌移过去，已有就直接改用那一份；有任务进行时不改（见 busy_reason）。"""
+        st = self.state
+        try:
+            dest = norm_data_dir(data.get('path'))
+        except ValueError as e:
+            self.send_json(400, {'error': str(e)})
+            return
+        if same_data_dir(dest):
+            self.send_json(400, {'error': '这已是当前的保存位置'})
+            return
+        busy = st.busy_reason()
+        if busy:
+            self.send_json(409, {'error': busy})
+            return
+        mode, items = data_plan(dest)
+        if not data.get('confirm'):
+            plan = {'mode': mode, 'to': dest, 'from': data_public()['path'],
+                    'items': [{'name': n, 'label': DATA_LABELS[n], 'bytes': b} for n, b in items]}
+            if mode == 'use':
+                plan['url_change'] = load_token_quiet(os.path.join(dest, 'token')) != st.token
+                if os.path.isfile(os.path.join(dest, 'memory.sqlite')):
+                    m = ask_memory.Memory(os.path.join(dest, 'memory.sqlite'))
+                    try:
+                        plan['stats'] = m.stats()
+                    except (sqlite3.Error, OSError) as e:
+                        log.warning('memory: cannot read %s: %s', m.path, e)
+                    finally:
+                        m.close()
+            self.send_json(200, {'ok': True, 'plan': plan})
+            return
+        old_url = st.url
+        st.memory.close()
+        try:
+            mode, items, _ = change_data_dir(dest)
+        except OSError as e:
+            log.warning('cannot change data dir to %s: %s', dest, e)
+            self.send_json(500, {'error': e.strerror or str(e)})
+            return
+        st.apply_data_dir()
+        self.send_json(200, {'ok': True, 'mode': mode, 'items': [n for n, _ in items], 'data': data_public(),
+                             'url': st.url, 'url_changed': old_url != st.url})
 
     def post_pick_folder(self, data):
         """弹出目录选择框，只把选中的路径交给页面，不添加、不保存；取消时 path 为 null。"""
@@ -3008,6 +3263,16 @@ def load_token(path=None, new=False):
     return token
 
 
+def load_token_quiet(path):
+    """只读令牌文件，没有或不合规时返回 None，不生成。"""
+    try:
+        with open(path, encoding='utf-8') as f:
+            token = f.read().strip()
+    except OSError:
+        return None
+    return token if TOKEN_RE.match(token) else None
+
+
 def page_url(port, token):
     return 'http://127.0.0.1:%d/?t=%s' % (port, token)
 
@@ -3047,8 +3312,16 @@ def serve(open_browser=True, app=True, port=None, idle=IDLE_TIMEOUT):
     if logging.getLogger().level > logging.INFO:
         logging.getLogger().setLevel(logging.INFO)
     config = Config()
+    memory = None
+    if DATA['ok']:
+        token = load_token()
+    else:
+        # 保存位置不可用：不回退家目录，本次设置只在内存、不记入也不参考记忆，令牌临时生成
+        config.readonly = True
+        config.memory = config.use_memory = config.memory_auto = False
+        token = secrets.token_urlsafe(24)
+        memory = ask_memory.Memory(os.path.join(tempfile.mkdtemp(prefix='ask-local-files-mem-'), 'memory.sqlite'))
     port = port or config.port or DEFAULT_PORT
-    token = load_token()
     url = page_url(port, token)
     try:
         server = ThreadingHTTPServer(('127.0.0.1', port), Handler)
@@ -3065,7 +3338,7 @@ def serve(open_browser=True, app=True, port=None, idle=IDLE_TIMEOUT):
         return 1
     index = FileIndex(config)
     index.refresh()
-    st = WebState(port, token, config, index, idle=idle)
+    st = WebState(port, token, config, index, memory=memory, idle=idle)
     Handler.state = st
     log.info('serving on %s, idle timeout %ss', st.origin, idle)
     print('网页界面：' + url, flush=True)
@@ -3086,6 +3359,9 @@ def serve(open_browser=True, app=True, port=None, idle=IDLE_TIMEOUT):
 
 def print_url(port=None):
     """只打印网址，不启动服务；还没有令牌时先生成。"""
+    if not DATA['ok']:
+        print(data_bad_message(), file=sys.stderr)
+        return 1
     port = port or Config().port or DEFAULT_PORT
     print('网页界面：' + page_url(port, load_token()), flush=True)
     return 0
@@ -3093,11 +3369,51 @@ def print_url(port=None):
 
 def new_token(port=None):
     """重新生成令牌，旧网址作废；本工具正在运行时不改，提示先退出。"""
+    if not DATA['ok']:
+        print(data_bad_message(), file=sys.stderr)
+        return 1
     port = port or Config().port or DEFAULT_PORT
     if os.path.isfile(TOKEN_FILE) and probe_running(port, load_token()) == 'self':
         print('重新生成令牌失败：本工具正在运行。请先在页面上点「退出」，再重新运行 --new-token。', file=sys.stderr)
         return 1
     print('网页界面：' + page_url(port, load_token(new=True)), flush=True)
+    return 0
+
+
+def data_bad_message():
+    return ('保存位置不可用：%s（%s）。挂载或修复后重试，或用 --data-dir 指定其他文件夹。'
+            % (DATA['dir'], DATA['error']))
+
+
+def cli_data_dir(value, port=None):
+    """--data-dir：与页面「更改」等效（移过去或改用已有的，并写位置文件）；已是当前位置时什么也不做。
+    写不进位置文件时只提示，本次照样用这个目录。成功返回 0。"""
+    try:
+        dest = norm_data_dir(value)
+    except ValueError as e:
+        print('更改保存位置失败：%s。请换一个文件夹。' % e, file=sys.stderr)
+        return 1
+    if same_data_dir(dest):
+        return 0
+    if DATA['ok'] and os.path.isfile(TOKEN_FILE):
+        port = port or Config().port or DEFAULT_PORT
+        if probe_running(port, load_token()) == 'self':
+            print('更改保存位置失败：本工具正在运行。请先在页面上点「退出」再运行，或在「记忆设置」里更改。', file=sys.stderr)
+            return 1
+    try:
+        mode, items, written = change_data_dir(dest, need_pointer=False)
+    except OSError as e:
+        print('更改保存位置失败：%s。请检查文件夹后重试。' % (e.strerror or e), file=sys.stderr)
+        return 1
+    names = '、'.join(DATA_LABELS[n] for n, _ in items)
+    if mode == 'use':
+        print('已改用 %s 里已有的%s。' % (dest, names), file=sys.stderr)
+    elif names:
+        print('已把%s移到 %s。' % (names, dest), file=sys.stderr)
+    else:
+        print('保存位置已改为 %s。' % dest, file=sys.stderr)
+    if not written:
+        print('提示：工具目录不可写，没能记住这个位置；下次启动仍须带 --data-dir。', file=sys.stderr)
     return 0
 
 
@@ -3130,6 +3446,9 @@ def main(argv=None):
                     help='监听的端口，默认取设置文件里的 port，没有时为 %d' % DEFAULT_PORT)
     ap.add_argument('--idle-timeout', type=seconds_arg, default=IDLE_TIMEOUT, metavar='SECONDS',
                     help='没有页面、也没有任务多少秒后退出，默认 %d，0 表示不自动退出' % IDLE_TIMEOUT)
+    ap.add_argument('--data-dir', metavar='DIR',
+                    help='记忆、设置与令牌的保存位置，与页面「记忆设置」里的「更改」等效：新位置为空时把现有的移过去，'
+                         '已有时直接改用；位置记在工具目录的 data-dir.txt，之后不带此参数也沿用')
     ap.add_argument('--print-url', action='store_true', help='只打印网址，不启动服务')
     ap.add_argument('--new-token', action='store_true', help='重新生成令牌（旧网址作废），打印新网址后结束')
     ap.add_argument('--log-level', default=os.environ.get('LOG_LEVEL', 'WARNING').upper(),
@@ -3137,6 +3456,11 @@ def main(argv=None):
                     help='日志级别，默认 WARNING，可由环境变量 LOG_LEVEL 覆盖')
     args = ap.parse_args(argv)
     logging.basicConfig(level=args.log_level, format=LOG_FORMAT, stream=sys.stderr)
+    init_data_dir()
+    if args.data_dir is not None:
+        rc = cli_data_dir(args.data_dir, args.port)
+        if rc:
+            return rc
     if args.new_token:
         return new_token(args.port)
     if args.print_url:

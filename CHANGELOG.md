@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.9.0
+
+- Storage location (保存位置): memory, settings and the address token can be kept together in a folder of your choice, such as one on a data disk that is not cleaned up with the home folder. Change it at the bottom of 记忆设置 or with `--data-dir DIR`. An empty folder receives the current files (copied first, originals removed only after every copy succeeded); a folder that already holds them is used as it is, without merging. The location is recorded in `data-dir.txt` in the tool folder; copy it along when upgrading into a new folder. If the recorded folder is unusable, the tool does not fall back to the home folder: it says so below the header and, for that run, keeps no memory and saves no settings. Until a location is set, the first start mentions once that it can be changed.
+- `doc2kb_core.py` updated to doc2kb 2.2.0. Only its single-file conversion is used, and the extracted text is the same as with 2.1.0.
+
 ## 2.7.0
 
 - Fixed address: the server listens on port 47821 by default (`--port`, or `"port"` in `~/.config/ask-local-files/config.json`), and its token is kept in `~/.config/ask-local-files/token` (mode 600), so the address stays the same across restarts and can be bookmarked or pasted into any browser. 复制网址 ("copy address") in the footer copies it. `--new-token` replaces the token, invalidating the old address; `--print-url` prints the address without starting the server.
