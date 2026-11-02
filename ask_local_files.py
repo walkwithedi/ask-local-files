@@ -346,7 +346,7 @@ def init_data_dir(path=None):
     why = check_data_dir(d)
     use_data_dir(d, not why, why)
     if why:
-        log.warning('data dir %s unusable: %s', d, why)
+        log.warning('data dir %r unusable: %s', d, why)
 
 
 def data_public():
@@ -409,8 +409,8 @@ def move_data(src_paths, dest, names):
         for p in done:
             try:
                 os.remove(p)
-            except OSError:
-                pass
+            except OSError:     # 删不掉只在新位置留下多余的副本，原处完好，照样把原错误抛出去
+                log.warning('cannot remove partial copy %r', p)
         raise
     for n in names:
         try:
@@ -443,9 +443,9 @@ def change_data_dir(dest, pointer=None, need_pointer=True):
                     copy_private(os.path.join(dest, n), src[n])
                     os.remove(os.path.join(dest, n))
             raise OSError('写不进位置文件（%s）' % (e.strerror or e))
-        log.warning('cannot write %s: %s; using %s for this run only', pointer, e, dest)
+        log.warning('cannot write %r: %s; using %r for this run only', pointer, e, dest)
     use_data_dir(dest)
-    log.info('data dir changed to %s (%s %s)', dest, mode, ','.join(names) or '-')
+    log.info('data dir changed to %r (%s %s)', dest, mode, ','.join(names) or '-')
     return mode, items, written
 
 
@@ -2823,7 +2823,7 @@ class Handler(BaseHTTPRequestHandler):
                     try:
                         plan['stats'] = m.stats()
                     except (sqlite3.Error, OSError) as e:
-                        log.warning('memory: cannot read %s: %s', m.path, e)
+                        log.warning('memory: cannot read %r: %s', m.path, e)
                     finally:
                         m.close()
             self.send_json(200, {'ok': True, 'plan': plan})
@@ -2833,7 +2833,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             mode, items, _ = change_data_dir(dest)
         except OSError as e:
-            log.warning('cannot change data dir to %s: %s', dest, e)
+            log.warning('cannot change data dir to %r: %s', dest, e)
             self.send_json(500, {'error': e.strerror or str(e)})
             return
         st.apply_data_dir()
