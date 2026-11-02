@@ -79,7 +79,15 @@ async function launch(t, opts) {
     XDG_CACHE_HOME: path.join(home, '.cache'), LOG_LEVEL: 'ERROR'});
   if (opts.noPdf) env.PATH = '';
   Object.assign(env, opts.env || {});
-  const args = [path.join(TOOL, 'ask_local_files.py'), '--no-browser', '--port', String(await freePort())];
+  // opts.ownTool 时把程序复制到临时目录运行，工具目录里的位置文件 data-dir.txt 不碰到仓库里的
+  let tool = TOOL;
+  if (opts.ownTool) {
+    tool = path.join(home, 'tool');
+    fs.mkdirSync(tool);
+    for (const f of ['ask_local_files.py', 'ask_local_files.html', 'ask_memory.py', 'doc2kb_core.py']) fs.copyFileSync(path.join(TOOL, f), path.join(tool, f));
+    if (opts.pointer) fs.writeFileSync(path.join(tool, 'data-dir.txt'), opts.pointer + '\n');
+  }
+  const args = [path.join(tool, 'ask_local_files.py'), '--no-browser', '--port', String(await freePort())];
   const proc = spawn(PYTHON, args.concat(opts.args || []), {env, stdio: ['ignore', 'pipe', 'ignore']});
   const url = await firstLine(proc, /网页界面：(\S+)/);
   const context = await browser.newContext({viewport: {width: opts.width, height: opts.height || 800}});
@@ -96,7 +104,7 @@ async function launch(t, opts) {
     proc.kill();
     fs.rmSync(home, {recursive: true, force: true});
   });
-  return {page, home, docs, url, proc, context, env, args};
+  return {page, home, docs, url, proc, context, env, args, tool};
 }
 
 // 取出的文字开头的文件信息（路径、文件名、修改时间各一行，空一行）有多少字；测试文件没有作者
@@ -985,6 +993,83 @@ test('360px 下各面板展开、有对话与预览时都没有横向滚动', as
   await ask(page);
   await noHorizontalScroll(page);
   await page.click('#foldFind');
+  await noHorizontalScroll(page);
+});
+
+test('保存位置：默认时提示一次，可改到空文件夹并把数据移过去', async t => {
+  const {page, home, tool} = await launch(t, {ownTool: true});
+  await page.locator('#askStatus', {hasText: '可在「记忆设置」里改「保存位置」'}).waitFor();
+  await page.click('#memSettings');
+  assert.match(await page.textContent('#dataDirNow'), /^当前：默认（家目录）：/);
+  const dest = path.join(home, '数据盘');
+  fs.mkdirSync(dest);
+  let msg = '';
+  page.onDialog = d => { msg = d.message(); d.accept(); };
+  await page.fill('#dataDir', dest);
+  await page.click('#setDataDir');
+  await page.locator('#dataStatus.ok', {hasText: '已把数据移到'}).waitFor();
+  assert.match(msg, /将移动 \d 个文件：/);
+  assert.match(msg, /设置（config\.json/);
+  assert.strictEqual(await page.textContent('#dataDirNow'), '当前：' + fs.realpathSync(dest));
+  assert.ok(fs.existsSync(path.join(dest, 'config.json')));
+  assert.ok(fs.existsSync(path.join(dest, 'token')));
+  assert.ok(!fs.existsSync(path.join(home, '.config', 'ask-local-files', 'config.json')));
+  assert.strictEqual(fs.readFileSync(path.join(tool, 'data-dir.txt'), 'utf8').trim(), fs.realpathSync(dest));
+  // 已提示过：重新打开不再提示
+  await page.reload();
+  await page.locator('#findStatus:not(:empty)').waitFor();
+  assert.doesNotMatch(await page.textContent('#askStatus'), /保存位置/);
+});
+
+test('保存位置：取消确认不改动；不存在的文件夹写明原因', async t => {
+  const {page, home} = await launch(t, {ownTool: true});
+  await page.click('#memSettings');
+  await page.fill('#dataDir', path.join(home, '没有这个文件夹'));
+  await page.click('#setDataDir');
+  await page.locator('#dataStatus.bad', {hasText: '更改失败：文件夹不存在'}).waitFor();
+  const dest = path.join(home, 'empty');
+  fs.mkdirSync(dest);
+  page.onDialog = d => d.dismiss();
+  await page.fill('#dataDir', dest);
+  await page.click('#setDataDir');
+  await page.locator('#dataStatus', {hasText: '没有更改保存位置'}).waitFor();
+  assert.deepStrictEqual(fs.readdirSync(dest), []);
+});
+
+test('保存位置：新位置已有数据时改用那一份，网址变了按新网址重新打开', async t => {
+  const {page, home, docs} = await launch(t, {ownTool: true});
+  const dest = path.join(home, '旧数据');
+  fs.mkdirSync(dest);
+  fs.writeFileSync(path.join(dest, 'config.json'), JSON.stringify({folders: [path.join(docs, '子目录')], ignore_md: false}));
+  fs.writeFileSync(path.join(dest, 'token'), 'other-token-other-token\n');
+  let msg = '';
+  page.onDialog = d => { msg = d.message(); d.accept(); };
+  await page.click('#memSettings');
+  await page.fill('#dataDir', dest);
+  await page.click('#setDataDir');
+  await page.waitForURL(/t=other-token-other-token/);
+  assert.match(msg, /改用新位置已有的数据/);
+  assert.match(msg, /不合并/);
+  assert.match(msg, /网址会随之改变/);
+  assert.ok(fs.existsSync(path.join(home, '.config', 'ask-local-files', 'config.json')));     // 原处保留
+});
+
+test('保存位置不可用：醒目提示，记忆关闭且不能打开', async t => {
+  const {page, home} = await launch(t, {ownTool: true, pointer: '/nonexistent-mount/ask'});
+  await page.locator('#dataBanner', {hasText: '保存位置不可用：/nonexistent-mount/ask'}).waitFor();
+  await page.locator('#dataBanner').getByRole('button', {name: '打开记忆设置'}).click();
+  await page.locator('#memSettingsPanel').waitFor();
+  assert.match(await page.textContent('#dataDirNow'), /不可用/);
+  assert.ok(!await page.isChecked('#memoryOn'));
+  await page.check('#memoryOn');
+  await page.locator('#memStatus.bad', {hasText: '保存位置不可用'}).waitFor();
+  assert.ok(!fs.existsSync(path.join(home, '.local', 'share', 'ask-local-files')));
+});
+
+test('360px 下记忆设置与保存位置没有横向滚动', async t => {
+  const {page} = await launch(t, {width: 360});
+  await page.click('#memSettings');
+  await page.locator('#dataDirNow:not(:empty)').waitFor();
   await noHorizontalScroll(page);
 });
 
