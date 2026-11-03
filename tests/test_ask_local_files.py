@@ -2234,7 +2234,8 @@ class AutoIngestTest(ServerCase):
         write(os.path.join(self.docs, '计划.txt'), '第一阶段在三月底完成验收。\n\n预算总额为一百万元。')
         with open(os.path.join(self.docs, '坏文件.docx'), 'wb') as f:
             f.write(b'not a zip')
-        self.index.refresh(wait=True)
+        # 文件夹刚扫过：同一时间刻度里写入时目录修改时间不变，增量扫描会沿用旧清单，所以全量重扫
+        self.index.refresh(full=True, wait=True)
 
     def wait(self):
         for _ in range(200):
@@ -2279,7 +2280,7 @@ class AutoIngestTest(ServerCase):
         # 改了的文件重新收录；删掉的文件移出
         write(os.path.join(self.docs, '计划.txt'), '第一阶段改到四月底验收。')
         os.remove(os.path.join(self.docs, '季度总结.txt'))
-        self.index.refresh(wait=True)
+        self.index.refresh(full=True, wait=True)
         self.wait()
         self.assertEqual(self.call('/api/memory-ingest', {'action': 'run'})[0], 200)
         sm = self.wait()['summary']
