@@ -157,7 +157,7 @@ class MemoryTest(MemoryCase):
         self.mem.remember_answer('a1', '问', ANSWER, {1: self.file})
         os.remove(self.file)
         self.assertEqual(self.recall('预算'), [])
-        self.assertEqual(self.mem.stats(), {'files': 0, 'facts': 0, 'topics': 0, 'queued': 0, 'bytes': 0,
+        self.assertEqual(self.mem.stats(), {'files': 0, 'facts': 0, 'topics': 0, 'queued': 0, 'extract': 0, 'bytes': 0,
                                             'max_bytes': am.MAX_BYTES})
 
     def test_unreadable_changed_file_forgotten(self):
@@ -356,6 +356,180 @@ class UpdateTest(MemoryCase):
         self.assertEqual((self.mem.pending(), self.mem.history()), (0, []))
 
 
+class IngestTest(MemoryCase):
+    """自动记入：记入段落、排进「从文件抽结论」，分批抽结论并核对原句；容量不足、忘掉、删除。"""
+
+    def ingest(self, path=None):
+        path = path or self.file
+        return self.mem.ingest_file(path, os.stat(path), read(path))
+
+    def extract_all(self, budget, answer):
+        """把「从文件抽结论」一批批做完，answer(payload) 给出每批的结论；返回各批的 payload。"""
+        sent = []
+        for unit in self.mem.plan_update():
+            if unit[0] != 'extract':
+                continue
+            payload, ctx = self.mem.update_batch(unit, budget)
+            reply = None
+            if payload is not None:
+                sent.append(json.loads(payload))
+                reply = json.dumps({'conclusions': answer(sent[-1])}, ensure_ascii=False)
+            self.mem.apply_update(ctx, reply, 'auto')
+        return sent
+
+    def test_ingest_and_extract(self):
+        self.assertEqual(self.ingest(), 'done')
+        st = os.stat(self.file)
+        self.assertEqual(self.mem.ingest_rows()[self.file], (st.st_size, st.st_mtime_ns, 'done', ''))
+        self.assertEqual(self.mem.stats()['extract'], 1)
+        self.assertEqual(self.recall('预算')[0]['paras'], ['预算总额为一百万元，由财务部负责。'])     # 马上能参考
+        self.assertEqual(self.ingest(), 'done')     # 没变：不重复排队
+        self.assertEqual(self.mem.pending(), 1)
+        sent = self.extract_all(5000, lambda p: [
+            {'conclusion': '第一阶段三月底验收', 'quote': '第一阶段在三月底完成验收'},
+            {'conclusion': '编造', 'quote': '原文里没有这句'},
+            {'conclusion': '', 'quote': '预算总额为一百万元'},
+            {'conclusion': '第一阶段三月底验收', 'quote': '第一阶段在三月底完成验收'}])
+        self.assertEqual(len(sent), 1)
+        self.assertIn('预算总额为一百万元', sent[0]['text'])
+        facts = self.mem.listing()['facts']
+        self.assertEqual([(f['conclusion'], f['quote']) for f in facts], [('第一阶段三月底验收', '第一阶段在三月底完成验收')])
+        h = self.mem.history()[0]
+        self.assertEqual((h['counts'], h['changes']), ({'extracted': 1}, ['从文件抽出：第一阶段三月底验收']))
+        self.assertEqual(am.summary(h['counts']), '从文件抽出结论 1 条')
+        # 抽出的结论排进队列，接着整理进主题页
+        self.assertEqual([u[0] for u in self.mem.plan_update()], ['facts'])
+        self.assertTrue(self.mem.undo_update(h['id']))
+        self.assertEqual(self.mem.stats()['facts'], 0)
+
+    def test_extract_in_batches(self):
+        text = '\n\n'.join('第%d条规定的内容写在这里。' % i for i in range(60))
+        self.write(text)
+        self.ingest()
+        units = self.mem.plan_update()
+        self.assertEqual(units, [('extract', self.file)])
+        sent = []
+        for _ in range(100):      # 估计的批数不够时（每批字数比估计的少），下次接着做
+            sent += self.extract_all(300, lambda p: [{'conclusion': '有规定', 'quote': p['text'].split('\n\n')[0]}])
+            if not self.mem.stats()['extract']:
+                break
+        self.assertGreater(len(sent), 1)
+        self.assertTrue(all(len(json.dumps(p, ensure_ascii=False)) <= 300 for p in sent))
+        joined = '\n\n'.join(p['text'] for p in sent)
+        self.assertEqual(joined.split('\n\n'), text.split('\n\n'))     # 每段恰好一次
+        self.assertEqual(self.mem.stats()['facts'], len(sent))
+
+    def test_changed_file_extracts_again(self):
+        self.ingest()
+        self.extract_all(5000, lambda p: [])
+        self.assertEqual(self.mem.pending(), 0)
+        self.write(PLAN + '\n\n新增一段。')
+        self.ingest()
+        self.assertEqual(self.mem.stats()['extract'], 1)
+        sent = self.extract_all(5000, lambda p: [])
+        self.assertIn('项目计划', sent[0]['text'])      # 从头再抽
+
+    def test_failed_evicted_forgotten_and_gone(self):
+        st = os.stat(self.file)
+        self.mem.ingest_failed(self.file, st, '没有取出文字')
+        self.assertEqual(self.mem.ingest_rows()[self.file][2:], ('failed', '没有取出文字'))
+        cands = [(self.file, st.st_size, st.st_mtime_ns)]
+        self.assertEqual(self.mem.ingest_summary(cands)['skipped'], [{'path': self.file, 'state': 'failed',
+                                                                       'reason': '没有取出文字'}])
+        other = os.path.join(self.root, '大文件.txt')
+        self.write('大' * 300, other)
+        self.remember()     # 提问时选过的文件，最近用过
+        self.mem.max_bytes = 900
+        self.assertEqual(self.ingest(other), 'evicted')     # 自动记入的按从没用过算，先被忘掉
+        self.assertEqual(self.mem.ingest_rows()[other][2:], ('evicted', am.EVICTED))
+        self.assertEqual(self.mem.stats()['files'], 1)
+        self.mem.set_max_bytes(10 ** 6)        # 调大上限：可以重新记入
+        self.assertNotIn(other, self.mem.ingest_rows())
+        self.assertEqual(self.ingest(other), 'done')
+        self.assertTrue(self.mem.forget_file(other))       # 使用者忘掉的：改过之前不再记入
+        self.assertEqual(self.mem.ingest_rows()[other][2:], ('forgotten', am.FORGOTTEN))
+        self.assertEqual(self.mem.stats()['extract'], 0)
+        self.ingest()
+        os.remove(self.file)
+        self.assertEqual(self.mem.ingest_gone([self.file]), 1)
+        self.assertNotIn(self.file, self.mem.ingest_rows())
+        self.assertEqual(self.mem.stats()['files'], 0)
+        self.mem.clear()
+        self.assertEqual(self.mem.ingest_rows(), {})
+
+    def test_summary(self):
+        other = os.path.join(self.root, '新.txt')
+        self.write('新的内容。', other)
+        self.ingest()
+        a, b = os.stat(self.file), os.stat(other)
+        got = self.mem.ingest_summary([(self.file, a.st_size, a.st_mtime_ns), (other, b.st_size, b.st_mtime_ns)])
+        self.assertEqual(got, {'total': 2, 'done': 1, 'waiting': 1, 'skipped': [], 'skipped_total': 0})
+
+
+class RelatedAndExportTest(MemoryCase):
+    def setUp(self):
+        super().setUp()
+        self.remember()
+        self.mem.remember_answer('a1', '问', ANSWER, {1: self.file})
+
+    def update(self, topics):
+        payload, ctx = self.mem.update_batch(self.mem.plan_update()[0], 10000)
+        return self.mem.apply_update(ctx, json.dumps({'topics': topics}, ensure_ascii=False), 'manual')
+
+    def pages(self):
+        return {t['title']: [r['title'] for r in t['related']] for t in self.mem.listing()['topics']}
+
+    def test_related_only_existing(self):
+        pt = lambda text, quote: {'text': text, 'file': 1, 'quote': quote}
+        self.update([{'id': 'new', 'title': '验收', 'points': [pt('三月底验收', '第一阶段在三月底完成验收')],
+                      'related': ['预算', '不存在的主题', '验收']},
+                     {'id': 'new', 'title': '预算', 'points': [pt('一百万元', '预算总额为一百万元')], 'related': ['验收']}])
+        self.assertEqual(self.pages(), {'验收': ['预算'], '预算': ['验收']})
+        payload, _ = self.mem.update_batch(('lint', [r['id'] for r in self.mem.listing()['facts']]), 10000)
+        sent = json.loads(payload)
+        self.assertEqual({t['title']: t['related'] for t in sent['topics']}, {'验收': ['预算'], '预算': ['验收']})
+        # 只改相关主题也算一次更新，可撤销
+        vid = [t['id'] for t in self.mem.listing()['topics'] if t['title'] == '验收'][0]
+        _, ctx = self.mem.update_batch(('lint', [r['id'] for r in self.mem.listing()['facts']]), 10000)
+        run, counts, changes = self.mem.apply_update(ctx, json.dumps({'topics': [
+            {'id': 'T%d' % vid, 'title': '验收', 'points': [pt('三月底验收', '第一阶段在三月底完成验收')], 'related': []}]},
+            ensure_ascii=False), 'manual')
+        self.assertEqual((counts, changes), ({'topics_updated': 1}, ['更新主题页（相关主题）：验收']))
+        self.assertEqual(self.pages()['验收'], [])
+        self.assertTrue(self.mem.undo_update(run))
+        self.assertEqual(self.pages()['验收'], ['预算'])
+        self.mem.forget_topic([t['id'] for t in self.mem.listing()['topics'] if t['title'] == '预算'][0])
+        self.assertEqual(self.pages(), {'验收': []})       # 删掉的主题不再列为相关
+
+    def test_md_name(self):
+        used = set()
+        self.assertEqual(am.md_name('a/b:c*?', used), 'a b c')
+        self.assertEqual(am.md_name('A B C', used), 'A B C (2)')
+        self.assertEqual(am.md_name(' .. ', used), '未命名')
+        self.assertEqual(am.md_name('[[链接]]#^|', used), '链接')
+        self.assertLessEqual(len(am.md_name('长' * 200, used)), 80)
+
+    def test_export_markdown(self):
+        import io
+        import zipfile
+        empty = am.Memory(os.path.join(self.root, 'other', 'm.sqlite'))
+        self.assertIsNone(empty.export_markdown())
+        empty.close()
+        pt = {'text': '三月底验收', 'file': 1, 'quote': '第一阶段在三月底完成验收'}
+        self.update([{'id': 'new', 'title': '验收/安排', 'points': [pt], 'related': []}])
+        z = zipfile.ZipFile(io.BytesIO(self.mem.export_markdown()))
+        self.assertEqual(sorted(z.namelist()), ['主题/验收 安排.md', '文件/计划.txt.md', '索引.md'])
+        topic = z.read('主题/验收 安排.md').decode('utf-8')
+        self.assertIn('- 三月底验收（出处：[[文件/计划.txt|计划.txt]]）\n  > 第一阶段在三月底完成验收', topic)
+        page = z.read('文件/计划.txt.md').decode('utf-8')
+        self.assertIn('原路径：`%s`' % self.file, page)
+        self.assertIn('- 预算一百万元\n  > 预算总额为一百万元', page)
+        self.assertIn('[[主题/验收 安排|验收 安排]]', page)
+        index = z.read('索引.md').decode('utf-8')
+        self.assertIn('主题页 1 页、结论 2 条、文件 1 个。', index)
+        self.assertNotIn('由财务部负责', topic + page + index)     # 不含段落全文
+
+
 class UpgradeTest(MemoryCase):
     def test_schema_1_kept(self):
         os.makedirs(os.path.dirname(self.mem.path))
@@ -368,11 +542,30 @@ class UpgradeTest(MemoryCase):
         # 降回版本 1 的库：去掉新表与新列，再打开
         db = sqlite3.connect(self.mem.path)
         db.executescript('DROP TABLE points_fts; DROP TABLE points; DROP TABLE topics; DROP TABLE queue; '
-                         'DROP TABLE updates; ALTER TABLE facts DROP COLUMN stale; PRAGMA user_version = 1;')
+                         'DROP TABLE updates; DROP TABLE ingest; ALTER TABLE facts DROP COLUMN stale; '
+                         'PRAGMA user_version = 1;')
         db.close()
         self.assertEqual(self.mem.stats()['facts'], 2)
         self.assertEqual(self.recall('预算')[0]['facts'][0]['quote'], '预算总额为一百万元')
         self.assertEqual([n for n in os.listdir(os.path.dirname(self.mem.path)) if '.broken-' in n], [])
+        with sqlite3.connect(self.mem.path) as db:
+            self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], am.SCHEMA)
+
+
+class UpgradeFrom2Test(MemoryCase):
+    def test_schema_2_kept(self):
+        self.remember()
+        self.mem.remember_answer('a1', '问', ANSWER, {1: self.file})
+        self.mem.close()
+        db = sqlite3.connect(self.mem.path)
+        db.executescript('DROP TABLE ingest; ALTER TABLE topics DROP COLUMN related; PRAGMA user_version = 2;')
+        db.execute("INSERT INTO updates (time, mode, counts, changes, undo) VALUES (1, 'manual', '{}', '[]', ?)",
+                   (json.dumps([[{'t': 'topic', 'id': 7, 'row': [7, '旧页', 1.0]}]]),))
+        db.commit()
+        db.close()
+        self.assertEqual(self.mem.stats()['facts'], 2)
+        self.assertEqual(self.mem.ingest_rows(), {})
+        self.assertTrue(self.mem.undo_update(self.mem.history()[0]['id']))     # 升级前的撤销记录照样能用
         with sqlite3.connect(self.mem.path) as db:
             self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], am.SCHEMA)
 

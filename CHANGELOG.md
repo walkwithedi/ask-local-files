@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.10.0
+
+- Folders that record themselves: each added folder has 自动记入记忆 ("record into memory"), off by default. Ticked folders are scanned after every index scan and at most every 10 minutes; new and changed supported files are read into memory by paragraph in the background (files are only read, no model is called), and files that give no text are listed with the reason. Updates then send each recorded file paragraph by paragraph in batches (within the character limit and at most 12,000 characters) to the selected model to extract conclusions with word-for-word quotes; only quotes found in the current file text are stored, and the same update files them into topic pages. Deleted files are forgotten; unticking keeps what was recorded. Recording never holds the tool open and resumes on the next start.
+- Memory capacity is a setting in 记忆设置 (50 to 102,400 MB), default raised from 200 MB to 1 GB. Recorded files count as never picked and are forgotten first when memory is full; a file left out for lack of room is not recorded again until it changes or the limit is raised.
+- Topic pages carry related topics (up to 8, existing titles only, undone with the update). 保存为 Markdown ("save as Markdown") in 查看记忆 saves the topic pages and conclusions as a zip that opens as an Obsidian vault, with links between topics and source files.
+- 配置 OpenCode ("configure OpenCode") in 模型设置 replaces the key of one provider in an existing OpenCode configuration: it tests the new key first, writes only the `apiKey` value (comments and formatting kept), backs up the original and can roll back. Without an OpenCode configuration nothing is created.
+- The Chinese name is now 找资料问 AI ("find material, ask AI"); saved files start with `找资料问AI-`. Folder, program and data locations are unchanged.
+- New help page `help.html` (quick start, how each feature works, privacy, common questions), opened by 帮助 in the page header.
+- The memory database is upgraded in place to version 3 and keeps its contents.
+
 ## 2.9.0
 
 - Storage location (保存位置): memory, settings and the address token can be kept together in a folder of your choice, such as one on a data disk that is not cleaned up with the home folder. Change it at the bottom of 记忆设置 or with `--data-dir DIR`. An empty folder receives the current files (copied first, originals removed only after every copy succeeded); a folder that already holds them is used as it is, without merging. The location is recorded in `data-dir.txt` in the tool folder; copy it along when upgrading into a new folder. If the recorded folder is unusable, the tool does not fall back to the home folder: it says so below the header and, for that run, keeps no memory and saves no settings. Until a location is set, the first start mentions once that it can be changed.

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>找文件问 AI</title>
+<title>找资料问 AI</title>
 <script>if (new URLSearchParams(location.search).get('embed') === '1') document.documentElement.classList.add('embed');</script>
 <style>
   :root { --bg:#f6f7f9; --card:#fff; --text:#1f2328; --muted:#656d76; --line:#d0d7de; --accent:#0969da; --ok:#1a7f37; --warn:#9a6700; --bad:#cf222e; --pick:#ddf4ff; --bad-bg:#ffebe9; --folder:#9a5b00; }
@@ -35,6 +35,8 @@
   select { max-width:100%; }
   button { padding:6px 12px; font:inherit; font-size:14px; border:1px solid var(--line); border-radius:6px; background:var(--card); color:var(--text); cursor:pointer; }
   button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  a.btn { display:inline-block; padding:6px 12px; font-size:14px; border:1px solid var(--line); border-radius:6px; background:var(--card); color:var(--text); text-decoration:none; }
+  .auto-in { display:inline-flex; align-items:center; gap:4px; font-size:13px; white-space:nowrap; color:var(--muted); }
   button.small { padding:1px 8px; font-size:13px; white-space:nowrap; flex-shrink:0; }
   button:disabled { opacity:.5; cursor:default; }
   button.danger { color:var(--bad); border-color:var(--bad); }
@@ -220,15 +222,16 @@
 <main>
   <header>
     <div class="head-title">
-      <h1>找文件问 AI</h1>
+      <h1>找资料问 AI</h1>
       <button id="foldSub" class="toggle" type="button" aria-expanded="false" aria-controls="sub">说明<span class="arrow" aria-hidden="true">▸</span></button>
     </div>
     <div class="row">
+      <a id="help" class="btn" href="/help.html" target="_blank" rel="noopener" title="在新标签里打开帮助：怎么用、原理与常见问题">帮助</a>
       <button id="newConv" type="button" title="在本窗口新开一个对话标签，已选和对话各自独立">＋ 新对话</button>
       <button id="quit" type="button">退出</button>
     </div>
   </header>
-  <p id="sub" class="sub" hidden>逐层浏览或按文件名找出文件交给 AI，或选用 skill 让 AI 运行脚本处理；点「＋ 新对话」可在新标签里并行。支持 Word（docx）、Excel（xlsx、xlsm）、PowerPoint（pptx）、旧版 doc、xls、ppt（wps、et、dps 按同类格式试读）、PDF、邮件（eml）、网页（html、htm）、纯文本与代码文件；压缩包等读不了的文件可点「打开文件夹」自己处理。勾选「参考记忆」时参考本机记住的文件和结论，可在「记忆设置」里查看或清空。</p>
+  <p id="sub" class="sub" hidden>逐层浏览或按文件名找出文件交给 AI，或选用 skill 让 AI 运行脚本处理；点「＋ 新对话」可在新标签里并行。支持 Word（docx）、Excel（xlsx、xlsm）、PowerPoint（pptx）、旧版 doc、xls、ppt（wps、et、dps 按同类格式试读）、PDF、邮件（eml）、网页（html、htm）、纯文本与代码文件；压缩包等读不了的文件可点「打开文件夹」自己处理。勾选「参考记忆」时参考本机记住的文件和结论，可在「记忆设置」里查看或清空；在「管理文件夹」里给文件夹勾选「自动记入记忆」，其中的文件会自动记进记忆。怎么用、原理与常见问题见右上角「帮助」。</p>
   <div id="closed">服务已退出，可关闭本页。需要再用时重新双击「双击运行」。</div>
   <div id="banner" class="banner" role="status" hidden></div>
   <div id="dataBanner" class="banner bad" role="alert" hidden></div>
@@ -337,7 +340,7 @@
       <button id="clear" class="small danger" type="button">清空对话</button>
     </div>
     <div id="askBody" class="fold-body">
-    <p id="noAiNote" hidden>本机没有可用的模型：可以找文件、预览，在「已选」里复制或保存取出的文字，带到能用 AI 的地方提问；要在这里问 AI，请在「模型设置」里填写接口，或启动本机的 llama-server、Ollama 后点「重新查找」。</p>
+    <p id="noAiNote" hidden>本机没有可用的模型：可以找文件、预览，在「已选」里复制或保存取出的文字，带到能用 AI 的地方提问；要在这里问 AI，请在「模型设置」里填写接口（本机有 OpenCode 配置时可用「配置 OpenCode」换上自己的 AK），或启动本机的 llama-server、Ollama 后点「重新查找」。</p>
     <div id="chatStatus" class="status" aria-live="polite"></div>
     <div id="chatWrap"><div id="chat"></div></div>
     <div id="optRow" class="row">
@@ -396,6 +399,20 @@
         <button id="testModel" type="button">测试连接</button>
       </div>
       <div id="settingsStatus" class="status" aria-live="polite"></div>
+      <h3 style="margin-top:12px">配置 OpenCode</h3>
+      <p class="hint">本机已有 OpenCode 配置时，在这里换上自己的 AK：只替换所选服务商的 AK，接口地址、模型、注释和其余设置原样保留。先用新 AK 发一条测试请求，通过才写入，不通过时配置文件不改；写入前备份原文件，可点「回滚」恢复。配好后本工具和 OpenCode 用同一个模型。</p>
+      <p id="ocPath" class="hint name"></p>
+      <div id="ocBox" hidden>
+        <div class="grid">
+          <label for="ocProv">服务商</label><select id="ocProv"></select>
+          <label for="ocKey">新的 AK</label><input id="ocKey" type="password" autocomplete="new-password">
+        </div>
+        <div class="row" style="margin-top:8px">
+          <button id="ocSave" type="button">测试并写入</button>
+          <button id="ocRollback" type="button" hidden>回滚</button>
+        </div>
+      </div>
+      <div id="ocStatus" class="status" aria-live="polite"></div>
     </div>
     <div id="memSettingsPanel" class="panel" hidden>
       <h3 id="memHead" tabindex="-1">记忆</h3>
@@ -406,12 +423,27 @@
         <button id="memView" class="toggle" type="button" aria-expanded="false" aria-controls="memPanel">查看记忆<span class="arrow" aria-hidden="true">▸</span></button>
       </div>
       <div class="row" style="margin-top:6px">
+        <label for="memMb" class="hint" style="margin:0">容量上限（MB）</label>
+        <input id="memMb" type="number" min="50" max="102400" step="50" style="width:7em">
+        <button id="saveMemMb" type="button" aria-label="保存容量上限">保存</button>
+      </div>
+      <p class="hint">范围 50 到 102,400，默认 1,024（1 GB），回车即保存。记忆里的文字超过上限时，先忘掉最久没被选用或参考的文件；调小时立即按新上限忘掉多出的部分。</p>
+      <h4 class="mem-h">自动记入</h4>
+      <div class="row">
+        <span id="ingestStats" class="hint" style="margin:0"></span>
+        <button id="ingestRun" type="button">立即记入</button>
+        <button id="ingestSkipped" class="toggle" type="button" aria-expanded="false" aria-controls="ingestSkippedPanel" hidden>没有记入的文件<span class="arrow" aria-hidden="true">▸</span></button>
+      </div>
+      <div id="ingestSkippedPanel" hidden><ul id="ingestSkippedList" class="list"></ul></div>
+      <div id="ingestStatus" class="status" aria-live="polite"></div>
+      <p class="hint">在「管理文件夹」里给文件夹勾选「自动记入记忆」后，其中支持格式的文件（勾选「忽略 Markdown 文件」时不含 .md）自动记进记忆：每次扫描文件夹后在后台取出新增或改过的文件的文字，马上能被提问参考，不移动、不修改原文件；之后在「更新记忆」或空闲时自动更新里，由所选模型从文件里抽出带原句的结论，核对原句后写入，再整理进主题页。文件删除后忘掉它记下的内容；取消勾选只是不再记入，已记住的保留。自动记入不拖住退出，下次启动接着做。</p>
+      <div class="row" style="margin-top:6px">
         <button id="memUpdate" type="button">更新记忆</button>
         <button id="memUpdStop" type="button" hidden>停止</button>
         <label class="dedup" style="margin-top:0"><input id="memAuto" type="checkbox" checked>空闲时自动更新</label>
         <button id="memLog" class="toggle" type="button" aria-expanded="false" aria-controls="memLogPanel">更新记录<span class="arrow" aria-hidden="true">▸</span></button>
       </div>
-      <p class="hint">更新时把记忆里的结论、原句和相关段落分批发给所选模型，由它把结论按主题整理成主题页，合并重复、以新代旧、删除不再成立的说法，文件改过的按新内容改写结论；写入前逐条核对原句。点「更新记忆」先处理待更新的内容，再把全部结论体检一遍；勾选「空闲时自动更新」时，工具开着、10 分钟没有提问时自动处理待更新的内容，一提问就让路。最近 20 次更新可以从最近一次往回撤销。</p>
+      <p class="hint">更新时把记忆里的结论、原句和相关段落分批发给所选模型，由它把结论按主题整理成主题页并标出相关主题，合并重复、以新代旧、删除不再成立的说法，文件改过的按新内容改写结论，自动记入的文件按段落分批抽出结论；写入前逐条核对原句。点「更新记忆」先处理待更新的内容，再把全部结论体检一遍；勾选「空闲时自动更新」时，工具开着、10 分钟没有提问时自动处理待更新的内容，一提问就让路。最近 20 次更新可以从最近一次往回撤销。</p>
       <div id="memUpdStatus" class="status" aria-live="polite"></div>
       <div id="memLogPanel" hidden>
         <ul id="memLogList" class="list"></ul>
@@ -419,6 +451,7 @@
       <div id="memPanel" hidden>
         <div class="row" style="margin-top:6px">
           <input id="memQ" type="text" placeholder="搜索结论、原句或文件路径" autocomplete="off" aria-label="搜索记忆" style="flex:1 1 200px">
+          <button id="memSaveMd" class="small" type="button" title="把主题页与结论保存成一组 Markdown 文件（zip），解压后可用 Obsidian 打开，看主题与文件之间的链接">保存为 Markdown</button>
           <button id="memClear" class="small danger" type="button">清空记忆</button>
         </div>
         <h4 class="mem-h">主题</h4>
@@ -456,7 +489,7 @@
   <div id="convFrames" hidden></div>
 
 
-  <footer><span id="ver">找文件问 AI v2.9</span>　<button id="copyUrl" type="button" class="small">复制网址</button>　网址固定不变，可收藏或复制到浏览器打开。关闭页面后服务继续运行，没有页面、也没有任务 30 分钟后自动退出；点「退出」立即结束，开着的页面一起结束。有回答正在生成（含 skill 脚本运行）或记忆正在手动更新时，服务等它结束再退出。对话不自动保存，退出即清空；记忆存在本机，可在「记忆设置」里关闭或清空。<div id="urlStatus" class="status info" aria-live="polite"></div></footer>
+  <footer><span id="ver">找资料问 AI v2.10</span>　<button id="copyUrl" type="button" class="small">复制网址</button>　网址固定不变，可收藏或复制到浏览器打开。关闭页面后服务继续运行，没有页面、也没有任务 30 分钟后自动退出；点「退出」立即结束，开着的页面一起结束。有回答正在生成（含 skill 脚本运行）或记忆正在手动更新时，服务等它结束再退出；自动记入与空闲时自动更新不拖住退出，下次启动接着做。对话不自动保存，退出即清空；记忆存在本机，可在「记忆设置」里关闭或清空。<div id="urlStatus" class="status info" aria-live="polite"></div></footer>
 </main>
 <script>
 'use strict';
@@ -1355,7 +1388,7 @@ $('copyPaths').addEventListener('click', () => {
   fallback();
 });
 $('saveTexts').addEventListener('click', () => exportRun('保存', () => exportText().then(r => {
-  const name = '找文件问AI-文字-' + stampNow() + '.md';
+  const name = '找资料问AI-文字-' + stampNow() + '.md';
   saveBlob(new Blob([r.text], {type: 'text/markdown;charset=utf-8'}), name);
   say('pickStatus', '已保存为 ' + name + '（在浏览器的下载文件夹里）：' + r.note + '。', 'ok');
 })));
@@ -1429,7 +1462,7 @@ function renderDest() {
     ? '将发送到：' + m.host + (m.auth || m.loopback ? '' : '（未鉴权）') + '，模型 ' + m.label + '，' + picked.length + ' 个文件' + (currentSkill() ? '，skill ' + currentSkill().label : '') + (memoryActive() ? '，参考记忆' : '') +
       '；文件 ' + fmtNum(totalChars()) + ' 字' + (currentSkill() ? ' + skill ' + fmtNum(skillChars()) + ' 字' : '') + ' + 对话 ' + fmtNum(historyChars()) + ' 字' +
       (m.limit && m.limit < charLimit ? '；发送上限 ' + fmtNum(m.limit) + ' 字（' + m.limit_note + '）' : '')
-    : '没有可用的模型：OpenCode 配置里找不到带接口地址和 AK 的模型，本机也没有运行中的 llama-server 或 Ollama；请在「模型设置」里填写自定义接口，或启动本机模型服务后点「重新查找」。';
+    : '没有可用的模型：OpenCode 配置里找不到带接口地址和 AK 的模型，本机也没有运行中的 llama-server 或 Ollama；请在「模型设置」里填写自定义接口（本机有 OpenCode 配置时可用「配置 OpenCode」换上自己的 AK），或启动本机模型服务后点「重新查找」。';
 }
 
 // ---------------- skill
@@ -1594,7 +1627,7 @@ function saveOutput(f) {
 function saveStem(stamp) {
   const trim = x => x.replace(/^[\s.]+|[\s.]+$/g, '');
   const t = trim(trim(convTitle().text.replace(/[\/\\:*?"<>|\x00-\x1f\x7f]/g, '')).slice(0, 20));
-  return '找文件问AI-' + (t ? t + '-' : '') + stamp;
+  return '找资料问AI-' + (t ? t + '-' : '') + stamp;
 }
 
 function stampNow() {
@@ -1781,9 +1814,13 @@ function forgetAnswer(m, b) {
 function showMemStats(st) {
   if (!st) return;
   state.memory_stats = st;
+  const full = st.max_bytes && st.bytes >= st.max_bytes * 0.95;
   $('memStats').textContent = st.error ? '读不了记忆：' + st.error : '已记住 ' + fmtNum(st.files) + ' 个文件、' + fmtNum(st.facts) +
     ' 条结论、' + fmtNum(st.topics || 0) + ' 页主题页' + (st.queued ? '，待更新 ' + fmtNum(st.queued) + ' 项' : '') +
-    '，约 ' + fmtSize(st.bytes) + '（上限 ' + fmtSize(st.max_bytes) + '，超出时先忘掉最久没用的文件）';
+    (st.extract ? '（其中从文件抽结论 ' + fmtNum(st.extract) + ' 个文件）' : '') +
+    '，约 ' + fmtSize(st.bytes) + '（上限 ' + fmtSize(st.max_bytes) + (full ? '，容量快满了，可调大上限' : '，超出时先忘掉最久没用的文件') + '）';
+  $('memStats').className = full ? 'hint warn' : 'hint';
+  $('memSaveMd').disabled = !alive || !(st.facts || st.topics);
 }
 function refreshMemStats() {
   api('/api/memory?q=' + encodeURIComponent($('memQ').value.trim())).then(r => {
@@ -1805,6 +1842,7 @@ function renderMemory(r) {
     g.appendChild(el('div', '', t.title));
     t.points.forEach(p => g.appendChild(el('div', 'hint', '· ' + p.text + '（「' + p.quote + '」 · ' + p.path + '）' +
                                             (p.stale ? '（文件已改，待复核）' : ''))));
+    if (t.related && t.related.length) g.appendChild(el('div', 'hint', '相关主题：' + t.related.map(x => x.title).join('、')));
     li.appendChild(g);
     const x = btn('删除', 'small', () => memAction({action: 'topic', id: t.id}, x, '已删除主题页「' + t.title + '」。'));
     x.setAttribute('aria-label', '删除主题页 ' + t.title);
@@ -1849,7 +1887,7 @@ function memAction(body, b, done) {
 // 记忆设置面板：「记忆设置」展开或收起；入口展开它、滚到面板顶部并聚焦，view 为真时另外展开「查看记忆」
 function toggleMemSettings(open) {
   togglePanel($('memSettings'), $('memSettingsPanel'), open);
-  if (!$('memSettingsPanel').hidden) { refreshMemStats(); pollMemUpdate(); }
+  if (!$('memSettingsPanel').hidden) { refreshMemStats(); pollMemUpdate(); pollIngest(); }
 }
 function openMemory(view) {
   if ($('memSettingsPanel').hidden) toggleMemSettings(true);
@@ -1872,6 +1910,7 @@ $('memoryOn').addEventListener('change', () => {
   const on = $('memoryOn').checked;
   post('/api/settings', {memory: on}).then(r => {
     applyState(r);
+    renderFolders();
     say('memStatus', on ? '已打开记忆。' : '已关闭记忆：不再记入、也不再参考，已记住的保留。', 'ok');
   }).catch(e => { $('memoryOn').checked = !on; say('memStatus', failText('保存', e.message, RETRY), 'bad'); });
 });
@@ -2001,6 +2040,151 @@ $('memAuto').addEventListener('change', () => {
   }).catch(e => { $('memAuto').checked = !on; say('memUpdStatus', failText('保存', e.message, RETRY), 'bad'); });
 });
 $('memLog').addEventListener('click', () => togglePanel($('memLog'), $('memLogPanel')));
+
+// ---------------- 自动记入：勾选的文件夹里的文件自动记进记忆
+
+let ingest = null, ingestShown = null, ingestTimer = 0;
+const INGEST_STATE = {failed: '取不出文字', evicted: '容量不足', forgotten: '已忘掉'};
+function showIngest(st) {
+  if (!st) return;
+  const was = ingest && ingest.running;
+  ingest = st;
+  const on = (state.auto_folders || []).length > 0;
+  $('ingestRun').disabled = st.running || !alive || !state.memory || !on;
+  const sum = st.summary;
+  let text = '';
+  if (!state.memory) text = '记忆已关闭，不自动记入。';
+  else if (!on) text = '还没有勾选「自动记入记忆」的文件夹：在「管理文件夹」里给要记入的文件夹勾选。';
+  else if (sum) {
+    text = '勾选的 ' + st.folders.length + ' 个文件夹里共 ' + fmtNum(sum.total) + ' 个文件：已记入 ' + fmtNum(sum.done) + ' 个' +
+      (sum.waiting ? '，待记入 ' + fmtNum(sum.waiting) + ' 个' : '') +
+      (sum.skipped_total ? '，没有记入 ' + fmtNum(sum.skipped_total) + ' 个' : '') + '。';
+  } else text = '勾选了 ' + st.folders.length + ' 个文件夹，正在查找要记入的文件……';
+  $('ingestStats').textContent = text;
+  $('ingestStats').className = sum && sum.skipped.some(x => x.state === 'evicted') ? 'hint warn' : 'hint';
+  const skipped = sum ? sum.skipped : [];
+  $('ingestSkipped').hidden = !skipped.length;
+  const ul = $('ingestSkippedList');
+  ul.textContent = '';
+  skipped.forEach(x => {
+    const li = el('li'), g = el('div', 'grow');
+    g.appendChild(el('div', 'name', x.path));
+    g.appendChild(el('div', 'hint', (INGEST_STATE[x.state] || x.state) + '：' + x.reason));
+    li.appendChild(g);
+    ul.appendChild(li);
+  });
+  if (sum && sum.skipped_total > skipped.length) ul.appendChild(el('li', 'meta', '……另有 ' + fmtNum(sum.skipped_total - skipped.length) + ' 个'));
+  if (!skipped.length && !$('ingestSkippedPanel').hidden) togglePanel($('ingestSkipped'), $('ingestSkippedPanel'), false);
+  if (st.running) say('ingestStatus', '正在自动记入：' + (st.stage || '准备') + '……', 'info');
+  else if (st.result && st.result.time !== ingestShown) {
+    ingestShown = st.result.time;
+    say('ingestStatus', st.result.text, st.result.kind === 'error' ? 'bad' : 'ok');
+  } else if (!st.result) say('ingestStatus', '');
+  if (was && !st.running) refreshMemStats();
+  clearTimeout(ingestTimer);
+  if (alive && (st.running || !$('memSettingsPanel').hidden)) ingestTimer = setTimeout(pollIngest, st.running ? 1000 : 15000);
+}
+function pollIngest() { return api('/api/memory-ingest').then(showIngest).catch(() => {}); }
+$('ingestRun').addEventListener('click', () => {
+  $('ingestRun').disabled = true;
+  say('ingestStatus', '正在自动记入：查找要记入的文件……', 'info');
+  post('/api/memory-ingest', {action: 'run'}).then(showIngest)
+    .catch(e => { $('ingestRun').disabled = !alive; say('ingestStatus', failText('记入', e.message, RETRY), 'bad'); });
+});
+$('ingestSkipped').addEventListener('click', () => togglePanel($('ingestSkipped'), $('ingestSkippedPanel')));
+
+// 容量上限（MB）
+$('saveMemMb').addEventListener('click', () => {
+  const v = Number($('memMb').value);
+  if (!Number.isInteger(v) || v < 50 || v > 102400) {
+    say('memStatus', '保存失败：容量上限须为 50 到 102400 的整数（MB）。请改正后再保存。', 'warn');
+    $('memMb').focus();
+    return;
+  }
+  $('saveMemMb').disabled = true;
+  post('/api/settings', {memory_mb: v}).then(r => {
+    applyState(r);
+    say('memStatus', '容量上限已改为 ' + fmtNum(v) + ' MB。', 'ok');
+    refreshMemStats();
+  }).catch(e => say('memStatus', failText('保存', e.message, RETRY), 'bad'))
+    .then(() => { $('saveMemMb').disabled = !alive; });
+});
+$('memMb').addEventListener('keydown', ev => { if (ev.key === 'Enter') $('saveMemMb').click(); });
+
+// 「保存为 Markdown」：主题页与结论打成 zip，解压后可用 Obsidian 打开
+$('memSaveMd').addEventListener('click', () => {
+  const b = $('memSaveMd');
+  b.disabled = true;
+  say('memStatus', '正在生成 Markdown……', 'info');
+  fetch('/api/memory-export', {headers: {'X-Token': TOKEN}}).then(r => {
+    if (!r.ok) return r.json().then(j => { throw new Error(j.error || ('HTTP ' + r.status)); });
+    return r.blob().then(blob => {
+      const name = '记忆-' + stampNow() + '.zip';
+      saveBlob(blob, name);
+      say('memStatus', '已保存为 ' + name + '（浏览器的下载文件夹）：解压后用 Obsidian「打开文件夹作为库」即可浏览主题与文件之间的链接。', 'ok');
+    });
+  }).catch(e => say('memStatus', failText('保存', e.message, RETRY), 'bad'))
+    .then(() => { b.disabled = !alive || !(state.memory_stats && (state.memory_stats.facts || state.memory_stats.topics)); });
+});
+
+// ---------------- 配置 OpenCode：只替换所选服务商的 AK，先测试再写入，可回滚
+
+let ocInfo = null;
+function showOpencode(info) {
+  ocInfo = info;
+  const box = $('ocBox');
+  if (!info.exists) {
+    box.hidden = true;
+    $('ocPath').textContent = '';
+    say('ocStatus', info.error, 'warn');
+    return;
+  }
+  $('ocPath').textContent = '配置文件：' + info.path;
+  const sel = $('ocProv'), keep = sel.value;
+  sel.textContent = '';
+  info.providers.forEach(p => {
+    const o = el('option', '', p.id + (p.host ? '（' + p.host + '，' + p.models + ' 个模型）' : '（' + p.models + ' 个模型）'));
+    o.value = p.id;
+    sel.appendChild(o);
+  });
+  if (info.providers.some(p => p.id === keep)) sel.value = keep;
+  box.hidden = !info.providers.length;
+  $('ocRollback').hidden = !info.backup;
+  if (info.error) say('ocStatus', info.error, 'warn');
+}
+function loadOpencode() {
+  return api('/api/opencode').then(showOpencode).catch(e => say('ocStatus', failText('读取 OpenCode 配置', e.message, RETRY), 'bad'));
+}
+$('ocSave').addEventListener('click', () => {
+  const key = $('ocKey').value.trim(), pid = $('ocProv').value;
+  if (!pid) { say('ocStatus', '请先选择服务商。', 'warn'); return; }
+  if (!key) { say('ocStatus', '请先填写新的 AK。', 'warn'); $('ocKey').focus(); return; }
+  const b = $('ocSave');
+  b.disabled = true;
+  say('ocStatus', '正在用新 AK 向「' + pid + '」发一条测试请求……', 'info');
+  post('/api/opencode', {action: 'set', provider: pid, key: key}).then(r => {
+    $('ocKey').value = '';
+    showOpencode(r.info);
+    applyState(r);
+    say('ocStatus', '已写入：「' + pid + '」的 AK 已替换，测试通过（' + r.model + '）。原配置备份在 ' + r.backup + '，需要时点「回滚」。', 'ok');
+  }).catch(e => {
+    if (e.data && e.data.info) showOpencode(e.data.info);
+    say('ocStatus', failText('写入', e.message, '请检查 AK 后重试。'), 'bad');
+  }).then(() => { b.disabled = !alive; });
+});
+$('ocKey').addEventListener('keydown', ev => { if (ev.key === 'Enter') $('ocSave').click(); });
+$('ocRollback').addEventListener('click', () => {
+  if (!ocInfo || !confirm('回滚 OpenCode 配置？\n\n将用上一次替换 AK 之前的备份替换配置文件：\n' + ocInfo.path +
+                          '\n\n回滚后这份备份删除，替换后的 AK 不再保留。')) return;
+  const b = $('ocRollback');
+  b.disabled = true;
+  post('/api/opencode', {action: 'rollback'}).then(r => {
+    showOpencode(r.info);
+    applyState(r);
+    say('ocStatus', '已回滚：OpenCode 配置恢复成替换 AK 之前的样子。', 'ok');
+  }).catch(e => say('ocStatus', failText('回滚', e.message, RETRY), 'bad'))
+    .then(() => { b.disabled = !alive; });
+});
 
 $('useMemory').addEventListener('change', () => {
   renderDest();
@@ -2214,7 +2398,7 @@ function togglePanel(b, panel, open) {
 $('manageFolders').addEventListener('click', () => togglePanel($('manageFolders'), $('folderPanel')));
 $('modelSettings').addEventListener('click', () => {
   togglePanel($('modelSettings'), $('modelPanel'));
-  if (!$('modelPanel').hidden) findLocal(false);
+  if (!$('modelPanel').hidden) { findLocal(false); loadOpencode(); }
 });
 
 // 重新探测本机的 llama-server 与 Ollama；shout 为使用者点了「重新查找」，写明找到了什么
@@ -2457,7 +2641,7 @@ function refsMarkdown() {
 
 // 整个对话写成 Markdown：「保存对话」与「保存为 Word」共用
 function chatMarkdown(stamp) {
-  const lines = ['# 找文件问 AI 对话 ' + stamp];
+  const lines = ['# 找资料问 AI 对话 ' + stamp];
   chat.forEach(m => {
     lines.push('', m.role === 'user' ? '## 问' : '## 答' + (m.model ? '（' + m.model + (m.skill ? '，skill ' + m.skill : '') + '）' : ''));
     if (m.memory && m.memory.files.length) {
@@ -2501,6 +2685,27 @@ function renderFolders() {
   state.folders.forEach(f => {
     const li = el('li');
     li.appendChild(el('div', 'grow name', f));
+    // 「自动记入记忆」：勾选后其中的文件自动记进记忆，默认不勾
+    const lab = el('label', 'auto-in'), cb = el('input');
+    cb.type = 'checkbox';
+    cb.checked = (state.auto_folders || []).includes(f);
+    cb.disabled = !state.memory || !alive;
+    cb.setAttribute('aria-label', '自动记入记忆：' + f);
+    lab.title = state.memory ? '勾选后，这个文件夹里支持格式的文件自动记进记忆，详见「记忆设置」' : '记忆已关闭，请先在「记忆设置」里打开记忆';
+    lab.appendChild(cb);
+    lab.appendChild(document.createTextNode('自动记入记忆'));
+    cb.addEventListener('change', () => {
+      const on = cb.checked;
+      cb.disabled = true;
+      post('/api/folders', {auto: f, on: on}).then(r => {
+        state.auto_folders = r.auto_folders;
+        say('folderStatus', on ? '已打开自动记入：正在后台把这个文件夹里的文件记进记忆，进度见「记忆设置」。'
+                               : '已关闭自动记入：不再记入这个文件夹的文件，已记住的保留。', 'ok');
+        showIngest(r.ingest);
+      }).catch(e => { cb.checked = !on; say('folderStatus', failText('保存', e.message, RETRY), 'bad'); })
+        .then(() => { cb.disabled = !state.memory || !alive; });
+    });
+    li.appendChild(lab);
     li.appendChild(btn('移除', 'small', () => {
       const inside = p => p.path === f || p.path.startsWith(f.replace(/\/$/, '') + '/');
       const n = picked.filter(inside).length;
@@ -2509,6 +2714,7 @@ function renderFolders() {
       if (!confirm(msg)) return;
       post('/api/folders', {remove: f}).then(r => {
         state.folders = r.folders;
+        state.auto_folders = r.auto_folders;
         if (n) {
           picked = picked.filter(p => !inside(p));
           if (chat.length) { chat = []; renderChat(); }
@@ -2526,7 +2732,7 @@ $('addFolder').addEventListener('click', () => {
   if (!v) { say('folderStatus', '请先填写文件夹路径。', 'warn'); return; }
   $('addFolder').disabled = true;
   post('/api/folders', {add: v}).then(r => {
-    state.folders = r.folders; $('folder').value = '';
+    state.folders = r.folders; state.auto_folders = r.auto_folders; $('folder').value = '';
     renderFolders(); refreshFind();
     const m = r.merged || [];
     say('folderStatus', '已添加' + (m.length ? '，原有的 ' + m.length + ' 个子文件夹已合并进来：' + m.join('、') : '') +
@@ -2631,7 +2837,9 @@ function applyState(s) {
   $('useMemRow').hidden = !state.memory;
   $('memAuto').checked = state.memory_auto !== false;
   $('memUpdate').disabled = !state.memory || memUpd.running || !alive;
+  if (state.memory_mb && document.activeElement !== $('memMb')) $('memMb').value = state.memory_mb;
   showMemStats(state.memory_stats);
+  if (ingest) showIngest(ingest);
   renderModels();
   document.body.classList.toggle('no-ai', noAi());
   $('noAiNote').hidden = !noAi();
@@ -2764,7 +2972,7 @@ $('copyUrl').addEventListener('click', () => copyText(pageUrl, $('copyUrl'), 'ur
 api('/api/state').then(s => {
   maxFiles = s.max_files;
   if (s.url) pageUrl = s.url;
-  $('ver').textContent = '找文件问 AI v' + s.version;
+  $('ver').textContent = '找资料问 AI v' + s.version;
   setDedup(s.dedup !== false);
   setRegex(s.regex === true);
   setIgnoreMd(s.ignore_md !== false);

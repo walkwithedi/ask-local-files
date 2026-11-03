@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-ask_memory  --  找文件问 AI 的记忆
+ask_memory  --  找资料问 AI 的记忆
 
 纯 Python 3 标准库实现，由 ask_local_files.py 导入使用。记忆是本机的一个 SQLite 文件
 （默认 ~/.local/share/ask-local-files/memory.sqlite，XDG_DATA_HOME 生效，权限 600），只当前用户可读：
@@ -14,6 +14,8 @@ ask_memory  --  找文件问 AI 的记忆
     topics、points  主题页：由模型把结论按主题整理而成，每条要点带出处文件与原句
     queue   更新队列：新记入或改过的结论（fact）、内容变了的文件（file），等模型更新时处理
     updates 最近 MAX_UPDATES 次更新的记录：方式、各类改动数、改动说明与撤销所需的改动前内容
+    ingest  自动记入的文件：路径、记入时的大小与修改时间、状态（done 已记入、failed 取不出文字、
+            evicted 容量不足被忘掉）、原因、从文件抽结论已做到第几段
 
 检索：提问切成关键字（标点、空格和常见虚词分开；中日韩文字连续 SHORT_RUN 字以内为一个关键字，
 更长的取相邻两字），SQLite 有 FTS5 时用全文索引找候选，没有时用 LIKE；候选按命中的关键字数排序，
@@ -27,10 +29,16 @@ ask_memory  --  找文件问 AI 的记忆
 文件改过的按新文字改写结论和要点；体检把全部结论分批再过一遍。模型给出的结论与要点都须原句核对通过、
 不是「不对」过的，才写入；文件改过而模型没能改写成功的结论和要点删除。每次更新记下改动前的内容，可从最近一次往回撤销。
 
-容量：文字超过 max_bytes（默认 200 MB）时，先忘掉最久没用的文件及其结论。
+自动记入（ingest_file）：勾选的文件夹里新增或改过的文件记入段落，并把「从文件抽结论」（extract）排进更新队列；
+更新时按段落分批把文字交给模型，抽出带原句的结论，原句核对通过的才写入，之后照常整理进主题页。
+主题页可带「相关主题」（其他主题页的 id），由模型在更新时给出，只接受已有的主题。
+
+容量：文字超过 max_bytes（默认 1 GB，可在设置里改）时，先忘掉最久没被选用或参考的文件及其结论；
+自动记入而被忘掉的文件记为 evicted，文件改过之前不再记入。
 数据库打不开或版本不符时改名留存，另建新库。
 """
 
+import io
 import json
 import logging
 import math
@@ -39,11 +47,17 @@ import re
 import sqlite3
 import threading
 import time
+import zipfile
 
 log = logging.getLogger('ask_memory')
 
-SCHEMA = 2
+SCHEMA = 3
 FACT_COLS = ('id', 'path', 'quote', 'qkey', 'conclusion', 'question', 'count', 'first', 'last', 'answers', 'toks', 'stale')
+TOPIC_COLS = ('id', 'title', 'updated', 'related')
+AUTO_QUESTION = '（自动记入）'     # 从文件抽出的结论，question 一栏写这个
+EVICTED = '记忆容量已满，没有记入；文件改过后再记入，或在「记忆设置」里调大容量上限'
+FORGOTTEN = '已在「查看记忆」里忘掉；文件改过后再记入'
+MAX_RELATED = 8             # 每页主题页最多记几个相关主题
 # 检索用的文字与另取的列：结论为「结论 原句」，要点为「主题：要点」；最后一列为是否待复核
 MATCH_COLS = {'paras': ('text', ''),
               'facts': ("conclusion || ' ' || quote", ', count, last, quote, stale'),
@@ -53,7 +67,7 @@ MAX_UPDATES = 20            # 保留几次更新记录（可撤销）
 BATCH_CHARS = 12000         # 每批交给模型的内容至多这么多字（另受发送字数上限限制）
 BATCH_FACTS = 40           # 每批至多交给模型多少条结论
 PARA_CHARS = 800            # 段落超过这么多字时再切开
-MAX_BYTES = 200 * 1024 * 1024
+MAX_BYTES = 1024 * 1024 * 1024
 CANDIDATES = 200            # 每类最多取多少条候选再排序
 MAX_KEYWORDS = 16
 SHORT_RUN = 4               # 中日韩文字连续这么多字以内为一个关键字，更长的取相邻两字
@@ -188,11 +202,13 @@ def _clean(text):
 UPDATE_PROMPT = '''你在维护使用者本机的一份「记忆」：从以前的问答里记下的结论（conclusions），以及按主题整理成的主题页（topics）。
 使用者会给你一个 JSON：files 为文件号与路径；conclusions 每条有 id（F 开头）、所在文件号 file、结论 conclusion、
 原文摘句 quote、被得出的次数 count，changed 为 true 表示文件改过、原句已不在新文字里；topics 为相关的已有主题页，
-每页有 id（T 开头）、标题 title 和要点 points（每条有 file、text、quote，changed 同上）；texts 为改过的文件的新文字（可能只是开头一部分）。
+每页有 id（T 开头）、标题 title、要点 points（每条有 file、text、quote，changed 同上）和相关主题 related（其他页的标题）；
+other_topics 为记忆里其他主题页的标题；texts 为改过的文件的新文字（可能只是开头一部分）。
 
 请做三件事：
 1. 把结论按主题整理成主题页：同一件事、同一个对象的结论归到一页，标题简短（不超过 20 字），要点一句一条。
    已有的页给出原 id，整页替换为你给出的要点；新页的 id 写 "new"。没必要成页的可以不放。
+   每页可用 related 列出内容相关的其他主题页标题（最多 8 个，只能用 topics、other_topics 里或这次新建的标题）。
 2. 体检：两条结论说的是同一件事，用 merge 把一条并进另一条；说法冲突、一条被另一条更新的说法取代时，用 replace 以新代旧；
    不再成立或没有价值的用 delete。
 3. changed 为 true 的结论：对照 texts 里该文件的新文字，用 rewrite 改写结论并给出新的原文摘句；新文字里找不到依据的用 delete。
@@ -204,16 +220,28 @@ UPDATE_PROMPT = '''你在维护使用者本机的一份「记忆」：从以前�
 {"conclusions": [{"id": "F3", "action": "rewrite", "conclusion": "改写后的结论", "file": 1, "quote": "原文摘句"},
                  {"id": "F4", "action": "merge", "into": "F2"}, {"id": "F5", "action": "replace", "into": "F6"},
                  {"id": "F7", "action": "delete"}],
- "topics": [{"id": "T2", "title": "主题", "points": [{"text": "要点", "file": 1, "quote": "原文摘句"}]}],
+ "topics": [{"id": "T2", "title": "主题", "points": [{"text": "要点", "file": 1, "quote": "原文摘句"}],
+             "related": ["另一个主题"]}],
  "delete_topics": ["T9"]}'''
-COUNT_NAMES = (('topics_new', '新建主题页', '页'), ('topics_updated', '更新主题页', '页'),
+EXTRACT_PROMPT = '''你在帮使用者把本机的一份文件记进「记忆」。使用者会给你一个 JSON：path 为文件路径，text 为这份文件的一部分文字
+（part 为第几部分、parts 为共几部分）。请从 text 里找出值得记住的结论：事实、数字、规定、决定、要求、时间安排、负责人等，
+每条结论一句话，写成不看原文也能看懂的完整说法（写明主语，不用「本文」「上述」「该」之类指代）。
+
+规则：每条结论都必须附从 text 里逐字照抄的原文摘句 quote：一句或半句、不超过 80 字、不跨段落，摘句核对不过的不会写入。
+只依据 text，不编造，不加入 text 以外的事实。目录、页眉页脚、空洞的套话不用记。没有值得记的内容时给出空列表。
+
+只输出一个 JSON 对象，不要其他文字，格式：
+{"conclusions": [{"conclusion": "结论", "quote": "原文摘句"}]}'''
+COUNT_NAMES = (('extracted', '从文件抽出结论', '条'),
+               ('topics_new', '新建主题页', '页'), ('topics_updated', '更新主题页', '页'),
                ('topics_deleted', '删除主题页', '页'), ('merged', '合并', '条'), ('replaced', '以新代旧', '条'),
                ('rewritten', '改写', '条'), ('deleted', '删除', '条'))
 
 
-def update_messages(payload):
-    """一批更新要发给模型的消息。"""
-    return [{'role': 'system', 'content': UPDATE_PROMPT}, {'role': 'user', 'content': payload}]
+def update_messages(payload, kind=None):
+    """一批更新要发给模型的消息；kind 为 extract（从文件抽结论）时用 EXTRACT_PROMPT。"""
+    return [{'role': 'system', 'content': EXTRACT_PROMPT if kind == 'extract' else UPDATE_PROMPT},
+            {'role': 'user', 'content': payload}]
 
 
 def parse_plan(reply):
@@ -226,6 +254,31 @@ def parse_plan(reply):
     if not isinstance(plan, dict):
         raise ValueError('模型的回答不是约定的 JSON')
     return plan
+
+
+def related_ids(value):
+    """主题页 related 一栏（JSON 列表）里的主题页 id；看不懂时为空。"""
+    try:
+        ids = json.loads(value or '[]')
+    except ValueError:
+        return []
+    return [i for i in ids if isinstance(i, int) and not isinstance(i, bool)] if isinstance(ids, list) else []
+
+
+MD_BAD = re.compile(r'[\\/:*?"<>|#^\[\]\x00-\x1f\x7f]')
+
+
+def md_name(title, used, limit=80):
+    """标题换成可作文件名的名字：去掉文件名和 Obsidian 链接里不能用的字符与首尾空格、句点，至多 limit 字；
+    与 used 里已有的（不区分大小写）重名时加「 (2)」等序号，并把结果加进 used。"""
+    base = MD_BAD.sub(' ', title)
+    base = re.sub(r'\s+', ' ', base).strip(' .')[:limit].strip(' .') or '未命名'
+    name, n = base, 1
+    while name.lower() in used:
+        n += 1
+        name = '%s (%d)' % (base, n)
+    used.add(name.lower())
+    return name
 
 
 def summary(counts):
@@ -258,13 +311,15 @@ class Memory:
                 os.close(fd)
                 db = sqlite3.connect(self.path, timeout=30, check_same_thread=False)
                 version = db.execute('PRAGMA user_version').fetchone()[0]
-                if version not in (0, 1, SCHEMA):
+                if version not in (0, 1, 2, SCHEMA):
                     raise sqlite3.DatabaseError('schema %d' % version)
                 db.execute('PRAGMA foreign_keys = ON')
                 if version == 0:
                     self._create(db)
                 if version < 2:
                     self._upgrade(db)
+                if version < 3:
+                    self._upgrade3(db)
                 self.fts = bool(db.execute("SELECT 1 FROM sqlite_master WHERE name = 'paras_fts'").fetchone())
                 return db
             except sqlite3.DatabaseError as e:
@@ -314,6 +369,17 @@ class Memory:
         ''')
         if db.execute("SELECT 1 FROM sqlite_master WHERE name = 'paras_fts'").fetchone():
             db.execute("CREATE VIRTUAL TABLE points_fts USING fts5(toks, content='points', content_rowid='id')")
+        db.execute('PRAGMA user_version = 2')
+        db.commit()
+
+    @staticmethod
+    def _upgrade3(db):
+        """版本 2 升到 3：主题页加相关主题，另建自动记入的文件清单；已有内容保留。"""
+        db.executescript('''
+            ALTER TABLE topics ADD COLUMN related TEXT;
+            CREATE TABLE ingest (path TEXT PRIMARY KEY, size INTEGER, mtime INTEGER, state TEXT, reason TEXT,
+                                 time REAL, done_n INTEGER NOT NULL DEFAULT 0);
+        ''')
         db.execute('PRAGMA user_version = %d' % SCHEMA)
         db.commit()
 
@@ -395,46 +461,120 @@ class Memory:
     def _enqueue(db, kind, ref):
         db.execute('INSERT OR IGNORE INTO queue (kind, ref, added) VALUES (?, ?, ?)', (kind, str(ref), time.time()))
 
-    def remember_file(self, path, st, text):
-        """记住（或更新）一个文件的文字；大小和修改时间没变时只更新最近使用时间。返回是否重写了段落。"""
+    def remember_file(self, path, st, text, auto=False):
+        """记住（或更新）一个文件的文字；大小和修改时间没变时只更新最近使用时间。返回是否重写了段落。
+        auto 为自动记入：不算「选用」，不更新最近使用时间，新记入的按从没用过算（容量满时先忘掉）。"""
         with self.lock:
             db = self._conn()
-            row = db.execute('SELECT size, mtime FROM files WHERE path = ?', (path,)).fetchone()
-            now = time.time()
-            if row and row == (st.st_size, st.st_mtime_ns):
-                db.execute('UPDATE files SET used = ? WHERE path = ?', (now, path))
-                db.commit()
-                return False
-            self._drop_paras(db, path)
-            # 不用 INSERT OR REPLACE：替换会先删行，连带删掉这个文件的结论
-            sql = ('UPDATE files SET size = ?, mtime = ?, bytes = ?, used = ? WHERE path = ?' if row else
-                   'INSERT INTO files (size, mtime, bytes, used, path) VALUES (?, ?, ?, ?, ?)')
-            db.execute(sql, (st.st_size, st.st_mtime_ns, len(text.encode('utf-8')), now, path))
-            for n, p in enumerate(split_paras(text)):
-                self._add_para(db, path, n, p)
-            if row:     # 文件改过：原句已不在新文字里的结论和要点待复核，不拿去参考，等更新时由模型改写
-                flat, stale = norm(text), False
-                for table in ('facts', 'points'):
-                    for rid, quote in db.execute('SELECT id, quote FROM %s WHERE path = ?' % table, (path,)).fetchall():
-                        bad = not quote_in(quote, flat)
-                        db.execute('UPDATE %s SET stale = ? WHERE id = ?' % table, (int(bad), rid))
-                        stale = stale or bad
-                if stale:
-                    self._enqueue(db, 'file', path)
-            self._cap(db)
+            changed = self._remember(db, path, st, text, auto)
             db.commit()
-            return True
+            return changed
+
+    def _remember(self, db, path, st, text, auto):
+        row = db.execute('SELECT size, mtime, used FROM files WHERE path = ?', (path,)).fetchone()
+        now = time.time()
+        if row and row[:2] == (st.st_size, st.st_mtime_ns):
+            if not auto:
+                db.execute('UPDATE files SET used = ? WHERE path = ?', (now, path))
+            return False
+        used = (row[2] if row else 0) if auto else now
+        self._drop_paras(db, path)
+        # 不用 INSERT OR REPLACE：替换会先删行，连带删掉这个文件的结论
+        sql = ('UPDATE files SET size = ?, mtime = ?, bytes = ?, used = ? WHERE path = ?' if row else
+               'INSERT INTO files (size, mtime, bytes, used, path) VALUES (?, ?, ?, ?, ?)')
+        db.execute(sql, (st.st_size, st.st_mtime_ns, len(text.encode('utf-8')), used, path))
+        for n, p in enumerate(split_paras(text)):
+            self._add_para(db, path, n, p)
+        if row:     # 文件改过：原句已不在新文字里的结论和要点待复核，不拿去参考，等更新时由模型改写
+            flat, stale = norm(text), False
+            for table in ('facts', 'points'):
+                for rid, quote in db.execute('SELECT id, quote FROM %s WHERE path = ?' % table, (path,)).fetchall():
+                    bad = not quote_in(quote, flat)
+                    db.execute('UPDATE %s SET stale = ? WHERE id = ?' % table, (int(bad), rid))
+                    stale = stale or bad
+            if stale:
+                self._enqueue(db, 'file', path)
+        self._cap(db)
+        return True
 
     def _cap(self, db):
+        """文字超过容量上限时先忘掉最久没被选用或参考的文件；自动记入的文件被忘掉时记为 evicted。"""
         total = db.execute('SELECT COALESCE(SUM(bytes), 0) FROM files').fetchone()[0]
         if total <= self.max_bytes:
             return
-        for path, size in db.execute('SELECT path, bytes FROM files ORDER BY used').fetchall():
+        for path, size in db.execute('SELECT path, bytes FROM files ORDER BY used, path').fetchall():
             if total <= self.max_bytes:
                 break
             self._drop_file(db, path)
+            db.execute("UPDATE ingest SET state = 'evicted', reason = ?, done_n = 0 WHERE path = ?", (EVICTED, path))
+            db.execute("DELETE FROM queue WHERE kind = 'extract' AND ref = ?", (path,))
             total -= size
-            log.info('memory over %d bytes, forgot %s', self.max_bytes, path)
+            log.info('memory over %d bytes, forgot a file', self.max_bytes)
+
+    def set_max_bytes(self, n):
+        """改容量上限：改小时立即按新上限忘掉多出的文件；调大时，因容量不足没记入的文件之后可以重新自动记入。"""
+        with self.lock:
+            bigger = n > self.max_bytes
+            self.max_bytes = n
+            if self.db is not None or os.path.exists(self.path):
+                db = self._conn()
+                if bigger:
+                    db.execute("DELETE FROM ingest WHERE state = 'evicted'")
+                self._cap(db)
+                db.commit()
+
+    # ------------------------------------------------------------ 自动记入
+
+    def ingest_rows(self):
+        """{路径: (大小, 修改时间, 状态, 原因)}：自动记入过的文件。"""
+        with self.lock:
+            return {r[0]: tuple(r[1:]) for r in self._conn().execute(
+                'SELECT path, size, mtime, state, reason FROM ingest').fetchall()}
+
+    def ingest_file(self, path, st, text):
+        """自动记入一个文件：记入段落，排进「从文件抽结论」；容量不够被忘掉时记为 evicted。返回状态。"""
+        with self.lock:
+            db = self._conn()
+            row = db.execute('SELECT size, mtime, done_n FROM ingest WHERE path = ?', (path,)).fetchone()
+            same = row is not None and row[:2] == (st.st_size, st.st_mtime_ns)
+            had = db.execute('SELECT size, mtime FROM files WHERE path = ?', (path,)).fetchone()
+            self._remember(db, path, st, text, True)
+            if not db.execute('SELECT 1 FROM files WHERE path = ?', (path,)).fetchone():
+                state, reason = 'evicted', EVICTED
+                db.execute("DELETE FROM queue WHERE kind = 'extract' AND ref = ?", (path,))
+            else:
+                state, reason = 'done', ''
+                if not (same and had and had == (st.st_size, st.st_mtime_ns)):
+                    db.execute('DELETE FROM queue WHERE kind = ? AND ref = ?', ('extract', path))
+                    self._enqueue(db, 'extract', path)
+                    row = None      # 内容变了，抽结论从头做
+            db.execute('INSERT OR REPLACE INTO ingest (path, size, mtime, state, reason, time, done_n) '
+                       'VALUES (?, ?, ?, ?, ?, ?, ?)', (path, st.st_size, st.st_mtime_ns, state, reason, time.time(),
+                                                        row[2] if row and state == 'done' else 0))
+            db.commit()
+            return state
+
+    def ingest_failed(self, path, st, reason):
+        """自动记入时取不出文字：记下原因，文件改过后再试。"""
+        with self.lock:
+            db = self._conn()
+            db.execute('INSERT OR REPLACE INTO ingest (path, size, mtime, state, reason, time, done_n) '
+                       "VALUES (?, ?, ?, 'failed', ?, ?, 0)", (path, st.st_size, st.st_mtime_ns, reason[:300],
+                                                               time.time()))
+            db.commit()
+
+    def ingest_gone(self, paths):
+        """自动记入过、现已不在的文件：忘掉它们的段落、结论与要点，并移出清单。返回忘掉的个数。"""
+        n = 0
+        with self.lock:
+            db = self._conn()
+            for path in paths:
+                self._drop_file(db, path)
+                db.execute('DELETE FROM ingest WHERE path = ?', (path,))
+                db.execute("DELETE FROM queue WHERE kind = 'extract' AND ref = ?", (path,))
+                n += 1
+            db.commit()
+        return n
 
     def remember_answer(self, answer_id, question, answer, sources, missing=()):
         """把回答里核对通过的结论记下。sources: {文件号: 路径}，只记这些文件的摘句；
@@ -513,13 +653,17 @@ class Memory:
             db = self._conn()
             hit = db.execute('SELECT 1 FROM files WHERE path = ?', (path,)).fetchone()
             self._drop_file(db, path)
+            # 自动记入的文件：使用者忘掉的，文件改过之前不再自动记入
+            db.execute("UPDATE ingest SET state = 'forgotten', reason = ?, done_n = 0 WHERE path = ?",
+                       (FORGOTTEN, path))
+            db.execute("DELETE FROM queue WHERE kind = 'extract' AND ref = ?", (path,))
             db.commit()
             return bool(hit)
 
     def clear(self):
         with self.lock:
             db = self._conn()
-            for t in ('points', 'topics', 'facts', 'paras', 'files', 'rejected', 'queue', 'updates'):
+            for t in ('points', 'topics', 'facts', 'paras', 'files', 'rejected', 'queue', 'updates', 'ingest'):
                 db.execute('DELETE FROM %s' % t)
             if self.fts:
                 for t in ('paras', 'facts', 'points'):
@@ -537,8 +681,28 @@ class Memory:
             facts = db.execute('SELECT COUNT(*) FROM facts').fetchone()[0]
             topics = db.execute('SELECT COUNT(*) FROM topics').fetchone()[0]
             queued = db.execute('SELECT COUNT(*) FROM queue').fetchone()[0]
-        return {'files': files, 'facts': facts, 'topics': topics, 'queued': queued, 'bytes': size,
+            extract = db.execute("SELECT COUNT(*) FROM queue WHERE kind = 'extract'").fetchone()[0]
+        return {'files': files, 'facts': facts, 'topics': topics, 'queued': queued, 'extract': extract, 'bytes': size,
                 'max_bytes': self.max_bytes}
+
+    def ingest_summary(self, candidates, limit=200):
+        """勾选的文件夹里的文件 [(路径, 大小, 修改时间（纳秒）)] 的自动记入情况：done 已记入的个数，waiting 还没处理的个数，
+        skipped 没有记入的 [{'path', 'state', 'reason'}]（取不出文字、容量不足、已忘掉；至多 limit 个）及其总数。"""
+        rows = self.ingest_rows()
+        done = waiting = 0
+        skipped, n_skipped = [], 0
+        for path, size, mtime in candidates:
+            r = rows.get(path)
+            if not r or r[:2] != (size, mtime):
+                waiting += 1
+            elif r[2] == 'done':
+                done += 1
+            else:
+                n_skipped += 1
+                if len(skipped) < limit:
+                    skipped.append({'path': path, 'state': r[2], 'reason': r[3] or ''})
+        return {'total': len(candidates), 'done': done, 'waiting': waiting, 'skipped': skipped,
+                'skipped_total': n_skipped}
 
     def listing(self, q='', limit=200):
         """记忆列表：结论（新的在前）与文件（最近用的在前），q 不为空时只列含 q 的。"""
@@ -552,17 +716,19 @@ class Memory:
                                "FROM files f WHERE f.path LIKE ?1 ESCAPE '\\' ORDER BY f.used DESC LIMIT ?2",
                                (like, limit)).fetchall()
             esc = "ESCAPE '\\'"
-            topics = db.execute('SELECT t.id, t.title, t.updated FROM topics t WHERE t.title LIKE ?1 {0} '
+            topics = db.execute('SELECT t.id, t.title, t.updated, t.related FROM topics t WHERE t.title LIKE ?1 {0} '
                                 'OR EXISTS (SELECT 1 FROM points p WHERE p.topic = t.id AND (p.text LIKE ?1 {0} '
                                 'OR p.quote LIKE ?1 {0} OR p.path LIKE ?1 {0})) '
                                 'ORDER BY t.updated DESC LIMIT ?2'.format(esc), (like, limit)).fetchall()
             points = {t[0]: [{'path': r[0], 'text': r[1], 'quote': r[2], 'stale': bool(r[3])} for r in db.execute(
                 'SELECT path, text, quote, stale FROM points WHERE topic = ? ORDER BY id', (t[0],)).fetchall()]
                 for t in topics}
+            titles = dict(db.execute('SELECT id, title FROM topics').fetchall())
         return {'facts': [{'id': r[0], 'path': r[1], 'conclusion': r[2], 'quote': r[3], 'count': r[4],
                            'last': r[5]} for r in facts],
                 'files': [{'path': r[0], 'bytes': r[1], 'used': r[2], 'facts': r[3]} for r in files],
-                'topics': [{'id': t[0], 'title': t[1], 'updated': t[2], 'points': points.get(t[0], [])}
+                'topics': [{'id': t[0], 'title': t[1], 'updated': t[2], 'points': points.get(t[0], []),
+                            'related': [{'id': i, 'title': titles[i]} for i in related_ids(t[3]) if i in titles]}
                            for t in topics]}
 
     def forget_topic(self, tid):
@@ -581,7 +747,8 @@ class Memory:
             return self._conn().execute('SELECT COUNT(*) FROM queue').fetchone()[0]
 
     def plan_update(self, full=False):
-        """要做的几批：改过的文件每个一批 ('file', 路径)，队里的结论每 BATCH_FACTS 条一批 ('facts', [id])；
+        """要做的几批：从文件抽结论 ('extract', 路径)，每个文件按字数一到几批；改过的文件每个一批 ('file', 路径)，
+        队里的结论每 BATCH_FACTS 条一批 ('facts', [id])；
         full 时另把全部结论每 BATCH_FACTS 条一批做体检 ('lint', [id])。每批的内容到做时再取。"""
         with self.lock:
             db = self._conn()
@@ -591,8 +758,15 @@ class Memory:
                 "SELECT q.ref FROM queue q LEFT JOIN facts f ON f.id = CAST(q.ref AS INTEGER) "
                 "WHERE q.kind = 'fact' AND COALESCE(f.stale, 0) = 0 ORDER BY q.added, q.ref")]
             every = [r[0] for r in db.execute('SELECT id FROM facts WHERE stale = 0 ORDER BY path, id')] if full else []
+            # 从文件抽结论：按剩下的字数估计要几批，每批到做时从上次做到的段落接着取
+            extract = []
+            for path, left in db.execute(
+                    "SELECT q.ref, (SELECT COALESCE(SUM(length(p.text)), 0) FROM paras p WHERE p.path = q.ref AND "
+                    "p.n >= COALESCE((SELECT done_n FROM ingest WHERE path = q.ref), 0)) FROM queue q "
+                    "WHERE q.kind = 'extract' ORDER BY q.added, q.ref").fetchall():
+                extract += [('extract', path)] * max(1, -(-left // BATCH_CHARS))
         chunks = lambda ids: [ids[i:i + BATCH_FACTS] for i in range(0, len(ids), BATCH_FACTS)]
-        return ([('file', p) for p in files] + [('facts', c) for c in chunks(queued)] +
+        return (extract + [('file', p) for p in files] + [('facts', c) for c in chunks(queued)] +
                 [('lint', c) for c in chunks(every)])
 
     def _flat(self, db, path):
@@ -646,7 +820,10 @@ class Memory:
                 if pt['stale']:
                     item['changed'] = True
                 pts.append(item)
-            payload['topics'].append({'id': 'T%d' % tid, 'title': title[0], 'points': pts})
+            rel = db.execute('SELECT related FROM topics WHERE id = ?', (tid,)).fetchone()
+            names = [r[0] for r in (db.execute('SELECT title FROM topics WHERE id = ?', (i,)).fetchone()
+                                    for i in related_ids(rel[0] if rel else None)) if r]
+            payload['topics'].append({'id': 'T%d' % tid, 'title': title[0], 'points': pts, 'related': names})
             if size() > budget:
                 payload['topics'].pop()
                 return False
@@ -658,6 +835,8 @@ class Memory:
         with self.lock:
             db = self._conn()
             cols = ', '.join(FACT_COLS)
+            if kind == 'extract':
+                return self._extract_batch(db, ref, budget, ctx)
             if kind == 'file':
                 ctx['consumed'].append(('file', ref))
                 stale = db.execute('SELECT %s FROM facts WHERE path = ? AND stale = 1 ORDER BY id' % cols,
@@ -709,6 +888,50 @@ class Memory:
                     row = db.execute('SELECT %s FROM facts WHERE id = ?' % cols, (fid,)).fetchone()
                     if size() >= budget or not row or not add_fact(row):
                         break
+            # 其他主题页的标题，供模型给出相关主题；放不下的不放
+            payload['other_topics'] = []
+            for (title,) in db.execute('SELECT title FROM topics ORDER BY updated DESC LIMIT 200').fetchall():
+                if title in ctx['topics'].values():
+                    continue
+                payload['other_topics'].append(title)
+                if size() > budget:
+                    payload['other_topics'].pop()
+                    break
+        return json.dumps(payload, ensure_ascii=False), ctx
+
+    @staticmethod
+    def _extract_batch(db, path, budget, ctx):
+        """从文件抽结论的一批：从上次做到的段落起，按段落取到 budget 字为止（至少一段）。"""
+        ctx['path'] = path
+        if not db.execute('SELECT 1 FROM files WHERE path = ?', (path,)).fetchone():
+            ctx['consumed'] = [('extract', path)]
+            return None, ctx
+        row = db.execute('SELECT done_n FROM ingest WHERE path = ?', (path,)).fetchone()
+        start = row[0] if row else 0
+        rows = db.execute('SELECT n, text FROM paras WHERE path = ? AND n >= ? ORDER BY n', (path, start)).fetchall()
+        total = db.execute('SELECT COALESCE(MAX(n), -1) + 1, COALESCE(SUM(length(text)), 0) FROM paras WHERE path = ?',
+                           (path,)).fetchone()
+        if not rows:
+            ctx['consumed'] = [('extract', path)]
+            return None, ctx
+        before = db.execute('SELECT COALESCE(SUM(length(text)), 0) FROM paras WHERE path = ? AND n < ?',
+                            (path, start)).fetchone()[0]
+        parts = max(1, -(-total[1] // max(1, budget)))
+        payload = {'path': path, 'part': min(parts, before // max(1, budget) + 1), 'parts': parts, 'text': ''}
+        base = len(json.dumps(payload, ensure_ascii=False))
+        text, used, nxt = [], base, start
+        for n, para in rows:
+            cost = len(json.dumps(para, ensure_ascii=False)) + 2
+            if text and used + cost > budget:
+                break
+            text.append(para)
+            used += cost
+            nxt = n + 1
+        payload['text'] = '\n\n'.join(text)
+        ctx['files'] = {1: path}
+        ctx['next_n'] = nxt
+        if nxt >= total[0]:
+            ctx['consumed'] = [('extract', path)]
         return json.dumps(payload, ensure_ascii=False), ctx
 
     def apply_update(self, ctx, reply, mode, run=None):
@@ -734,7 +957,7 @@ class Memory:
                 if (t, rid) in seen:
                     return
                 seen.add((t, rid))
-                cols = {'fact': FACT_COLS, 'point': POINT_COLS, 'topic': ('id', 'title', 'updated')}[t]
+                cols = {'fact': FACT_COLS, 'point': POINT_COLS, 'topic': TOPIC_COLS}[t]
                 row = db.execute('SELECT %s FROM %ss WHERE id = ?' % (', '.join(cols), t), (rid,)).fetchone()
                 undo.append({'t': t, 'id': rid, 'row': list(row) if row else None})
 
@@ -758,6 +981,12 @@ class Memory:
                 if text[:1].upper() == prefix and text[1:].isdigit() and int(text[1:]) in known:
                     return int(text[1:])
                 return None
+
+            if ctx['kind'] == 'extract':
+                self._apply_extract(db, ctx, plan, ok_quote, undo, seen, bump, changes, now)
+                run = self._record(db, run, mode, counts, changes, undo, now) if undo else run
+                db.commit()
+                return run, counts, changes
 
             # 结论：改写、合并、以新代旧、删除
             for op in plan.get('conclusions') or []:
@@ -816,6 +1045,7 @@ class Memory:
                     changes.append('删除：' + f['conclusion'])
 
             # 主题页：给了 id 的整页替换，new 的新建（同名的并入已有的那页）
+            rel_todo, touched = [], set()
             for page in plan.get('topics') or []:
                 if not isinstance(page, dict):
                     continue
@@ -849,8 +1079,10 @@ class Memory:
                         'SELECT path, qkey, text FROM points WHERE topic = ?', (tid,))}
                     want = {(p, norm(q), norm(t)) for p, t, q in keep + pts}
                     cur = db.execute('SELECT title FROM topics WHERE id = ?', (tid,)).fetchone()
+                    rel_todo.append((tid, page.get('related')))
                     if want == now_pts and cur and cur[0] == title:     # 没有变化
                         continue
+                    touched.add(tid)
                     snap('topic', tid)
                     for (pid,) in db.execute('SELECT id FROM points WHERE topic = ?', (tid,)).fetchall():
                         snap('point', pid)
@@ -860,6 +1092,8 @@ class Memory:
                     changes.append('更新主题页：' + title)
                 else:
                     tid = db.execute('INSERT INTO topics (title, updated) VALUES (?, ?)', (title, now)).lastrowid
+                    rel_todo.append((tid, page.get('related')))
+                    touched.add(tid)
                     seen.add(('topic', tid))
                     undo.append({'t': 'topic', 'id': tid, 'row': None})
                     bump('topics_new')
@@ -870,6 +1104,7 @@ class Memory:
                                                ' '.join(tokens(title + ' ' + text + ' ' + quote)), 0])
                     seen.add(('point', pid))
                     undo.append({'t': 'point', 'id': pid, 'row': None})
+            self._apply_related(db, ctx, rel_todo, touched, snap, bump, changes)
             for ref in plan.get('delete_topics') or []:
                 tid = ref_id(ref, 'T', ctx['topics'])
                 row = db.execute('SELECT title FROM topics WHERE id = ?', (tid,)).fetchone() if tid else None
@@ -906,6 +1141,59 @@ class Memory:
                 run = self._record(db, run, mode, counts, changes, undo, now)
             db.commit()
         return run, counts, changes
+
+    def _apply_extract(self, db, ctx, plan, ok_quote, undo, seen, bump, changes, now):
+        """从文件抽结论的回答：原句核对通过、不是「不对」过、记忆里还没有同一原句的写入为新结论，排进更新队列。"""
+        path = ctx['path']
+        if db.execute('SELECT 1 FROM files WHERE path = ?', (path,)).fetchone():
+            keys = set()
+            for op in plan.get('conclusions') or []:
+                if not isinstance(op, dict):
+                    continue
+                concl, quote = _clean(str(op.get('conclusion') or '')), str(op.get('quote') or '').strip()
+                qkey = norm(quote)
+                if not concl or qkey in keys or not ok_quote(path, quote, concl) or db.execute(
+                        'SELECT 1 FROM facts WHERE path = ? AND qkey = ?', (path, qkey)).fetchone():
+                    continue
+                keys.add(qkey)
+                fid = self._put_fact(db, [None, path, quote, qkey, concl, AUTO_QUESTION, 1, now, now, '[]',
+                                          ' '.join(tokens(concl + ' ' + quote)), 0])
+                self._enqueue(db, 'fact', fid)
+                seen.add(('fact', fid))
+                undo.append({'t': 'fact', 'id': fid, 'row': None})
+                bump('extracted')
+                changes.append('从文件抽出：' + concl)
+            if 'next_n' in ctx:
+                db.execute('UPDATE ingest SET done_n = ? WHERE path = ?', (ctx['next_n'], path))
+        for kind, ref in ctx['consumed']:
+            db.execute('DELETE FROM queue WHERE kind = ? AND ref = ?', (kind, str(ref)))
+
+    @staticmethod
+    def _apply_related(db, ctx, todo, touched, snap, bump, changes):
+        """主题页的相关主题：模型给的标题（或 T 开头的 id）换成已有主题页的 id，不含本页，最多 MAX_RELATED 个。"""
+        titles = {t: i for i, t in db.execute('SELECT id, title FROM topics').fetchall()}
+        for tid, wanted in todo:
+            if wanted is None or not isinstance(wanted, list):
+                continue
+            ids = []
+            for w in wanted:
+                w = str(w or '').strip()
+                i = int(w[1:]) if w[:1].upper() == 'T' and w[1:].isdigit() and int(w[1:]) in ctx['topics'] else \
+                    titles.get(_clean(w)[:60])
+                if i and i != tid and i not in ids:
+                    ids.append(i)
+            ids = ids[:MAX_RELATED]
+            row = db.execute('SELECT title, related FROM topics WHERE id = ?', (tid,)).fetchone()
+            if not row or related_ids(row[1]) == ids:
+                continue
+            snap('topic', tid)      # 撤销时整页放回：主题页删掉会连带删掉要点，要点一并记下
+            for (pid,) in db.execute('SELECT id FROM points WHERE topic = ?', (tid,)).fetchall():
+                snap('point', pid)
+            db.execute('UPDATE topics SET related = ? WHERE id = ?', (json.dumps(ids), tid))
+            if tid not in touched:
+                touched.add(tid)
+                bump('topics_updated')
+                changes.append('更新主题页（相关主题）：' + row[0])
 
     @staticmethod
     def _record(db, run, mode, counts, changes, undo, now):
@@ -950,8 +1238,9 @@ class Memory:
                         if u['t'] != t or not row:
                             continue
                         try:
-                            if t == 'topic':
-                                db.execute('INSERT INTO topics (id, title, updated) VALUES (?, ?, ?)', row)
+                            if t == 'topic':      # 升级前的记录没有 related 一栏
+                                db.execute('INSERT INTO topics (id, title, updated, related) VALUES (?, ?, ?, ?)',
+                                           (list(row) + [None])[:4])
                             elif t == 'fact':
                                 f = dict(zip(FACT_COLS, row))
                                 if not db.execute('SELECT 1 FROM rejected WHERE path = ? AND qkey = ? AND ckey = ?',
@@ -965,6 +1254,69 @@ class Memory:
             db.execute('DELETE FROM updates WHERE id = ?', (run,))
             db.commit()
             return True
+
+    # ------------------------------------------------------------ 保存为 Markdown
+
+    def export_markdown(self):
+        """把主题页与结论写成可用 Obsidian 打开的一组 Markdown 文件，返回 zip 的字节；记忆里没有主题页和结论时返回 None。
+        主题/<主题>.md：要点、原句、出处链接与相关主题链接；文件/<文件名>.md：原路径、来自它的结论与原句；
+        索引.md：全部主题页。不含段落全文。"""
+        with self.lock:
+            db = self._conn()
+            topics = db.execute('SELECT id, title, updated, related FROM topics ORDER BY title, id').fetchall()
+            points = db.execute('SELECT topic, path, text, quote, stale FROM points ORDER BY topic, id').fetchall()
+            facts = db.execute('SELECT path, conclusion, quote, count, last, stale FROM facts ORDER BY path, last DESC'
+                               ).fetchall()
+        if not topics and not facts:
+            return None
+        used = set()
+        tname = {t[0]: md_name(t[1], used) for t in topics}
+        paths = sorted({p[1] for p in points} | {f[0] for f in facts})
+        fname = {p: md_name(os.path.basename(p.rstrip(os.sep)) or p, used) for p in paths}
+        tlink = lambda tid: '[[主题/%s|%s]]' % (tname[tid], tname[tid])
+        flink = lambda path: '[[文件/%s|%s]]' % (fname[path], fname[path])
+        stamp = lambda t: time.strftime('%Y-%m-%d %H:%M', time.localtime(t or 0))
+        quote = lambda q: '\n'.join('  > ' + line for line in (q.strip() or ' ').split('\n'))
+        out = {}
+        by_topic, topics_of = {}, {}
+        for tid, path, text, q, stale in points:
+            by_topic.setdefault(tid, []).append((path, text, q, stale))
+            topics_of.setdefault(path, [])
+            if tid not in topics_of[path]:
+                topics_of[path].append(tid)
+        for tid, title, updated, related in topics:
+            lines = ['# ' + title, '', '更新时间：' + stamp(updated), '', '## 要点', '']
+            for path, text, q, stale in by_topic.get(tid, []):
+                lines += ['- %s%s（出处：%s）' % (text, '（待复核）' if stale else '', flink(path)), quote(q)]
+            rel = [i for i in related_ids(related) if i in tname]
+            if rel:
+                lines += ['', '## 相关主题', ''] + ['- ' + tlink(i) for i in rel]
+            out['主题/%s.md' % tname[tid]] = '\n'.join(lines) + '\n'
+        by_file = {}
+        for path, concl, q, count, last, stale in facts:
+            by_file.setdefault(path, []).append((concl, q, count, stale))
+        for path in paths:
+            lines = ['# ' + fname[path], '', '原路径：`%s`' % path.replace('`', "'"), '']
+            if by_file.get(path):
+                lines += ['## 结论', '']
+                for concl, q, count, stale in by_file[path]:
+                    extra = '（得出 %d 次）' % count if count > 1 else ''
+                    lines += ['- %s%s%s' % (concl, extra, '（待复核）' if stale else ''), quote(q)]
+                lines.append('')
+            if topics_of.get(path):
+                lines += ['## 出现在主题', ''] + ['- ' + tlink(i) for i in topics_of[path]]
+            out['文件/%s.md' % fname[path]] = '\n'.join(lines).rstrip('\n') + '\n'
+        index = ['# 记忆索引', '', '保存时间：' + stamp(time.time()), '',
+                 '主题页 %d 页、结论 %d 条、文件 %d 个。' % (len(topics), len(facts), len(paths)), '']
+        if topics:
+            index += ['## 主题', ''] + ['- ' + tlink(t[0]) for t in topics] + ['']
+        index += ['## 文件', ''] + ['- ' + flink(p) for p in paths]
+        out['索引.md'] = '\n'.join(index) + '\n'
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as z:
+            for name in sorted(out):
+                z.writestr(name, out[name].encode('utf-8'))
+        return buf.getvalue()
 
     # ------------------------------------------------------------ 检索
 

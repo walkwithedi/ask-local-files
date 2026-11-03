@@ -2201,7 +2201,208 @@ class PickerTest(ServerCase):
 class PageVersionTest(unittest.TestCase):
     def test_footer_default_matches_version(self):
         with open(os.path.join(TOOL, 'ask_local_files.html'), encoding='utf-8') as f:
-            self.assertIn('<span id="ver">找文件问 AI v%s</span>' % fa.VERSION, f.read())
+            self.assertIn('<span id="ver">找资料问 AI v%s</span>' % fa.VERSION, f.read())
+
+    def test_help_matches_version(self):
+        # 帮助页随行为一起更新：页脚版本号须与 VERSION 一致
+        with open(os.path.join(TOOL, 'help.html'), encoding='utf-8') as f:
+            page = f.read()
+        self.assertIn('<span id="ver">找资料问 AI 帮助 v%s</span>' % fa.VERSION, page)
+        self.assertIn('<title>找资料问 AI 帮助</title>', page)
+        self.assertNotRegex(page, r'(?i)(src|href)=["\']https?://')      # 不加载网络资源
+
+    def test_desktop_name(self):
+        with open(os.path.join(TOOL, '双击运行.desktop'), encoding='utf-8') as f:
+            self.assertIn('Name=找资料问 AI\n', f.read())
+
+
+class HelpPageTest(ServerCase):
+    def test_help_served(self):
+        code, page = self.call('/help.html', token=None)
+        self.assertEqual(code, 200)
+        self.assertIn('找资料问 AI 帮助', page)
+        self.assertEqual(self.call('/help.html', token=None, headers={'Origin': 'http://evil.example'})[0], 403)
+
+
+class AutoIngestTest(ServerCase):
+    """自动记入记忆：勾选文件夹、后台记入、未记入清单、文件改动与删除、抽结论、容量与保存为 Markdown。"""
+
+    model = 'memo'
+
+    def setUp(self):
+        super().setUp()
+        write(os.path.join(self.docs, '计划.txt'), '第一阶段在三月底完成验收。\n\n预算总额为一百万元。')
+        with open(os.path.join(self.docs, '坏文件.docx'), 'wb') as f:
+            f.write(b'not a zip')
+        self.index.refresh(wait=True)
+
+    def wait(self):
+        for _ in range(200):
+            st = self.call('/api/memory-ingest')[1]
+            if not st['running']:
+                return st
+            time.sleep(0.05)
+        raise AssertionError('自动记入没有结束')
+
+    def turn_on(self):
+        code, r = self.call('/api/folders', {'auto': self.docs, 'on': True})
+        self.assertEqual((code, r['auto_folders']), (200, [self.docs]))
+        return self.wait()
+
+    def test_toggle_ingest_and_skipped(self):
+        st = self.call('/api/memory-ingest')[1]
+        self.assertEqual((st['running'], st['summary'], st['folders']), (False, None, []))
+        self.assertEqual(self.call('/api/memory-ingest', {'action': 'run'})[0], 400)     # 还没勾选
+        self.assertEqual(self.call('/api/folders', {'auto': '/nope', 'on': True})[0], 400)
+        st = self.turn_on()
+        self.assertEqual(fa.Config(self.config.path).auto_folders, [self.docs])
+        sm = st['summary']
+        # 季度总结.txt、会议记录.md、计划.txt、坏文件.docx；压缩包不算
+        self.assertEqual((sm['total'], sm['done'], sm['waiting'], sm['skipped_total']), (4, 3, 0, 1))
+        self.assertEqual(sm['skipped'][0]['path'], os.path.join(self.docs, '坏文件.docx'))
+        self.assertEqual(sm['skipped'][0]['state'], 'failed')
+        stats = self.call('/api/memory')[1]['stats']
+        self.assertEqual((stats['files'], stats['extract']), (3, 3))
+        self.assertIn('自动记入：新记入 3 个文件，1 个没有记入。', st['result']['text'])
+        # 忽略 Markdown 文件：.md 不再算进来
+        self.call('/api/settings', {'ignore_md': True})
+        self.assertEqual(self.wait()['summary']['total'], 3)
+        # 改了的文件重新记入；删掉的文件忘掉
+        write(os.path.join(self.docs, '计划.txt'), '第一阶段改到四月底验收。')
+        os.remove(os.path.join(self.docs, '季度总结.txt'))
+        self.index.refresh(wait=True)
+        self.wait()
+        self.assertEqual(self.call('/api/memory-ingest', {'action': 'run'})[0], 200)
+        sm = self.wait()['summary']
+        self.assertEqual((sm['total'], sm['done']), (2, 1))
+        paths = [f['path'] for f in self.call('/api/memory')[1]['files']]
+        self.assertNotIn(os.path.join(self.docs, '季度总结.txt'), paths)
+        # 取消勾选：不再记入，已记住的保留
+        code, r = self.call('/api/folders', {'auto': self.docs, 'on': False})
+        self.assertEqual((code, r['auto_folders'], r['ingest']['summary']), (200, [], None))
+        self.assertGreater(self.call('/api/memory')[1]['stats']['files'], 0)
+        # 记忆关闭时不能打开
+        self.call('/api/settings', {'memory': False})
+        self.assertEqual(self.call('/api/folders', {'auto': self.docs, 'on': True})[0], 400)
+
+    def test_remove_folder_drops_auto(self):
+        self.turn_on()
+        code, r = self.call('/api/folders', {'remove': self.docs})
+        self.assertEqual((code, r['auto_folders']), (200, []))
+
+    def test_extract_then_topics_and_export(self):
+        self.assertEqual(self.call('/api/memory-export')[0], 400)       # 还没有主题页和结论
+        self.turn_on()
+        self.call('/api/memory-update', {'action': 'run'})
+        for _ in range(200):
+            st = self.call('/api/memory-update')[1]
+            if not st['running']:
+                break
+            time.sleep(0.05)
+        self.assertEqual(st['result']['kind'], 'done')
+        self.assertIn('从文件抽出结论', st['result']['text'])
+        self.assertIn('新建主题页 1 页', st['result']['text'])       # 抽出的结论接着整理进主题页
+        facts = self.call('/api/memory')[1]['facts']
+        self.assertIn('第一阶段在三月底完成验收。', [f['quote'] for f in facts])
+        self.assertEqual(st['pending'], 0)
+        req = urllib.request.Request(self.base + '/api/memory-export', headers={'X-Token': 'tok'})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            self.assertEqual(r.headers['Content-Type'], 'application/zip')
+            self.assertIn("filename*=UTF-8''", r.headers['Content-Disposition'])
+            names = zipfile.ZipFile(io.BytesIO(r.read())).namelist()
+        self.assertIn('索引.md', names)
+        self.assertIn('主题/验收安排.md', names)
+        self.assertIn('文件/计划.txt.md', names)
+
+    def test_capacity_setting(self):
+        self.assertEqual(self.call('/api/settings', {'memory_mb': 10})[0], 400)
+        self.assertEqual(self.call('/api/settings', {'memory_mb': True})[0], 400)
+        code, r = self.call('/api/settings', {'memory_mb': 2048})
+        self.assertEqual((code, r['memory_mb']), (200, 2048))
+        self.assertEqual(fa.Config(self.config.path).memory_mb, 2048)
+        self.assertEqual(self.memory.max_bytes, 2048 * 1024 * 1024)
+        self.assertEqual(fa.Config(os.path.join(self.root, 'none.json')).memory_mb, fa.MEMORY_MB)
+
+    def test_exit_not_held(self):
+        self.st.quit.set()
+        self.st.ingest.running = True
+        self.assertEqual(self.st.should_exit(), 'quit requested')     # 自动记入不拖住退出
+        self.st.ingest.running = False
+
+
+class OpencodeTest(ServerCase):
+    """配置 OpenCode：只替换所选服务商的 AK，测试通过才写入，可回滚。"""
+
+    def setUp(self):
+        super().setUp()
+        self.dir = os.path.join(self.root, 'opencode')
+        os.makedirs(self.dir)
+        self.patch = mock.patch.object(fa, 'OPENCODE_DIR', self.dir)
+        self.patch.start()
+        self.path = os.path.join(self.dir, 'opencode.jsonc')
+        self.text = ('{\n  // 说明\n  "provider": {\n    "corp": {"options": {"baseURL": "%s", /* 注释 */ "apiKey": "old"},\n'
+                     '             "models": {"ok": {}, "err401": {}}},\n    "nokey": {"options": {"baseURL": "%s"}, '
+                     '"models": {"ok": {}}},\n  },\n  "model": "corp/ok"\n}\n') % (MODEL_BASE, MODEL_BASE)
+
+    def tearDown(self):
+        self.patch.stop()
+        super().tearDown()
+
+    def test_no_config(self):
+        code, r = self.call('/api/opencode')
+        self.assertEqual((code, r['exists']), (200, False))
+        code, r = self.call('/api/opencode', {'action': 'set', 'provider': 'corp', 'key': 'k'})
+        self.assertEqual(code, 400)
+        self.assertIn('自定义接口', r['error'])
+        self.assertFalse(os.listdir(self.dir))       # 不生成文件
+
+    def test_set_and_rollback(self):
+        write(self.path, self.text)
+        os.chmod(self.path, 0o700)
+        code, r = self.call('/api/opencode')
+        self.assertEqual([(p['id'], p['has_key_field']) for p in r['providers']], [('corp', True), ('nokey', False)])
+        self.assertFalse(r['backup'])
+        self.assertEqual(self.call('/api/opencode', {'action': 'set', 'provider': 'corp', 'key': ''})[0], 400)
+        self.assertEqual(self.call('/api/opencode', {'action': 'set', 'provider': 'corp', 'key': 'a\nb'})[0], 400)
+        code, r = self.call('/api/opencode', {'action': 'set', 'provider': 'nokey', 'key': 'k'})
+        self.assertIn('没有 apiKey', r['error'])
+        code, r = self.call('/api/opencode', {'action': 'set', 'provider': 'corp', 'key': 'NEW-KEY'})
+        self.assertEqual(code, 200, r)
+        self.assertTrue(r['info']['backup'])
+        with open(self.path, encoding='utf-8') as f:
+            now = f.read()
+        self.assertEqual(now, self.text.replace('"apiKey": "old"', '"apiKey": "NEW-KEY"'))     # 注释与格式保留
+        self.assertEqual(os.stat(self.path).st_mode & 0o777, 0o700)
+        self.assertEqual(os.stat(self.path + fa.OPENCODE_BACKUP).st_mode & 0o777, 0o600)
+        self.assertEqual(json.loads(urllib.request.urlopen(MODEL_BASE + '/last').read())['model'], 'ok')
+        self.assertIn('oc:corp/ok', [m['id'] for m in r['models']])
+        code, r = self.call('/api/opencode', {'action': 'rollback'})
+        self.assertEqual((code, r['info']['backup']), (200, False))
+        with open(self.path, encoding='utf-8') as f:
+            self.assertEqual(f.read(), self.text)
+        self.assertEqual(self.call('/api/opencode', {'action': 'rollback'})[0], 400)
+
+    def test_test_failure_keeps_file(self):
+        write(self.path, self.text.replace('"model": "corp/ok"', '"model": "corp/err401"'))
+        code, r = self.call('/api/opencode', {'action': 'set', 'provider': 'corp', 'key': 'BAD'})
+        self.assertEqual(code, 400)
+        self.assertIn('用新 AK 测试没有通过', r['error'])
+        with open(self.path, encoding='utf-8') as f:
+            self.assertIn('"apiKey": "old"', f.read())
+        self.assertFalse(os.path.exists(self.path + fa.OPENCODE_BACKUP))
+
+    def test_broken_config(self):
+        write(self.path, '{"provider": {"corp": {"options": {"apiKey": "x"}}')
+        code, r = self.call('/api/opencode', {'action': 'set', 'provider': 'corp', 'key': 'k'})
+        self.assertEqual(code, 400)
+        self.assertIn('格式有误', r['error'])
+
+    def test_jsonc_span(self):
+        text = '{"a": {"b": [1, {"c": 2}], "k": "v\\"x"}, // c\n "z": null}'
+        self.assertEqual(text[slice(*fa.jsonc_span(text, ['a', 'k']))], '"v\\"x"')
+        self.assertIsNone(fa.jsonc_span(text, ['a', 'nope']))
+        with self.assertRaises(ValueError):
+            fa.jsonc_span('{"a": 1} x', ['a'])
 
 
 def zip_bytes(entries, links=()):
