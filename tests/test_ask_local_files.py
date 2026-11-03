@@ -2358,7 +2358,7 @@ class OpencodeTest(ServerCase):
 
     def test_set_and_rollback(self):
         write(self.path, self.text)
-        os.chmod(self.path, 0o640)
+        os.chmod(self.path, 0o700)
         code, r = self.call('/api/opencode')
         self.assertEqual([(p['id'], p['has_key_field']) for p in r['providers']], [('corp', True), ('nokey', False)])
         self.assertFalse(r['backup'])
@@ -2372,7 +2372,7 @@ class OpencodeTest(ServerCase):
         with open(self.path, encoding='utf-8') as f:
             now = f.read()
         self.assertEqual(now, self.text.replace('"apiKey": "old"', '"apiKey": "NEW-KEY"'))     # 注释与格式保留
-        self.assertEqual(os.stat(self.path).st_mode & 0o777, 0o640)
+        self.assertEqual(os.stat(self.path).st_mode & 0o777, 0o700)
         self.assertEqual(os.stat(self.path + fa.OPENCODE_BACKUP).st_mode & 0o777, 0o600)
         self.assertEqual(json.loads(urllib.request.urlopen(MODEL_BASE + '/last').read())['model'], 'ok')
         self.assertIn('oc:corp/ok', [m['id'] for m in r['models']])
