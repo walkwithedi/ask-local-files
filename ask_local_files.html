@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>本机资料问答</title>
+<title>资料管家</title>
 <script>if (new URLSearchParams(location.search).get('embed') === '1') document.documentElement.classList.add('embed');</script>
 <style>
   :root { --bg:#f6f7f9; --card:#fff; --text:#1f2328; --muted:#656d76; --line:#d0d7de; --accent:#0969da; --ok:#1a7f37; --warn:#9a6700; --bad:#cf222e; --pick:#ddf4ff; --bad-bg:#ffebe9; --folder:#9a5b00; }
@@ -16,8 +16,10 @@
   main { max-width:1000px; margin:0 auto; padding:20px 16px 40px; }
   header { display:flex; align-items:center; justify-content:space-between; gap:12px; }
   .head-title { display:flex; flex-wrap:wrap; align-items:center; gap:4px 10px; min-width:0; }
-  header .row { flex-wrap:nowrap; }
+  header .row { flex-wrap:nowrap; flex-shrink:0; }
   h1 { font-size:22px; margin:0; }
+  .tagline { color:var(--muted); font-size:14px; }
+  @media (max-width:480px) { .tagline { flex-basis:100%; order:3; font-size:13px; } }
   h2 { font-size:17px; margin:0 0 10px; }
   .sub, .hint { color:var(--muted); }
   .sub { margin:4px 0 16px; }
@@ -233,7 +235,8 @@
 <main>
   <header>
     <div class="head-title">
-      <h1>本机资料问答</h1>
+      <h1>资料管家</h1>
+      <span id="tagline" class="tagline">用 AI 查找、整理、问答本机资料</span>
       <button id="foldSub" class="toggle" type="button" aria-expanded="false" aria-controls="sub">说明<span class="arrow" aria-hidden="true">▸</span></button>
     </div>
     <div class="row">
@@ -521,7 +524,7 @@
   <div id="convFrames" hidden></div>
 
 
-  <footer><span id="ver">本机资料问答 v2.11</span>　<button id="copyUrl" type="button" class="small">复制网址</button>　网址固定不变，可收藏或复制到浏览器打开。关闭页面后服务继续运行，没有页面、也没有任务 30 分钟后自动退出；点「退出」立即结束，开着的页面一起结束。有回答正在生成（含 skill 脚本运行）或知识库正在手动更新时，服务等它结束再退出；自动收录与空闲时自动更新不拖住退出，下次启动接着做。对话不自动保存，退出即清空；知识库存在本机，可在「知识库设置」里关闭或清空。<div id="urlStatus" class="status info" aria-live="polite"></div></footer>
+  <footer><span id="ver">资料管家 v2.12</span>　<button id="copyUrl" type="button" class="small">复制网址</button>　网址固定不变，可收藏或复制到浏览器打开。关闭页面后服务继续运行，没有页面、也没有任务 30 分钟后自动退出；点「退出」立即结束，开着的页面一起结束。有回答正在生成（含 skill 脚本运行）或知识库正在手动更新时，服务等它结束再退出；自动收录与空闲时自动更新不拖住退出，下次启动接着做。对话不自动保存，退出即清空；知识库存在本机，可在「知识库设置」里关闭或清空。<div id="urlStatus" class="status info" aria-live="polite"></div></footer>
 </main>
 <script>
 'use strict';
@@ -1420,7 +1423,7 @@ $('copyPaths').addEventListener('click', () => {
   fallback();
 });
 $('saveTexts').addEventListener('click', () => exportRun('保存', () => exportText().then(r => {
-  const name = '本机资料问答-文字-' + stampNow() + '.md';
+  const name = '资料管家-文字-' + stampNow() + '.md';
   saveBlob(new Blob([r.text], {type: 'text/markdown;charset=utf-8'}), name);
   say('pickStatus', '已保存为 ' + name + '（在浏览器的下载文件夹里）：' + r.note + '。', 'ok');
 })));
@@ -1663,7 +1666,7 @@ function saveOutput(f) {
 function saveStem(stamp) {
   const trim = x => x.replace(/^[\s.]+|[\s.]+$/g, '');
   const t = trim(trim(convTitle().text.replace(/[\/\\:*?"<>|\x00-\x1f\x7f]/g, '')).slice(0, 20));
-  return '本机资料问答-' + (t ? t + '-' : '') + stamp;
+  return '资料管家-' + (t ? t + '-' : '') + stamp;
 }
 
 function stampNow() {
@@ -2760,7 +2763,7 @@ function refsMarkdown() {
 
 // 整个对话写成 Markdown：「保存对话」与「保存为 Word」共用
 function chatMarkdown(stamp) {
-  const lines = ['# 本机资料问答 对话 ' + stamp];
+  const lines = ['# 资料管家 对话 ' + stamp];
   chat.forEach(m => {
     lines.push('', m.role === 'user' ? '## 问' : '## 答' + (m.model ? '（' + m.model + (m.skill ? '，skill ' + m.skill : '') + '）' : ''));
     if (m.memory && m.memory.files.length) {
@@ -3095,7 +3098,7 @@ $('copyUrl').addEventListener('click', () => copyText(pageUrl, $('copyUrl'), 'ur
 api('/api/state').then(s => {
   maxFiles = s.max_files;
   if (s.url) pageUrl = s.url;
-  $('ver').textContent = '本机资料问答 v' + s.version;
+  $('ver').textContent = '资料管家 v' + s.version;
   setDedup(s.dedup !== false);
   setRegex(s.regex === true);
   setIgnoreMd(s.ignore_md !== false);

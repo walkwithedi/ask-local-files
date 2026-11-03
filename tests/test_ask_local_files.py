@@ -2201,26 +2201,26 @@ class PickerTest(ServerCase):
 class PageVersionTest(unittest.TestCase):
     def test_footer_default_matches_version(self):
         with open(os.path.join(TOOL, 'ask_local_files.html'), encoding='utf-8') as f:
-            self.assertIn('<span id="ver">本机资料问答 v%s</span>' % fa.VERSION, f.read())
+            self.assertIn('<span id="ver">资料管家 v%s</span>' % fa.VERSION, f.read())
 
     def test_help_matches_version(self):
         # 帮助页随行为一起更新：页脚版本号须与 VERSION 一致
         with open(os.path.join(TOOL, 'help.html'), encoding='utf-8') as f:
             page = f.read()
-        self.assertIn('<span id="ver">本机资料问答 帮助 v%s</span>' % fa.VERSION, page)
-        self.assertIn('<title>本机资料问答 帮助</title>', page)
+        self.assertIn('<span id="ver">资料管家 帮助 v%s</span>' % fa.VERSION, page)
+        self.assertIn('<title>资料管家 帮助</title>', page)
         self.assertNotRegex(page, r'(?i)(src|href)=["\']https?://')      # 不加载网络资源
 
     def test_desktop_name(self):
         with open(os.path.join(TOOL, '双击运行.desktop'), encoding='utf-8') as f:
-            self.assertIn('Name=本机资料问答\n', f.read())
+            self.assertIn('Name=资料管家\n', f.read())
 
 
 class HelpPageTest(ServerCase):
     def test_help_served(self):
         code, page = self.call('/help.html', token=None)
         self.assertEqual(code, 200)
-        self.assertIn('本机资料问答 帮助', page)
+        self.assertIn('资料管家 帮助', page)
         self.assertEqual(self.call('/help.html', token=None, headers={'Origin': 'http://evil.example'})[0], 403)
 
 
