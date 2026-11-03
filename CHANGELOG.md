@@ -1,5 +1,24 @@
 # Changelog
 
+## 2.16.0
+
+- Upgrade module 1.1: files unpacked or copied during an upgrade get their permission bits reduced by the umask, as unzip and cp do; with a umask of 022 nothing changes. No other change.
+
+## 2.15.0
+
+- Upgrade in place: 升级 ("upgrade") at the top right of the page takes a new release zip or unpacked folder (picked or dropped), shows current version → new version, the changelog entries between them, the files that will be kept and any extra files, and upgrades after confirmation. An answer being written, a knowledge base update, inclusion or sync in progress is waited for; afterwards the server restarts on the new version with the same port and token and the page reloads. 退回上一版 ("roll back") swaps back to the previous version. See the Upgrade section of the README.
+- Command line: `--upgrade`, `--rollback`, `--yes` and `--version`; upgrading or rolling back from the command line asks to quit the running tool first.
+- New files `tool_upgrade.py` (the upgrade module) and `upgrade-keep.txt` (files carried over: `data-dir.txt` and the server log). The help page has an upgrade section.
+- Release zips now include `help.html`, which they had left out since 2.10.0, and the two new files.
+
+## 2.14.0
+
+- Starting the tool while this tool from another folder or of another version holds the port (for example after the tool folder was moved or replaced) asks that one to quit and takes over the port, instead of opening a page from the old program. `--new-token` and `--data-dir` treat that case as running too. The error for a missing page file says why and what to do next.
+
+## 2.13.0
+
+- The desktop entry is renamed from `双击运行.desktop` to `资料管家.desktop`, so it no longer has the same file name as other tools' entries and can be sent to the desktop alongside them. A desktop link made to the old name stops working and has to be made again from the tool folder. The entry's content and the way it finds the program are unchanged; its not-found message, the page and the help page name the new file.
+
 ## 2.12.1
 
 - The READMEs end with a Feedback section giving the maintainer's feedback address. The sensitive-data scanner allows that one full address (PUBLIC_ADDRESSES) and still reports every other e-mail address. No change to the tool. walkwithedi/edi-lab#206.

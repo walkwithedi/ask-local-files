@@ -3,7 +3,7 @@
 """
 ask_local_files  --  资料管家
 
-纯 Python 3 标准库实现。双击「双击运行」即启动本程序：只监听 127.0.0.1 的固定端口（默认 47821），
+纯 Python 3 标准库实现。双击「资料管家」即启动本程序：只监听 127.0.0.1 的固定端口（默认 47821），
 网址带持久令牌（~/.config/ask-local-files/token，权限 600），用浏览器打开同目录的 ask_local_files.html；
 网址跨重启不变，可收藏或复制到任意浏览器。本工具已在运行时只打开页面，不另起一份。
 关闭页面后服务继续运行，没有页面、也没有任务 30 分钟后自动退出；点「退出」立即结束，
@@ -31,6 +31,9 @@ ask_local_files  --  资料管家
       （保存位置里的 memory.sqlite，权限 600），回答里核对通过的摘句连同结论记下；
       之后提问时按关键字检索知识库，结论与原文段落排在已选文件之后一起发给模型，取用前按文件当前内容复核。
       「更新知识库」或空闲时自动把知识库分批交给模型，整理成主题页，合并重复、以新代旧、改写文件改过的结论，可撤销。
+    - 升级：页面「升级」选新版 zip 或解压好的目录，在原位置替换工具目录（tool_upgrade.py；保留
+      upgrade-keep.txt 列出的文件，旧版留作上一版），有任务进行中时先等它结束，完成后以同一端口与令牌
+      用新版重新启动，页面自动重新连上；「退回上一版」与上一版对调。命令行 --upgrade、--rollback 同。
     - 文件夹输入框接受 file:/// 地址；可由本机服务弹出系统的目录选择框（zenity、kdialog 或 tkinter）。
     - 按文件名去重：同名（不区分大小写，去掉一个副本标记后相同也算）只列修改时间最新的一个。
 
@@ -38,6 +41,8 @@ ask_local_files  --  资料管家
     python3 ask_local_files.py [--no-browser] [--no-app] [--port N] [--idle-timeout 秒] [--log-level LEVEL]
     python3 ask_local_files.py --print-url     只打印网址，不启动
     python3 ask_local_files.py --new-token     重新生成令牌（旧网址作废），打印新网址
+    python3 ask_local_files.py --upgrade <zip或目录> [--yes]    原地升级到新版
+    python3 ask_local_files.py --rollback [--yes]                退回上一版
 """
 
 import argparse
@@ -75,7 +80,7 @@ from urllib.parse import parse_qs, urlsplit
 LOG_FORMAT = '%(asctime)s [%(levelname)s] %(name)s.%(funcName)s:%(lineno)d - %(message)s'
 log = logging.getLogger('ask_local_files')
 
-VERSION = '2.12'
+VERSION = '2.16'
 HERE = os.path.dirname(os.path.abspath(__file__))
 PAGE_FILE = os.path.join(HERE, 'ask_local_files.html')
 HELP_FILE = os.path.join(HERE, 'help.html')
@@ -103,6 +108,7 @@ PING_TIMEOUT = 600      # 页面停止心跳多少秒后视为已关闭（浏览
 DEFAULT_PORT = 47821    # 固定端口，可由 --port 或设置文件的 port 改
 IDLE_TIMEOUT = 1800     # 没有页面、也没有任务多少秒后退出；0 表示不自动退出
 HELLO_TIMEOUT = 3       # 探测端口上是否已有本工具在运行时最多等多少秒
+REPLACE_TIMEOUT = 10    # 让别处目录或别的版本的本工具退出后，最多等多少秒端口空出来
 APP_ID = 'ask-local-files'
 MAX_BODY = 8 * 1024 * 1024
 CHECK_EVERY = 30        # 搜索时至多每多少秒校验一次文件夹变化
@@ -198,6 +204,13 @@ APP_DESKTOP_FILES = ('qaxbrowser-safe.desktop', 'qaxbrowser.desktop', 'browser36
 SKILL_NAME_RE = re.compile(r'^[a-z0-9]+(-[a-z0-9]+)*$')   # OpenCode 对 skill 名称的要求
 
 import ask_memory   # noqa: E402  同目录的知识库模块
+
+try:
+    import tool_upgrade
+except ImportError:     # 升级模块缺失时其余功能照常可用
+    tool_upgrade = None
+UPGRADE_MAIN = ('ask_local_files.py', 'ask_memory.py', 'ask_local_files.html')     # 升级时新版必须带的文件
+NO_UPGRADE = '升级模块 tool_upgrade.py 缺失，请重新解压完整的工具目录'
 
 try:
     import doc2kb_core
@@ -2611,6 +2624,11 @@ class WebState:
         self.updater = MemoryUpdater(self)
         self.ingest = AutoIngest(self)
         index.on_done = self.ingest.start
+        self.upgrade = (tool_upgrade.WebJob(HERE, UPGRADE_MAIN, 'zh', busy=lambda: bool(self.busy_reason()))
+                        if tool_upgrade else None)
+
+    def upgrading(self):
+        return bool(self.upgrade and (self.upgrade.running or self.upgrade.restart.is_set()))
 
     def busy_reason(self):
         """不能更改保存位置的原因，可以改时返回空串。"""
@@ -2689,7 +2707,7 @@ class WebState:
         """返回退出原因，不该退出时返回 None；有回答正在生成或选择框开着时一律不退出。
         关闭页面不退出：没有页面、也没有任务持续 idle 秒后才退出，空闲从最后一个页面关闭或任务结束时算起。"""
         now = time.monotonic()
-        if self.picker.busy():      # 选择框开着时也不按心跳把页面判为已关闭
+        if self.picker.busy() or self.upgrading():     # 选择框开着、正在升级时也不按心跳把页面判为已关闭
             return None
         with self.lock:
             for page, (t, _) in list(self.pages.items()):
@@ -2793,8 +2811,9 @@ class Handler(BaseHTTPRequestHandler):
         if url.path in ('/', '/index.html'):
             self.send_page(PAGE_FILE, 'ask_local_files.html')
         elif url.path == '/api/hello':
-            # 启动时探测端口上是否已是本工具在运行（令牌对得上）
-            self.send_json(200, {'app': APP_ID, 'version': VERSION})
+            # 启动时探测端口上是否已是本工具在运行（令牌对得上），并比对工具目录与版本
+            self.send_json(200, {'app': APP_ID, 'version': VERSION, 'dir': os.path.realpath(HERE),
+                                 'page': os.path.isfile(PAGE_FILE)})
         elif url.path == '/api/state':
             st.local_models.refresh()
             out = st.config.public()
@@ -2823,6 +2842,14 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(200, opencode_info())
         elif url.path == '/api/memory-export':
             self.get_memory_export()
+        elif url.path == '/api/upgrade':
+            if not st.upgrade:
+                self.send_json(404, {'error': NO_UPGRADE})
+                return
+            out = st.upgrade.status()
+            out['version'] = VERSION
+            out['busy'] = st.busy_reason()
+            self.send_json(200, out)
         elif url.path == '/help.html':
             self.send_page(HELP_FILE, 'help.html')
         elif url.path == '/api/skills':
@@ -2886,6 +2913,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if not self.allowed(True):
             return
+        if url.path.startswith('/api/upgrade/'):
+            self.upgrade_post(url.path)     # 请求体可能是 zip 原文，不按 JSON 读
+            return
         data = self.read_json()
         if url.path == '/api/ping':
             shell = data.get('shell')
@@ -2945,13 +2975,43 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self.send_json(404, {'error': '没有这个地址'})
 
+    def upgrade_post(self, path):
+        job = self.state.upgrade
+        if not job:
+            self.send_json(404, {'error': NO_UPGRADE})
+            return
+        if path == '/api/upgrade/check':
+            # 请求体为 zip 原文（目录由页面打包成 zip），只写到系统临时目录
+            try:
+                n = int(self.headers.get('Content-Length') or 0)
+            except ValueError:
+                n = 0
+            if n <= 0:
+                self.send_json(400, {'error': '没有收到文件'})
+                return
+            code, obj = job.check_upload(self.rfile, n)
+            if code == 413:
+                self.close_connection = True
+            self.send_json(code, obj)
+        elif path == '/api/upgrade/apply':
+            code, obj = job.start_upgrade(self.read_json().get('id'))
+            log.info('upgrade requested: %s', code)
+            self.send_json(code, obj)
+        elif path == '/api/upgrade/rollback':
+            code, obj = job.start_rollback()
+            log.info('rollback requested: %s', code)
+            self.send_json(code, obj)
+        else:
+            self.send_json(404, {'error': '没有这个地址'})
+
     def send_page(self, path, name):
         try:
             with open(path, 'rb') as f:
                 body = f.read()
         except OSError as e:
             log.error('page missing: %s', e)
-            self.send_json(404, {'error': '找不到页面文件 %s' % name})
+            self.send_json(404, {'error': '找不到页面文件 %s：工具目录可能已被移动、删除或替换，这里运行的是原目录里的旧程序。'
+                                          '请再双击新目录里的「资料管家」，会自动结束旧程序并重新打开。' % name})
             return
         self.send_response(200)
         self.send_header('Content-Type', 'text/html; charset=utf-8')
@@ -3657,9 +3717,15 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def watchdog(server, st, interval=2):
-    """退出按钮或空闲超时时关闭服务；有回答正在生成时等它结束再退出。"""
+    """退出按钮或空闲超时时关闭服务；有回答正在生成时等它结束再退出。
+    升级或退回完成后关闭服务，由 serve 以新版重新启动。"""
+    restart = st.upgrade.restart if st.upgrade else threading.Event()
     while True:
         st.quit.wait(interval)
+        if restart.is_set():
+            time.sleep(0.5)     # 让页面先取到「升级完成」的状态
+            log.info('upgrade finished, restarting')
+            break
         reason = st.should_exit()
         if reason:
             log.info('%s, exiting', reason)
@@ -3777,15 +3843,23 @@ def page_url(port, token):
     return 'http://127.0.0.1:%d/?t=%s' % (port, token)
 
 
+RUNNING = ('self', 'stale')
+
+
 def probe_running(port, token, timeout=HELLO_TIMEOUT):
-    """端口上是否已有本工具在运行：带令牌请求 /api/hello。返回 'self'（本工具）、'other'（别的程序或令牌对不上）、
+    """端口上是否已有本工具在运行：带令牌请求 /api/hello。返回 'self'（本工具，同一目录、同一版本）、
+    'stale'（本工具，但运行的是别处目录、别的版本，或它的页面文件已不在）、'other'（别的程序或令牌对不上）、
     'free'（没有程序在监听）。不走代理。"""
     req = urllib.request.Request('http://127.0.0.1:%d/api/hello' % port, headers={'X-Token': token})
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:
         with opener.open(req, timeout=timeout) as r:
             data = json.loads(r.read(4096).decode('utf-8'))
-        return 'self' if isinstance(data, dict) and data.get('app') == APP_ID else 'other'
+        if not isinstance(data, dict) or data.get('app') != APP_ID:
+            return 'other'
+        same = (data.get('version') == VERSION and data.get('dir') == os.path.realpath(HERE)
+                and data.get('page') is True)
+        return 'self' if same else 'stale'
     except urllib.error.HTTPError:
         return 'other'
     except (urllib.error.URLError, OSError, ValueError) as e:
@@ -3794,6 +3868,32 @@ def probe_running(port, token, timeout=HELLO_TIMEOUT):
             return 'free'
         log.info('probe port %d: %s', port, e)
         return 'other'
+
+
+def replace_running(port, token, timeout=REPLACE_TIMEOUT):
+    """让端口上别处目录或别的版本的本工具退出，等端口空出来后返回监听好的服务；
+    它有任务没做完、请求失败或超时未退出时返回 None。"""
+    req = urllib.request.Request('http://127.0.0.1:%d/api/quit' % port, data=b'{}', method='POST',
+                                 headers={'X-Token': token, 'Content-Type': 'application/json'})
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with opener.open(req, timeout=HELLO_TIMEOUT) as r:
+            data = json.loads(r.read(4096).decode('utf-8'))
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        log.warning('ask old instance on port %d to quit: %s', port, e)
+        return None
+    if isinstance(data, dict) and data.get('waiting'):
+        log.info('old instance on port %d is finishing tasks', port)
+        return None
+    end = time.monotonic() + timeout
+    while True:
+        try:
+            return ThreadingHTTPServer(('127.0.0.1', port), Handler)
+        except OSError as e:
+            if time.monotonic() >= end:
+                log.warning('old instance on port %d did not exit: %s', port, e)
+                return None
+            time.sleep(0.2)
 
 
 def port_taken_message(port, error=None):
@@ -3823,9 +3923,18 @@ def serve(open_browser=True, app=True, port=None, idle=IDLE_TIMEOUT):
         memory = ask_memory.Memory(os.path.join(tempfile.mkdtemp(prefix='ask-local-files-mem-'), 'memory.sqlite'))
     port = port or config.port or DEFAULT_PORT
     url = page_url(port, token)
+    resume = tool_upgrade.resumed() if tool_upgrade else None
+    if resume:
+        # 升级或退回后由旧版重新启动：端口一时未释放时稍等，已打开的页面自动重新连上
+        open_browser = False
+        server = listen_again(port)
+    else:
+        server = None
     try:
-        server = ThreadingHTTPServer(('127.0.0.1', port), Handler)
+        if server is None:
+            server = ThreadingHTTPServer(('127.0.0.1', port), Handler)
     except OSError as e:
+        server = None
         found = probe_running(port, token)
         if found == 'self':
             log.info('already running on port %d', port)
@@ -3833,9 +3942,18 @@ def serve(open_browser=True, app=True, port=None, idle=IDLE_TIMEOUT):
             if open_browser and not open_page(url, app):
                 tell_user('未能自动打开浏览器，请在浏览器中打开：' + url)
             return 0
-        log.error('cannot listen on port %d: %s (%s)', port, e, found)
-        tell_user(port_taken_message(port, None if found == 'other' else e))
-        return 1
+        if found == 'stale':
+            # 端口上是别处目录或别的版本的本工具（例如工具目录换过）：让它退出，由本次接管
+            log.info('replacing old instance on port %d', port)
+            server = replace_running(port, token)
+            if server is None:
+                tell_user('启动失败：旧的本工具仍在运行，可能有回答正在生成。请稍等片刻再双击「资料管家」；'
+                          '仍不行时在终端运行 pkill -f ask_local_files.py 结束它。')
+                return 1
+        if server is None:
+            log.error('cannot listen on port %d: %s (%s)', port, e, found)
+            tell_user(port_taken_message(port, None if found == 'other' else e))
+            return 1
     index = FileIndex(config)
     index.refresh()
     st = WebState(port, token, config, index, memory=memory, idle=idle)
@@ -3853,8 +3971,27 @@ def serve(open_browser=True, app=True, port=None, idle=IDLE_TIMEOUT):
     finally:
         server.server_close()
         st.cleanup()
+        if st.upgrade:
+            st.upgrade.cleanup()
     log.info('server stopped')
+    if st.upgrade and st.upgrade.restart.is_set():
+        tool_upgrade.restart(os.path.join(HERE, 'ask_local_files.py'),
+                             ['--no-browser', '--port', str(port), '--idle-timeout', str(idle)] + RESTART_ARGS,
+                             {'port': port})
     return 0
+
+
+def listen_again(port, timeout=10):
+    """重新监听升级前的端口；端口一时未释放时重试，超时返回 None（再按平常的启动流程处理）。"""
+    end = time.monotonic() + timeout
+    while True:
+        try:
+            return ThreadingHTTPServer(('127.0.0.1', port), Handler)
+        except OSError as e:
+            if time.monotonic() >= end:
+                log.warning('cannot listen on port %d again: %s', port, e)
+                return None
+            time.sleep(0.2)
 
 
 def print_url(port=None):
@@ -3873,7 +4010,7 @@ def new_token(port=None):
         print(data_bad_message(), file=sys.stderr)
         return 1
     port = port or Config().port or DEFAULT_PORT
-    if os.path.isfile(TOKEN_FILE) and probe_running(port, load_token()) == 'self':
+    if os.path.isfile(TOKEN_FILE) and probe_running(port, load_token()) in RUNNING:
         print('重新生成令牌失败：本工具正在运行。请先在页面上点「退出」，再重新运行 --new-token。', file=sys.stderr)
         return 1
     print('网页界面：' + page_url(port, load_token(new=True)), flush=True)
@@ -3897,7 +4034,7 @@ def cli_data_dir(value, port=None):
         return 0
     if DATA['ok'] and os.path.isfile(TOKEN_FILE):
         port = port or Config().port or DEFAULT_PORT
-        if probe_running(port, load_token()) == 'self':
+        if probe_running(port, load_token()) in RUNNING:
             print('更改保存位置失败：本工具正在运行。请先在页面上点「退出」再运行，或在页面设置的「通用」里更改。', file=sys.stderr)
             return 1
     try:
@@ -3915,6 +4052,25 @@ def cli_data_dir(value, port=None):
     if not written:
         print('提示：工具目录不可写，没能记住这个位置；下次启动仍须带 --data-dir。', file=sys.stderr)
     return 0
+
+
+RESTART_ARGS = []       # 升级后用新版重新启动时带的参数（日志级别）
+
+
+def cli_upgrade(args):
+    """--upgrade / --rollback：本工具正在运行时不动手，提示先退出或改用页面上的「升级」。"""
+    if not tool_upgrade:
+        print('升级失败：缺少 tool_upgrade.py。请重新解压完整的工具目录后重试。', file=sys.stderr)
+        return 1
+    init_data_dir()
+    if DATA['ok'] and os.path.isfile(TOKEN_FILE):
+        port = args.port or Config().port or DEFAULT_PORT
+        if probe_running(port, load_token()) in RUNNING:
+            print('%s失败：本工具正在运行。请先在页面上点「退出」再运行，或改用页面右上角的「升级」。'
+                  % ('退回' if args.rollback else '升级'), file=sys.stderr)
+            return 1
+    return tool_upgrade.cli(HERE, UPGRADE_MAIN, upgrade=args.upgrade, do_rollback=args.rollback,
+                            yes=args.yes, lang='zh')
 
 
 def port_arg(text):
@@ -3951,11 +4107,20 @@ def main(argv=None):
                          '已有时直接改用；位置记在工具目录的 data-dir.txt，之后不带此参数也沿用')
     ap.add_argument('--print-url', action='store_true', help='只打印网址，不启动服务')
     ap.add_argument('--new-token', action='store_true', help='重新生成令牌（旧网址作废），打印新网址后结束')
+    ap.add_argument('--upgrade', metavar='ZIP或目录',
+                    help='原地升级到新版：检查后在终端确认，保留 upgrade-keep.txt 列出的文件，旧版留作上一版；'
+                         '本工具正在运行时先在页面上点「退出」，或改用页面上的「升级」')
+    ap.add_argument('--rollback', action='store_true', help='退回上一版（与当前版本对调）')
+    ap.add_argument('--yes', action='store_true', help='与 --upgrade、--rollback 同用：不询问，直接执行')
+    ap.add_argument('--version', action='version', version='资料管家 v' + VERSION)
     ap.add_argument('--log-level', default=os.environ.get('LOG_LEVEL', 'WARNING').upper(),
                     choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
                     help='日志级别，默认 WARNING，可由环境变量 LOG_LEVEL 覆盖')
     args = ap.parse_args(argv)
     logging.basicConfig(level=args.log_level, format=LOG_FORMAT, stream=sys.stderr)
+    RESTART_ARGS[:] = ['--log-level', args.log_level]
+    if args.upgrade or args.rollback:
+        return cli_upgrade(args)
     init_data_dir()
     if args.data_dir is not None:
         rc = cli_data_dir(args.data_dir, args.port)

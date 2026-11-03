@@ -227,6 +227,20 @@
   footer { color:var(--muted); font-size:13px; margin-top:24px; border-top:1px solid var(--line); padding-top:10px; }
   .banner { background:var(--card); border:1px solid var(--warn); color:var(--warn); border-radius:8px; padding:8px 12px; margin:8px 0; font-size:14px; }
   .banner.bad { border-color:var(--bad); color:var(--bad); }
+  button:focus-visible, .drop:focus-visible, input:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  #upgrade { display:none; }
+  #upgrade.open { display:block; }
+  .drop { display:block; white-space:normal; border:2px dashed var(--line); border-radius:8px; padding:16px 12px; text-align:center; cursor:pointer; color:var(--muted); margin:8px 0; }
+  .drop.over { border-color:var(--accent); color:var(--text); }
+  .drop strong { color:var(--accent); }
+  .row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:8px; }
+  .ustatus { margin:8px 0; min-height:1.6em; }
+  .ustatus.ok { color:var(--ok); } .ustatus.warn { color:var(--warn); } .ustatus.bad { color:var(--bad); } .ustatus.info { color:var(--muted); }
+  .ureport h3 { font-size:15px; margin:12px 0 4px; }
+  .ureport ul { margin:0; padding-left:1.4em; max-height:14em; overflow:auto; overflow-wrap:anywhere; }
+  .ureport .ver { font-size:16px; font-weight:bold; }
+  .ureport .warnbox { color:var(--warn); border:1px solid var(--warn); border-radius:6px; padding:6px 10px; margin:8px 0; }
+  #upgrade .drop { margin:8px 0; padding:16px 12px; font-size:15px; border-width:2px; }
   #closed { display:none; background:var(--card); border:1px solid var(--bad); color:var(--bad); border-radius:8px; padding:12px; margin-top:12px; }
   @media (max-width:480px) { .grid { grid-template-columns:minmax(0,1fr); } }
 </style>
@@ -242,11 +256,29 @@
     <div class="row">
       <a id="help" class="btn" href="/help.html" target="_blank" rel="noopener" title="在新标签里打开帮助：怎么用、原理与常见问题">帮助</a>
       <button id="newConv" type="button" title="在本窗口新开一个对话标签，已选和对话各自独立">＋ 新对话</button>
+      <button id="up-open" type="button" aria-expanded="false" aria-controls="upgrade" title="原地升级到新版，或退回上一版">升级</button>
       <button id="quit" type="button">退出</button>
     </div>
   </header>
   <p id="sub" class="sub" hidden>逐层浏览或按文件名找出文件交给 AI，或选用 skill 让 AI 运行脚本处理；点「＋ 新对话」可在新标签里并行。支持 Word（docx）、Excel（xlsx、xlsm）、PowerPoint（pptx）、旧版 doc、xls、ppt（wps、et、dps 按同类格式试读）、PDF、邮件（eml）、网页（html、htm）、纯文本与代码文件；压缩包等读不了的文件可点「打开文件夹」自己处理。勾选「参考知识库」时参考本机收录的文件和结论，可在「知识库设置」里查看或清空；在「管理文件夹」里给文件夹勾选「自动收录到知识库」（新添加的文件夹默认勾选），其中的文件会自动收录到知识库。怎么用、原理与常见问题见右上角「帮助」。</p>
-  <div id="closed">服务已退出，可关闭本页。需要再用时重新双击「双击运行」。</div>
+  <section id="upgrade" class="card" aria-labelledby="upgrade-title">
+    <h2 id="upgrade-title">升级</h2>
+    <p class="hint">选新版的 zip，或解压好的目录（目录名须与本工具目录同名）。升级在原位置替换，桌面链接不变；会保留的文件照 upgrade-keep.txt 带到新版（知识库、设置与令牌在保存位置，不在工具目录里，不受影响），旧版留作上一版，可随时退回。</p>
+    <label class="drop" id="up-drop" tabindex="0" role="button" aria-describedby="up-status">
+      <input type="file" id="up-file" class="vh" accept=".zip,application/zip" tabindex="-1">
+      <strong>选择新版 zip</strong>，或把 zip、解压好的目录拖到这里
+    </label>
+    <div class="row">
+      <label class="drop" id="up-dir-label" tabindex="0" role="button" style="margin:0;padding:6px 12px;">
+        <input type="file" id="up-dir" class="vh" webkitdirectory multiple tabindex="-1">选择解压好的目录……
+      </label>
+      <button id="up-rollback" type="button" disabled>退回上一版</button>
+    </div>
+    <div id="up-status" class="ustatus info" aria-live="polite"></div>
+    <div id="up-report" class="ureport"></div>
+    <div class="row"><button id="up-go" class="primary" type="button" hidden></button></div>
+  </section>
+  <div id="closed">服务已退出，可关闭本页。需要再用时重新双击「资料管家」。</div>
   <div id="banner" class="banner" role="status" hidden></div>
   <div id="dataBanner" class="banner bad" role="alert" hidden></div>
   <div id="convBar" hidden>
@@ -524,7 +556,7 @@
   <div id="convFrames" hidden></div>
 
 
-  <footer><span id="ver">资料管家 v2.12</span>　<button id="copyUrl" type="button" class="small">复制网址</button>　网址固定不变，可收藏或复制到浏览器打开。关闭页面后服务继续运行，没有页面、也没有任务 30 分钟后自动退出；点「退出」立即结束，开着的页面一起结束。有回答正在生成（含 skill 脚本运行）或知识库正在手动更新时，服务等它结束再退出；自动收录与空闲时自动更新不拖住退出，下次启动接着做。对话不自动保存，退出即清空；知识库存在本机，可在「知识库设置」里关闭或清空。<div id="urlStatus" class="status info" aria-live="polite"></div></footer>
+  <footer><span id="ver">资料管家 v2.16</span>　<button id="copyUrl" type="button" class="small">复制网址</button>　网址固定不变，可收藏或复制到浏览器打开。关闭页面后服务继续运行，没有页面、也没有任务 30 分钟后自动退出；点「退出」立即结束，开着的页面一起结束。有回答正在生成（含 skill 脚本运行）或知识库正在手动更新时，服务等它结束再退出，升级也等它结束再进行；升级或退回后服务用新版重新启动，本页自动刷新；自动收录与空闲时自动更新不拖住退出，下次启动接着做。对话不自动保存，退出即清空；知识库存在本机，可在「知识库设置」里关闭或清空。<div id="urlStatus" class="status info" aria-live="polite"></div></footer>
 </main>
 <script>
 'use strict';
@@ -581,7 +613,8 @@ function serviceGone(msg) {
 // 心跳连续失败 3 次才判定服务已退出，偶发一次失败不影响使用
 let pingFails = 0;
 function ping() {
-  post('/api/ping', {page: PAGE, shell: SHELL}).then(() => { pingFails = 0; }).catch(() => { if (++pingFails >= 3) serviceGone(); });
+  post('/api/ping', {page: PAGE, shell: SHELL}).then(() => { pingFails = 0; })
+    .catch(() => { if (++pingFails >= 3 && !upRestarting && !upBusy) serviceGone(); });
 }
 ping();
 setInterval(() => { if (alive) ping(); }, 10000);
@@ -2978,8 +3011,245 @@ function rounds() { return chat.filter(m => m.role === 'user').length; }
 
 // 关闭窗口时按全部标签合计提醒；嵌在窗口里的标签由窗口提醒
 window.addEventListener('beforeunload', ev => {
-  if (alive && !EMBED && convStates().some(c => c.unsaved)) { ev.preventDefault(); ev.returnValue = ''; }
+  if (alive && !EMBED && !upRestarting && convStates().some(c => c.unsaved)) { ev.preventDefault(); ev.returnValue = ''; }
 });
+
+// ---------------------------------------------------------------- 升级
+// 选 zip 直接上传；选目录时在页面里打成不压缩的 zip 再上传，服务端只处理 zip。
+const UP_MAX = 100 * 1024 * 1024;
+function upEl(tag, attrs, text) {
+  const e = document.createElement(tag);
+  Object.entries(attrs || {}).forEach(([k, v]) => e.setAttribute(k, v));
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+let upCheck = null, upBusy = false, upTimer = null, upRestarting = false, upVersion = '';
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; }
+  return t;
+})();
+function crc32(buf) {
+  let c = 0xFFFFFFFF;
+  for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+async function buildZip(items) {
+  // items：[{path: '目录名/子目录/文件', file: File}]，按 zip 格式「仅存储」写出
+  const enc = new TextEncoder(), parts = [], central = [];
+  let offset = 0, total = 0;
+  for (const it of items) {
+    total += it.file.size;
+    if (total > UP_MAX) throw new Error('目录合计超过 100 MB');
+    const name = enc.encode(it.path), data = new Uint8Array(await it.file.arrayBuffer()), crc = crc32(data);
+    const h = new DataView(new ArrayBuffer(30));
+    h.setUint32(0, 0x04034b50, true); h.setUint16(4, 20, true); h.setUint16(6, 0x0800, true);
+    h.setUint32(14, crc, true); h.setUint32(18, data.length, true); h.setUint32(22, data.length, true);
+    h.setUint16(26, name.length, true);
+    parts.push(h, name, data);
+    const c = new DataView(new ArrayBuffer(46));
+    c.setUint32(0, 0x02014b50, true); c.setUint16(4, 20, true); c.setUint16(6, 20, true); c.setUint16(8, 0x0800, true);
+    c.setUint32(16, crc, true); c.setUint32(20, data.length, true); c.setUint32(24, data.length, true);
+    c.setUint16(28, name.length, true); c.setUint32(42, offset, true);
+    central.push(c, name);
+    offset += 30 + name.length + data.length;
+  }
+  const size = central.reduce((n, p) => n + p.byteLength, 0);
+  const e = new DataView(new ArrayBuffer(22));
+  e.setUint32(0, 0x06054b50, true); e.setUint16(8, items.length, true); e.setUint16(10, items.length, true);
+  e.setUint32(12, size, true); e.setUint32(16, offset, true);
+  return new Blob(parts.concat(central, [e]), {type: 'application/zip'});
+}
+function readAll(reader) {
+  return new Promise((resolve, reject) => {
+    const out = [];
+    const more = () => reader.readEntries(batch => { if (!batch.length) resolve(out); else { out.push(...batch); more(); } }, reject);
+    more();
+  });
+}
+async function walkEntry(entry, prefix, out) {
+  const path = prefix + entry.name;
+  if (entry.isFile) {
+    out.push({path: path, file: await new Promise((res, rej) => entry.file(res, rej))});
+  } else if (entry.isDirectory) {
+    for (const child of await readAll(entry.createReader())) await walkEntry(child, path + '/', out);
+  }
+}
+function upSay(cls, msg) {
+  const s = $('up-status');
+  s.className = 'ustatus ' + cls;
+  s.textContent = msg;
+}
+function upButtons() {
+  const off = upBusy || upRestarting || !alive;
+  $('up-go').disabled = off;
+  $('up-rollback').disabled = off || !$('up-rollback').dataset.ok;
+  ['up-file', 'up-dir'].forEach(id => { $(id).disabled = off; });
+  ['up-drop', 'up-dir-label'].forEach(id => { $(id).setAttribute('aria-disabled', off ? 'true' : 'false'); });
+}
+function upList(box, title, items, total, empty) {
+  box.appendChild(upEl('h3', {}, title));
+  if (!items.length) { box.appendChild(upEl('p', {class: 'hint'}, empty)); return; }
+  const ul = upEl('ul');
+  items.forEach(t => ul.appendChild(upEl('li', {}, t)));
+  if (total > items.length) ul.appendChild(upEl('li', {}, '……另有 ' + (total - items.length) + ' 个'));
+  box.appendChild(ul);
+}
+function upShow(rep) {
+  const box = $('up-report');
+  box.textContent = '';
+  upCheck = null;
+  $('up-go').hidden = true;
+  if (!rep.ok) {
+    upSay('bad', '不能升级：' + (rep.errors || []).join('；') + '。请换一个新版的 zip 或目录。');
+    return;
+  }
+  upCheck = rep;
+  box.appendChild(upEl('p', {class: 'ver'}, '当前版本 ' + rep.current + ' → 新版本 ' + rep.new + '（' + rep.kind_text + '）'));
+  if (rep.warning) box.appendChild(upEl('p', {class: 'warnbox'}, rep.warning));
+  box.appendChild(upEl('h3', {}, '更新说明'));
+  if (rep.notes.length) {
+    const ul = upEl('ul');
+    rep.notes.forEach(n => ul.appendChild(upEl('li', {}, n.version + '：' + n.text)));
+    box.appendChild(ul);
+  } else {
+    box.appendChild(upEl('p', {class: 'hint'}, '没有比当前版本新的更新说明。'));
+  }
+  upList(box, '会保留的文件', rep.keep, rep.keep.length, '没有需要保留的文件。');
+  upList(box, '多出来的文件（不带到新版，随旧目录留在「上一版」里，不删除）', rep.extras, rep.extras_total, '没有。');
+  $('up-go').textContent = rep.confirm;
+  $('up-go').hidden = false;
+  upSay(rep.kind === 'upgrade' ? 'ok' : 'warn', '检查通过，请看过下面的内容后点「' + rep.confirm + '」。');
+}
+async function upChoose(getBlob) {
+  if (upBusy || upRestarting || !alive) return;
+  upBusy = true; upButtons();
+  $('up-report').textContent = ''; $('up-go').hidden = true;
+  upSay('info', '正在读取所选内容……');
+  try {
+    const blob = await getBlob();
+    if (blob.size > UP_MAX) throw new Error('文件超过 100 MB');
+    upSay('info', '正在上传并检查……');
+    upShow(await api('/api/upgrade/check', {method: 'POST', headers: {'Content-Type': 'application/zip'}, body: blob}));
+  } catch (err) {
+    upSay('bad', '检查失败：' + upWhy(err) + '。请重新选择新版的 zip 或目录。');
+  } finally {
+    upBusy = false; upButtons();
+  }
+}
+function upFromItems(items) {
+  return upChoose(async () => {
+    if (!items.length) throw new Error('没有选到文件');
+    return buildZip(items);
+  });
+}
+function upFile(file) {
+  if (!/\.zip$/i.test(file.name)) { upSay('bad', '检查失败：只接受 .zip 文件或解压好的目录。请重新选择。'); return Promise.resolve(); }
+  return upChoose(async () => file);
+}
+function upWhy(err) {
+  return String(err && err.message || err).replace(/[。.]+$/, '');
+}
+// 选中的文件读完后再清空，以便再次选同一个文件
+$('up-file').addEventListener('change', e => { const f = e.target.files[0]; if (f) upFile(f).finally(() => { e.target.value = ''; }); });
+$('up-dir').addEventListener('change', e => {
+  const items = Array.from(e.target.files).map(f => ({path: f.webkitRelativePath || f.name, file: f}));
+  upFromItems(items).finally(() => { e.target.value = ''; });
+});
+['up-drop', 'up-dir-label'].forEach(id => {
+  $(id).addEventListener('keydown', e => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); if ($(id).getAttribute('aria-disabled') !== 'true') $(id).querySelector('input').click(); }
+  });
+});
+const drop = $('up-drop');
+drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('over'); });
+drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+drop.addEventListener('drop', e => {
+  e.preventDefault();
+  drop.classList.remove('over');
+  if (upBusy || upRestarting) return;
+  const item = e.dataTransfer.items && e.dataTransfer.items[0];
+  const entry = item && item.webkitGetAsEntry ? item.webkitGetAsEntry() : null;
+  if (entry && entry.isDirectory) {
+    upChoose(async () => { const out = []; await walkEntry(entry, '', out); if (!out.length) throw new Error('目录是空的'); return buildZip(out); });
+  } else if (e.dataTransfer.files[0]) {
+    upFile(e.dataTransfer.files[0]);
+  }
+});
+function upStatus() {
+  return api('/api/upgrade').then(st => {
+    upVersion = upVersion || st.current;
+    const rb = $('up-rollback');
+    rb.dataset.ok = st.rollback.available ? '1' : '';
+    rb.dataset.cur = st.rollback.current;
+    rb.dataset.prev = st.rollback.previous;
+    rb.title = st.rollback.available ? '上一版：' + st.rollback.previous : '没有可退回的版本';
+    upButtons();
+    return st;
+  });
+}
+function upWatch() {
+  // 升级或退回在服务端后台进行：轮询阶段文字，完成后等服务用新版重新启动，再刷新页面
+  clearTimeout(upTimer);
+  upTimer = setTimeout(() => {
+    api('/api/upgrade').then(st => {
+      if (upRestarting) {
+        if (st.state === 'idle') { upSay('ok', '已重新连上，正在刷新页面……'); location.reload(); return; }
+      } else if (st.state === 'waiting' || st.state === 'running') {
+        upSay('info', st.stage);
+      } else if (st.state === 'done') {
+        upRestarting = true;
+        upSay('ok', st.message + ' 页面会自动重新连上。');
+      } else if (st.state === 'failed') {
+        upBusy = false; upButtons(); upStatus().catch(() => {});
+        upSay('bad', st.message);
+        return;
+      }
+      upWatch();
+    }, () => {
+      if (upRestarting) upSay('info', '正在等待新版启动……');
+      upWatch();
+    });
+  }, 600);
+}
+// 页面另有需要提醒的事（如开着的对话会清空）时，定义 upPageWarn() 返回一句话
+function upExtraWarn() { return typeof upPageWarn === 'function' ? upPageWarn() : ''; }
+$('up-go').addEventListener('click', () => {
+  if (!upCheck || upBusy) return;
+  const extras = upCheck.extras_total, page = upExtraWarn();
+  if ((upCheck.warning || extras || page) && !confirm((upCheck.warning ? upCheck.warning + '\n' : '') +
+      (extras ? '有 ' + extras + ' 个多出来的文件不带到新版，会随旧目录留在「上一版」里。\n' : '') +
+      (page ? page + '\n' : '') + '确定' + upCheck.confirm + '？')) return;
+  upBusy = true; upButtons();
+  upSay('info', '正在开始升级……');
+  api('/api/upgrade/apply', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id: upCheck.id})})
+    .then(() => { $('up-go').hidden = true; upWatch(); })
+    .catch(err => { upBusy = false; upButtons(); upSay('bad', '升级失败：' + upWhy(err) + '。请重新选择新版后重试。'); });
+});
+$('up-rollback').addEventListener('click', () => {
+  const rb = $('up-rollback');
+  if (upBusy || !rb.dataset.ok) return;
+  const page = upExtraWarn();
+  if (!confirm('会把当前 ' + rb.dataset.cur + ' 换成上一版 ' + rb.dataset.prev + '，当前版本留作上一版，可再次退回。' +
+      (page ? '\n' + page : '') + '\n确定退回？')) return;
+  upBusy = true; upButtons();
+  $('up-report').textContent = ''; $('up-go').hidden = true;
+  upSay('info', '正在退回上一版……');
+  api('/api/upgrade/rollback', {method: 'POST'})
+    .then(upWatch)
+    .catch(err => { upBusy = false; upButtons(); upSay('bad', '退回失败：' + upWhy(err) + '。请稍后重试。'); });
+});
+$('up-open').addEventListener('click', () => {
+  const box = $('upgrade');
+  const open = box.classList.toggle('open');
+  $('up-open').setAttribute('aria-expanded', open ? 'true' : 'false');
+  if (open) { upStatus().catch(err => upSay('bad', '读取升级信息失败：' + upWhy(err) + '。请刷新页面后重试。')); box.scrollIntoView({block: 'nearest'}); }
+});
+// 升级后服务重新启动、页面刷新，对话不自动保存
+function upPageWarn() {
+  return convStates().some(c => c.rounds > 0) ? '升级后服务重新启动、页面刷新，开着的对话会清空（对话不自动保存）。' : '';
+}
+if (EMBED) $('upgrade').remove();
 
 // ---------------- 「＋ 新对话」：同一窗口里的对话标签
 // 「对话 1」是窗口本身；其余标签各是一个带 embed=1 的 iframe，已选和对话各自独立，文件夹索引与设置共用
@@ -3087,7 +3357,7 @@ function quit(pages) {
   if (open.length && tabs.length > 1) parts.push(open.length + ' 个对话标签（' + open.map(convLabel).join('、') + '）共 ' + n + ' 轮问答未保存，退出后会清空，可先点「保存对话」。');
   else if (open.length) parts.push('当前 ' + n + ' 轮问答未保存，退出后会清空，可先点「保存对话」。');
   if (parts.length && !confirm(parts.join('\n') + '\n\n确定退出？')) return;
-  post('/api/quit').then(r => serviceGone(r.waiting ? '服务将在回答生成或知识库更新结束后退出，可关闭本页。需要再用时重新双击「双击运行」。' : undefined))
+  post('/api/quit').then(r => serviceGone(r.waiting ? '服务将在回答生成或知识库更新结束后退出，可关闭本页。需要再用时重新双击「资料管家」。' : undefined))
     .catch(() => serviceGone());
 }
 
@@ -3154,7 +3424,7 @@ api('/api/state').then(s => {
   loadDirs().then(r => renderPlaces(r.places)).catch(() => {});
   findMode = 'browse';
   return loadBrowse(browseDir, true);
-}).catch(e => say('findStatus', failText('读取状态', e.message, '请关闭本页，重新双击「双击运行」。'), 'bad'));
+}).catch(e => say('findStatus', failText('读取状态', e.message, '请关闭本页，重新双击「资料管家」。'), 'bad'));
 
 </script>
 </body>

@@ -513,7 +513,8 @@ class TokenTest(unittest.TestCase):
 
 class FixedUrlTest(ServerCase):
     def test_hello_and_state_url(self):
-        self.assertEqual(self.call('/api/hello'), (200, {'app': 'ask-local-files', 'version': fa.VERSION}))
+        self.assertEqual(self.call('/api/hello'), (200, {'app': 'ask-local-files', 'version': fa.VERSION,
+                                                        'dir': os.path.realpath(fa.HERE), 'page': True}))
         self.assertEqual(self.call('/api/hello', token='bad')[0], 403)
         self.assertEqual(self.call('/api/state')[1]['url'], self.base + '/?t=tok')
 
@@ -535,6 +536,59 @@ class FixedUrlTest(ServerCase):
         free_port = free.server_address[1]
         free.server_close()
         self.assertEqual(fa.probe_running(free_port, 'tok'), 'free')
+
+    def test_probe_stale(self):
+        port = self.server.server_address[1]
+        here = os.path.realpath(fa.HERE)
+        replies = [{'app': 'ask-local-files', 'version': '0.1', 'dir': here, 'page': True},
+                   {'app': 'ask-local-files', 'version': fa.VERSION, 'dir': here + '-old', 'page': True},
+                   {'app': 'ask-local-files', 'version': fa.VERSION}]    # 旧版本不报目录
+        class Old(fa.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+            def do_GET(self):
+                body = json.dumps(self.server.reply).encode('utf-8')
+                self.send_response(200)
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+        old = fa.ThreadingHTTPServer(('127.0.0.1', 0), Old)
+        threading.Thread(target=old.serve_forever, daemon=True).start()
+        try:
+            for reply in replies:
+                old.reply = reply
+                self.assertEqual(fa.probe_running(old.server_address[1], 'tok'), 'stale', reply)
+        finally:
+            old.shutdown()
+            old.server_close()
+        with mock.patch.object(fa, 'PAGE_FILE', os.path.join(SANDBOX, 'gone.html')):
+            self.assertEqual(fa.probe_running(port, 'tok'), 'stale')
+            code, body = self.call('/')
+            self.assertEqual(code, 404)
+            self.assertIn('「资料管家」', body['error'])
+
+    def test_replace_running(self):
+        port = self.server.server_address[1]
+        quit_called = threading.Event()
+        def stop_old():
+            self.st.quit.wait(5)
+            quit_called.set()
+            self.server.shutdown()
+            self.server.server_close()
+        threading.Thread(target=stop_old, daemon=True).start()
+        new = fa.replace_running(port, 'tok', timeout=5)
+        self.assertIsNotNone(new)
+        self.assertTrue(quit_called.is_set())
+        self.assertEqual(new.server_address[1], port)
+        self.server = new        # 由 tearDown 关闭
+        threading.Thread(target=new.serve_forever, daemon=True).start()
+
+    def test_replace_running_waits_for_tasks(self):
+        self.st.chats = 1
+        try:
+            self.assertIsNone(fa.replace_running(self.server.server_address[1], 'tok', timeout=1))
+        finally:
+            self.st.chats = 0
 
     def serve_on(self, port, token):
         out = io.StringIO()
@@ -2212,7 +2266,7 @@ class PageVersionTest(unittest.TestCase):
         self.assertNotRegex(page, r'(?i)(src|href)=["\']https?://')      # 不加载网络资源
 
     def test_desktop_name(self):
-        with open(os.path.join(TOOL, '双击运行.desktop'), encoding='utf-8') as f:
+        with open(os.path.join(TOOL, '资料管家.desktop'), encoding='utf-8') as f:
             self.assertIn('Name=资料管家\n', f.read())
 
 
