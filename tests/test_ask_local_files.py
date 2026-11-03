@@ -586,7 +586,7 @@ class FixedUrlTest(ServerCase):
 
 
 class DataDirTest(ServerCase):
-    """保存位置：记忆、设置与令牌放在位置文件记的目录，可移动或改用已有的。"""
+    """保存位置：知识库、设置与令牌放在位置文件记的目录，可移动或改用已有的。"""
 
     TOKEN = 'cur-token-cur-token-1'
 
@@ -1401,7 +1401,7 @@ class MemoryChatTest(ServerCase):
         done = lines[-1]
         self.assertEqual(done['remembered'], 1)
         self.assertTrue(done['answer_id'])
-        self.assertEqual(lines[0]['memory']['files'], [])      # 选中的文件不再从记忆里重复给
+        self.assertEqual(lines[0]['memory']['files'], [])      # 选中的文件不再从知识库里重复给
         code, r = self.call('/api/memory')
         self.assertEqual(r['stats']['facts'], 1)
         self.assertEqual(r['facts'][0]['conclusion'], '第一阶段三月底验收')
@@ -1411,7 +1411,7 @@ class MemoryChatTest(ServerCase):
         mem = lines[0]['memory']
         self.assertEqual((mem['facts'], mem['files'][0]['n'], mem['files'][0]['path']), (1, 1, self.plan))
         text = self.sent()
-        self.assertIn('来自记忆', text)
+        self.assertIn('来自知识库', text)
         self.assertIn('第一阶段三月底验收（原文：「第一阶段在三月底完成验收」）', text)
         self.assertIn(fa.MEMORY_NOTE, text)
         self.assertEqual(lines[-1]['missing'], [])
@@ -1423,7 +1423,7 @@ class MemoryChatTest(ServerCase):
         self.assertEqual(lines[0]['memory']['files'][0]['n'], 2)
         shown = os.path.relpath(self.plan, os.path.dirname(self.docs))
         self.assertEqual(lines[0]['memory']['files'][0]['shown'], shown)
-        self.assertIn('===== 文件 2：%s（来自记忆，节选）=====' % shown, self.sent())
+        self.assertIn('===== 文件 2：%s（来自知识库，节选）=====' % shown, self.sent())
         self.assertNotIn(self.root, self.sent())
 
     def test_no_files_and_nothing_found(self):
@@ -1436,7 +1436,7 @@ class MemoryChatTest(ServerCase):
         self.assertEqual(code, 400)
         code, lines = self.ask('第一阶段验收', [os.path.join(self.docs, '季度总结.txt')], memory=False)
         self.assertEqual(lines[0]['memory']['files'], [])
-        self.assertNotIn('来自记忆', self.sent())
+        self.assertNotIn('来自知识库', self.sent())
 
     def test_memory_switched_off(self):
         self.call('/api/settings', {'memory': False})
@@ -1494,7 +1494,7 @@ class MemoryChatTest(ServerCase):
 
 
 class MemoryUpdateTest(MemoryChatTest):
-    """记忆更新：假模型 memo 把结论整理成一页「验收安排」。"""
+    """知识库更新：假模型 memo 把结论整理成一页「验收安排」。"""
 
     def wait(self):
         for _ in range(100):
@@ -1513,11 +1513,11 @@ class MemoryUpdateTest(MemoryChatTest):
         self.assertEqual(code, 200)
         st = self.wait()
         self.assertEqual(st['result']['kind'], 'done')
-        self.assertEqual(st['result']['text'], '记忆已更新：新建主题页 1 页。')
+        self.assertEqual(st['result']['text'], '知识库已更新：新建主题页 1 页。')
         self.assertEqual(st['pending'], 0)
         h = st['history'][0]
         self.assertEqual((h['mode'], h['summary'], h['changes']), ('manual', '新建主题页 1 页', ['新建主题页：验收安排']))
-        self.assertIn('你在维护使用者本机的一份「记忆」', json.loads(
+        self.assertIn('你在维护使用者本机的一份「知识库」', json.loads(
             urllib.request.urlopen(MODEL_BASE + '/last').read())['messages'][0]['content'])
         topics = self.call('/api/memory')[1]['topics']
         self.assertEqual([(t['title'], len(t['points'])) for t in topics], [('验收安排', 1)])
@@ -1539,7 +1539,7 @@ class MemoryUpdateTest(MemoryChatTest):
         self.call('/api/memory-update', {'action': 'run'})
         st = self.wait()
         self.assertEqual(st['result']['kind'], 'error')
-        self.assertTrue(st['result']['text'].startswith('更新记忆失败：'))
+        self.assertTrue(st['result']['text'].startswith('更新知识库失败：'))
         self.assertEqual(st['pending'], 1)     # 没写入，留在队里
         self.config.custom['model'] = 'ok'     # 回答不是 JSON：这一批不写入，留待下次
         self.call('/api/memory-update', {'action': 'run'})
@@ -2201,31 +2201,31 @@ class PickerTest(ServerCase):
 class PageVersionTest(unittest.TestCase):
     def test_footer_default_matches_version(self):
         with open(os.path.join(TOOL, 'ask_local_files.html'), encoding='utf-8') as f:
-            self.assertIn('<span id="ver">找资料问 AI v%s</span>' % fa.VERSION, f.read())
+            self.assertIn('<span id="ver">本机资料问答 v%s</span>' % fa.VERSION, f.read())
 
     def test_help_matches_version(self):
         # 帮助页随行为一起更新：页脚版本号须与 VERSION 一致
         with open(os.path.join(TOOL, 'help.html'), encoding='utf-8') as f:
             page = f.read()
-        self.assertIn('<span id="ver">找资料问 AI 帮助 v%s</span>' % fa.VERSION, page)
-        self.assertIn('<title>找资料问 AI 帮助</title>', page)
+        self.assertIn('<span id="ver">本机资料问答 帮助 v%s</span>' % fa.VERSION, page)
+        self.assertIn('<title>本机资料问答 帮助</title>', page)
         self.assertNotRegex(page, r'(?i)(src|href)=["\']https?://')      # 不加载网络资源
 
     def test_desktop_name(self):
         with open(os.path.join(TOOL, '双击运行.desktop'), encoding='utf-8') as f:
-            self.assertIn('Name=找资料问 AI\n', f.read())
+            self.assertIn('Name=本机资料问答\n', f.read())
 
 
 class HelpPageTest(ServerCase):
     def test_help_served(self):
         code, page = self.call('/help.html', token=None)
         self.assertEqual(code, 200)
-        self.assertIn('找资料问 AI 帮助', page)
+        self.assertIn('本机资料问答 帮助', page)
         self.assertEqual(self.call('/help.html', token=None, headers={'Origin': 'http://evil.example'})[0], 403)
 
 
 class AutoIngestTest(ServerCase):
-    """自动记入记忆：勾选文件夹、后台记入、未记入清单、文件改动与删除、抽结论、容量与保存为 Markdown。"""
+    """自动收录到知识库：勾选文件夹、后台收录、未收录清单、文件改动与删除、抽结论、容量与保存为 Markdown。"""
 
     model = 'memo'
 
@@ -2234,7 +2234,8 @@ class AutoIngestTest(ServerCase):
         write(os.path.join(self.docs, '计划.txt'), '第一阶段在三月底完成验收。\n\n预算总额为一百万元。')
         with open(os.path.join(self.docs, '坏文件.docx'), 'wb') as f:
             f.write(b'not a zip')
-        self.index.refresh(wait=True)
+        # 文件夹刚扫过：同一时间刻度里写入时目录修改时间不变，增量扫描会沿用旧清单，所以全量重扫
+        self.index.refresh(full=True, wait=True)
 
     def wait(self):
         for _ in range(200):
@@ -2242,7 +2243,16 @@ class AutoIngestTest(ServerCase):
             if not st['running']:
                 return st
             time.sleep(0.05)
-        raise AssertionError('自动记入没有结束')
+        raise AssertionError('自动收录没有结束')
+
+    def wait_summary(self):
+        # 扫描结束后才由索引线程开始收录：等到有收录结果
+        for _ in range(200):
+            st = self.wait()
+            if st['summary'] is not None:
+                return st['summary']
+            time.sleep(0.05)
+        raise AssertionError('没有开始自动收录')
 
     def turn_on(self):
         code, r = self.call('/api/folders', {'auto': self.docs, 'on': True})
@@ -2263,27 +2273,55 @@ class AutoIngestTest(ServerCase):
         self.assertEqual(sm['skipped'][0]['state'], 'failed')
         stats = self.call('/api/memory')[1]['stats']
         self.assertEqual((stats['files'], stats['extract']), (3, 3))
-        self.assertIn('自动记入：新记入 3 个文件，1 个没有记入。', st['result']['text'])
+        self.assertIn('自动收录：新收录 3 个文件，1 个没有收录。', st['result']['text'])
         # 忽略 Markdown 文件：.md 不再算进来
         self.call('/api/settings', {'ignore_md': True})
         self.assertEqual(self.wait()['summary']['total'], 3)
-        # 改了的文件重新记入；删掉的文件忘掉
+        # 改了的文件重新收录；删掉的文件移出
         write(os.path.join(self.docs, '计划.txt'), '第一阶段改到四月底验收。')
         os.remove(os.path.join(self.docs, '季度总结.txt'))
-        self.index.refresh(wait=True)
+        self.index.refresh(full=True, wait=True)
         self.wait()
         self.assertEqual(self.call('/api/memory-ingest', {'action': 'run'})[0], 200)
         sm = self.wait()['summary']
         self.assertEqual((sm['total'], sm['done']), (2, 1))
         paths = [f['path'] for f in self.call('/api/memory')[1]['files']]
         self.assertNotIn(os.path.join(self.docs, '季度总结.txt'), paths)
-        # 取消勾选：不再记入，已记住的保留
+        # 取消勾选：不再收录，已收录的保留
         code, r = self.call('/api/folders', {'auto': self.docs, 'on': False})
         self.assertEqual((code, r['auto_folders'], r['ingest']['summary']), (200, [], None))
         self.assertGreater(self.call('/api/memory')[1]['stats']['files'], 0)
-        # 记忆关闭时不能打开
+        # 知识库关闭时不能打开
         self.call('/api/settings', {'memory': False})
         self.assertEqual(self.call('/api/folders', {'auto': self.docs, 'on': True})[0], 400)
+
+    def test_added_folder_defaults_to_auto(self):
+        # 已有的文件夹保持原状态（setUp 里加的 docs 没有勾选），新添加的默认勾选并开始收录
+        other = os.path.join(self.root, '新资料')
+        os.makedirs(other)
+        write(os.path.join(other, '安排.txt'), '第二阶段在六月底完成。')
+        code, r = self.call('/api/folders', {'add': other})
+        self.assertEqual((code, r['auto_folders']), (200, [other]))
+        self.assertEqual(fa.Config(self.config.path).auto_folders, [other])
+        self.index.refresh(wait=True)
+        sm = self.wait_summary()
+        self.assertEqual((sm['total'], sm['done']), (1, 1))
+        self.assertNotIn(self.docs, self.call('/api/memory-ingest')[1]['folders'])
+
+    def test_added_folder_auto_while_memory_off(self):
+        # 知识库关闭时添加的文件夹同样记为勾选，但不收录；打开知识库后开始收录
+        self.call('/api/settings', {'memory': False})
+        other = os.path.join(self.root, '新资料')
+        os.makedirs(other)
+        write(os.path.join(other, '安排.txt'), '第二阶段在六月底完成。')
+        code, r = self.call('/api/folders', {'add': other})
+        self.assertEqual((code, r['auto_folders']), (200, [other]))
+        self.index.refresh(wait=True)
+        self.assertIsNone(self.wait()['summary'])
+        self.assertEqual(self.call('/api/memory')[1]['stats']['files'], 0)
+        self.call('/api/settings', {'memory': True})
+        sm = self.wait_summary()
+        self.assertEqual((sm['total'], sm['done']), (1, 1))
 
     def test_remove_folder_drops_auto(self):
         self.turn_on()
@@ -2308,7 +2346,8 @@ class AutoIngestTest(ServerCase):
         req = urllib.request.Request(self.base + '/api/memory-export', headers={'X-Token': 'tok'})
         with urllib.request.urlopen(req, timeout=20) as r:
             self.assertEqual(r.headers['Content-Type'], 'application/zip')
-            self.assertIn("filename*=UTF-8''", r.headers['Content-Disposition'])
+            disp = r.headers['Content-Disposition']
+            self.assertRegex(urllib.parse.unquote(disp.split("''", 1)[1]), r'^知识库-\d{8}-\d{4}\.zip$')
             names = zipfile.ZipFile(io.BytesIO(r.read())).namelist()
         self.assertIn('索引.md', names)
         self.assertIn('主题/验收安排.md', names)
@@ -2326,7 +2365,7 @@ class AutoIngestTest(ServerCase):
     def test_exit_not_held(self):
         self.st.quit.set()
         self.st.ingest.running = True
-        self.assertEqual(self.st.should_exit(), 'quit requested')     # 自动记入不拖住退出
+        self.assertEqual(self.st.should_exit(), 'quit requested')     # 自动收录不拖住退出
         self.st.ingest.running = False
 
 

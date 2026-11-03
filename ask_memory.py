@@ -1,26 +1,26 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-ask_memory  --  找资料问 AI 的记忆
+ask_memory  --  本机资料问答 的知识库
 
-纯 Python 3 标准库实现，由 ask_local_files.py 导入使用。记忆是本机的一个 SQLite 文件
+纯 Python 3 标准库实现，由 ask_local_files.py 导入使用。知识库是本机的一个 SQLite 文件
 （默认 ~/.local/share/ask-local-files/memory.sqlite，XDG_DATA_HOME 生效，权限 600），只当前用户可读：
 
     files   提问时选过的文件：路径、大小、修改时间、字节数、最近使用时间
     paras   这些文件取出的文字，按段落存放（空行分段，超过 PARA_CHARS 字的再按行、按句切开）
     facts   核对通过的结论：回答里带（文件 N：「摘句」）的句子去掉出处后的结论、原句、所在文件、
             提问、被重复得出的次数、首次与最近时间、来自哪几条回答
-    rejected  使用者点了「不对」的结论（文件、原句、结论），之后不再记入
+    rejected  使用者点了「不对」的结论（文件、原句、结论），之后不再收录
     topics、points  主题页：由模型把结论按主题整理而成，每条要点带出处文件与原句
-    queue   更新队列：新记入或改过的结论（fact）、内容变了的文件（file），等模型更新时处理
+    queue   更新队列：新收录或改过的结论（fact）、内容变了的文件（file），等模型更新时处理
     updates 最近 MAX_UPDATES 次更新的记录：方式、各类改动数、改动说明与撤销所需的改动前内容
-    ingest  自动记入的文件：路径、记入时的大小与修改时间、状态（done 已记入、failed 取不出文字、
-            evicted 容量不足被忘掉）、原因、从文件抽结论已做到第几段
+    ingest  自动收录的文件：路径、收录时的大小与修改时间、状态（done 已收录、failed 取不出文字、
+            evicted 容量不足被移出）、原因、从文件抽结论已做到第几段
 
 检索：提问切成关键字（标点、空格和常见虚词分开；中日韩文字连续 SHORT_RUN 字以内为一个关键字，
 更长的取相邻两字），SQLite 有 FTS5 时用全文索引找候选，没有时用 LIKE；候选按命中的关键字数排序，
 结论另按被重复得出的次数和新近程度加分，少于最好一条一半关键字的不要。
-取用前检查候选文件：不在了就忘掉它的段落、结论和要点；大小或修改时间变了就重新取文字，原句已不在新文字里的
+取用前检查候选文件：不在了就移出它的段落、结论和要点；大小或修改时间变了就重新取文字，原句已不在新文字里的
 结论和要点标为待复核（不拿去参考）并把文件排进更新队列。主题页要点排在最前，其次是结论，都带上原句所在的段落，
 其余为相关段落，按文件归组，合计不超过给定字数。
 
@@ -29,12 +29,12 @@ ask_memory  --  找资料问 AI 的记忆
 文件改过的按新文字改写结论和要点；体检把全部结论分批再过一遍。模型给出的结论与要点都须原句核对通过、
 不是「不对」过的，才写入；文件改过而模型没能改写成功的结论和要点删除。每次更新记下改动前的内容，可从最近一次往回撤销。
 
-自动记入（ingest_file）：勾选的文件夹里新增或改过的文件记入段落，并把「从文件抽结论」（extract）排进更新队列；
+自动收录（ingest_file）：勾选的文件夹里新增或改过的文件收录段落，并把「从文件抽结论」（extract）排进更新队列；
 更新时按段落分批把文字交给模型，抽出带原句的结论，原句核对通过的才写入，之后照常整理进主题页。
 主题页可带「相关主题」（其他主题页的 id），由模型在更新时给出，只接受已有的主题。
 
-容量：文字超过 max_bytes（默认 1 GB，可在设置里改）时，先忘掉最久没被选用或参考的文件及其结论；
-自动记入而被忘掉的文件记为 evicted，文件改过之前不再记入。
+容量：文字超过 max_bytes（默认 1 GB，可在设置里改）时，先移出最久没被选用或参考的文件及其结论；
+自动收录而被移出的文件记为 evicted，文件改过之前不再收录。
 数据库打不开或版本不符时改名留存，另建新库。
 """
 
@@ -54,9 +54,9 @@ log = logging.getLogger('ask_memory')
 SCHEMA = 3
 FACT_COLS = ('id', 'path', 'quote', 'qkey', 'conclusion', 'question', 'count', 'first', 'last', 'answers', 'toks', 'stale')
 TOPIC_COLS = ('id', 'title', 'updated', 'related')
-AUTO_QUESTION = '（自动记入）'     # 从文件抽出的结论，question 一栏写这个
-EVICTED = '记忆容量已满，没有记入；文件改过后再记入，或在「记忆设置」里调大容量上限'
-FORGOTTEN = '已在「查看记忆」里忘掉；文件改过后再记入'
+AUTO_QUESTION = '（自动收录）'     # 从文件抽出的结论，question 一栏写这个
+EVICTED = '知识库容量已满，没有收录；文件改过后再收录，或在「知识库设置」里调大容量上限'
+FORGOTTEN = '已在「查看知识库」里移出；文件改过后再收录'
 MAX_RELATED = 8             # 每页主题页最多记几个相关主题
 # 检索用的文字与另取的列：结论为「结论 原句」，要点为「主题：要点」；最后一列为是否待复核
 MATCH_COLS = {'paras': ('text', ''),
@@ -199,11 +199,11 @@ def _clean(text):
     return TAIL_RE.sub('', LEAD_RE.sub('', text.strip())).strip()
 
 
-UPDATE_PROMPT = '''你在维护使用者本机的一份「记忆」：从以前的问答里记下的结论（conclusions），以及按主题整理成的主题页（topics）。
+UPDATE_PROMPT = '''你在维护使用者本机的一份「知识库」：从以前的问答里记下的结论（conclusions），以及按主题整理成的主题页（topics）。
 使用者会给你一个 JSON：files 为文件号与路径；conclusions 每条有 id（F 开头）、所在文件号 file、结论 conclusion、
 原文摘句 quote、被得出的次数 count，changed 为 true 表示文件改过、原句已不在新文字里；topics 为相关的已有主题页，
 每页有 id（T 开头）、标题 title、要点 points（每条有 file、text、quote，changed 同上）和相关主题 related（其他页的标题）；
-other_topics 为记忆里其他主题页的标题；texts 为改过的文件的新文字（可能只是开头一部分）。
+other_topics 为知识库里其他主题页的标题；texts 为改过的文件的新文字（可能只是开头一部分）。
 
 请做三件事：
 1. 把结论按主题整理成主题页：同一件事、同一个对象的结论归到一页，标题简短（不超过 20 字），要点一句一条。
@@ -223,8 +223,8 @@ other_topics 为记忆里其他主题页的标题；texts 为改过的文件的�
  "topics": [{"id": "T2", "title": "主题", "points": [{"text": "要点", "file": 1, "quote": "原文摘句"}],
              "related": ["另一个主题"]}],
  "delete_topics": ["T9"]}'''
-EXTRACT_PROMPT = '''你在帮使用者把本机的一份文件记进「记忆」。使用者会给你一个 JSON：path 为文件路径，text 为这份文件的一部分文字
-（part 为第几部分、parts 为共几部分）。请从 text 里找出值得记住的结论：事实、数字、规定、决定、要求、时间安排、负责人等，
+EXTRACT_PROMPT = '''你在帮使用者把本机的一份文件收录进「知识库」。使用者会给你一个 JSON：path 为文件路径，text 为这份文件的一部分文字
+（part 为第几部分、parts 为共几部分）。请从 text 里找出值得收录的结论：事实、数字、规定、决定、要求、时间安排、负责人等，
 每条结论一句话，写成不看原文也能看懂的完整说法（写明主语，不用「本文」「上述」「该」之类指代）。
 
 规则：每条结论都必须附从 text 里逐字照抄的原文摘句 quote：一句或半句、不超过 80 字、不跨段落，摘句核对不过的不会写入。
@@ -374,7 +374,7 @@ class Memory:
 
     @staticmethod
     def _upgrade3(db):
-        """版本 2 升到 3：主题页加相关主题，另建自动记入的文件清单；已有内容保留。"""
+        """版本 2 升到 3：主题页加相关主题，另建自动收录的文件清单；已有内容保留。"""
         db.executescript('''
             ALTER TABLE topics ADD COLUMN related TEXT;
             CREATE TABLE ingest (path TEXT PRIMARY KEY, size INTEGER, mtime INTEGER, state TEXT, reason TEXT,
@@ -462,8 +462,8 @@ class Memory:
         db.execute('INSERT OR IGNORE INTO queue (kind, ref, added) VALUES (?, ?, ?)', (kind, str(ref), time.time()))
 
     def remember_file(self, path, st, text, auto=False):
-        """记住（或更新）一个文件的文字；大小和修改时间没变时只更新最近使用时间。返回是否重写了段落。
-        auto 为自动记入：不算「选用」，不更新最近使用时间，新记入的按从没用过算（容量满时先忘掉）。"""
+        """收录（或更新）一个文件的文字；大小和修改时间没变时只更新最近使用时间。返回是否重写了段落。
+        auto 为自动收录：不算「选用」，不更新最近使用时间，新收录的按从没用过算（容量满时先移出）。"""
         with self.lock:
             db = self._conn()
             changed = self._remember(db, path, st, text, auto)
@@ -498,7 +498,7 @@ class Memory:
         return True
 
     def _cap(self, db):
-        """文字超过容量上限时先忘掉最久没被选用或参考的文件；自动记入的文件被忘掉时记为 evicted。"""
+        """文字超过容量上限时先移出最久没被选用或参考的文件；自动收录的文件被移出时记为 evicted。"""
         total = db.execute('SELECT COALESCE(SUM(bytes), 0) FROM files').fetchone()[0]
         if total <= self.max_bytes:
             return
@@ -512,7 +512,7 @@ class Memory:
             log.info('memory over %d bytes, forgot a file', self.max_bytes)
 
     def set_max_bytes(self, n):
-        """改容量上限：改小时立即按新上限忘掉多出的文件；调大时，因容量不足没记入的文件之后可以重新自动记入。"""
+        """改容量上限：改小时立即按新上限移出多出的文件；调大时，因容量不足没收录的文件之后可以重新自动收录。"""
         with self.lock:
             bigger = n > self.max_bytes
             self.max_bytes = n
@@ -523,16 +523,16 @@ class Memory:
                 self._cap(db)
                 db.commit()
 
-    # ------------------------------------------------------------ 自动记入
+    # ------------------------------------------------------------ 自动收录
 
     def ingest_rows(self):
-        """{路径: (大小, 修改时间, 状态, 原因)}：自动记入过的文件。"""
+        """{路径: (大小, 修改时间, 状态, 原因)}：自动收录过的文件。"""
         with self.lock:
             return {r[0]: tuple(r[1:]) for r in self._conn().execute(
                 'SELECT path, size, mtime, state, reason FROM ingest').fetchall()}
 
     def ingest_file(self, path, st, text):
-        """自动记入一个文件：记入段落，排进「从文件抽结论」；容量不够被忘掉时记为 evicted。返回状态。"""
+        """自动收录一个文件：收录段落，排进「从文件抽结论」；容量不够被移出时记为 evicted。返回状态。"""
         with self.lock:
             db = self._conn()
             row = db.execute('SELECT size, mtime, done_n FROM ingest WHERE path = ?', (path,)).fetchone()
@@ -555,7 +555,7 @@ class Memory:
             return state
 
     def ingest_failed(self, path, st, reason):
-        """自动记入时取不出文字：记下原因，文件改过后再试。"""
+        """自动收录时取不出文字：记下原因，文件改过后再试。"""
         with self.lock:
             db = self._conn()
             db.execute('INSERT OR REPLACE INTO ingest (path, size, mtime, state, reason, time, done_n) '
@@ -564,7 +564,7 @@ class Memory:
             db.commit()
 
     def ingest_gone(self, paths):
-        """自动记入过、现已不在的文件：忘掉它们的段落、结论与要点，并移出清单。返回忘掉的个数。"""
+        """自动收录过、现已不在的文件：移出它们的段落、结论与要点，并移出清单。返回移出的个数。"""
         n = 0
         with self.lock:
             db = self._conn()
@@ -578,7 +578,7 @@ class Memory:
 
     def remember_answer(self, answer_id, question, answer, sources, missing=()):
         """把回答里核对通过的结论记下。sources: {文件号: 路径}，只记这些文件的摘句；
-        missing: 核对没通过的 [{'file', 'quote'}]。返回记住的条数。"""
+        missing: 核对没通过的 [{'file', 'quote'}]。返回收录的条数。"""
         bad = {(m.get('file'), m.get('quote')) for m in missing}
         found = [(n, q, c) for _, n, q, c in conclusions(answer) if n in sources and (n, q) not in bad and c]
         if not found:
@@ -619,10 +619,10 @@ class Memory:
             db.commit()
         return kept
 
-    # ------------------------------------------------------------ 忘掉
+    # ------------------------------------------------------------ 移出
 
     def wrong(self, answer_id):
-        """「不对」：忘掉这条回答记住的结论，并且之后不再记入同样的结论。返回忘掉的条数。"""
+        """「不对」：移出这条回答收录的结论，并且之后不再收录同样的结论。返回移出的条数。"""
         with self.lock:
             db = self._conn()
             rows = db.execute('SELECT id, path, qkey, conclusion, answers FROM facts').fetchall()
@@ -653,7 +653,7 @@ class Memory:
             db = self._conn()
             hit = db.execute('SELECT 1 FROM files WHERE path = ?', (path,)).fetchone()
             self._drop_file(db, path)
-            # 自动记入的文件：使用者忘掉的，文件改过之前不再自动记入
+            # 自动收录的文件：使用者移出的，文件改过之前不再自动收录
             db.execute("UPDATE ingest SET state = 'forgotten', reason = ?, done_n = 0 WHERE path = ?",
                        (FORGOTTEN, path))
             db.execute("DELETE FROM queue WHERE kind = 'extract' AND ref = ?", (path,))
@@ -686,8 +686,8 @@ class Memory:
                 'max_bytes': self.max_bytes}
 
     def ingest_summary(self, candidates, limit=200):
-        """勾选的文件夹里的文件 [(路径, 大小, 修改时间（纳秒）)] 的自动记入情况：done 已记入的个数，waiting 还没处理的个数，
-        skipped 没有记入的 [{'path', 'state', 'reason'}]（取不出文字、容量不足、已忘掉；至多 limit 个）及其总数。"""
+        """勾选的文件夹里的文件 [(路径, 大小, 修改时间（纳秒）)] 的自动收录情况：done 已收录的个数，waiting 还没处理的个数，
+        skipped 没有收录的 [{'path', 'state', 'reason'}]（取不出文字、容量不足、已移出；至多 limit 个）及其总数。"""
         rows = self.ingest_rows()
         done = waiting = 0
         skipped, n_skipped = [], 0
@@ -705,7 +705,7 @@ class Memory:
                 'skipped_total': n_skipped}
 
     def listing(self, q='', limit=200):
-        """记忆列表：结论（新的在前）与文件（最近用的在前），q 不为空时只列含 q 的。"""
+        """知识库列表：结论（新的在前）与文件（最近用的在前），q 不为空时只列含 q 的。"""
         like = '%' + q.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_') + '%'
         with self.lock:
             db = self._conn()
@@ -935,7 +935,7 @@ class Memory:
         return json.dumps(payload, ensure_ascii=False), ctx
 
     def apply_update(self, ctx, reply, mode, run=None):
-        """按模型的回答（UPDATE_PROMPT 约定的 JSON）改写记忆，返回 (更新记录 id, 各类改动数, 改动说明)。
+        """按模型的回答（UPDATE_PROMPT 约定的 JSON）改写知识库，返回 (更新记录 id, 各类改动数, 改动说明)。
         结论与要点都须原句核对通过、不是「不对」过的才写入；这一批里文件改过而没改写成功的删除。
         有改动时记进更新记录：run 为同一次更新的记录 id 时并入该记录，否则新建一条。回答看不懂时抛 ValueError。"""
         plan = {}
@@ -1143,7 +1143,7 @@ class Memory:
         return run, counts, changes
 
     def _apply_extract(self, db, ctx, plan, ok_quote, undo, seen, bump, changes, now):
-        """从文件抽结论的回答：原句核对通过、不是「不对」过、记忆里还没有同一原句的写入为新结论，排进更新队列。"""
+        """从文件抽结论的回答：原句核对通过、不是「不对」过、知识库里还没有同一原句的写入为新结论，排进更新队列。"""
         path = ctx['path']
         if db.execute('SELECT 1 FROM files WHERE path = ?', (path,)).fetchone():
             keys = set()
@@ -1222,7 +1222,7 @@ class Memory:
 
     def undo_update(self, run):
         """撤销最近一次更新（run 须为最近一次的 id）：把这次改过的结论、要点和主题页恢复到更新之前。
-        已不在记忆里的文件、「不对」过的结论不恢复。返回是否撤销了。"""
+        已不在知识库里的文件、「不对」过的结论不恢复。返回是否撤销了。"""
         with self.lock:
             db = self._conn()
             last = db.execute('SELECT id, undo FROM updates ORDER BY id DESC LIMIT 1').fetchone()
@@ -1258,7 +1258,7 @@ class Memory:
     # ------------------------------------------------------------ 保存为 Markdown
 
     def export_markdown(self):
-        """把主题页与结论写成可用 Obsidian 打开的一组 Markdown 文件，返回 zip 的字节；记忆里没有主题页和结论时返回 None。
+        """把主题页与结论写成可用 Obsidian 打开的一组 Markdown 文件，返回 zip 的字节；知识库里没有主题页和结论时返回 None。
         主题/<主题>.md：要点、原句、出处链接与相关主题链接；文件/<文件名>.md：原路径、来自它的结论与原句；
         索引.md：全部主题页。不含段落全文。"""
         with self.lock:
@@ -1306,7 +1306,7 @@ class Memory:
             if topics_of.get(path):
                 lines += ['## 出现在主题', ''] + ['- ' + tlink(i) for i in topics_of[path]]
             out['文件/%s.md' % fname[path]] = '\n'.join(lines).rstrip('\n') + '\n'
-        index = ['# 记忆索引', '', '保存时间：' + stamp(time.time()), '',
+        index = ['# 知识库索引', '', '保存时间：' + stamp(time.time()), '',
                  '主题页 %d 页、结论 %d 条、文件 %d 个。' % (len(topics), len(facts), len(paths)), '']
         if topics:
             index += ['## 主题', ''] + ['- ' + tlink(t[0]) for t in topics] + ['']
@@ -1338,7 +1338,7 @@ class Memory:
         return [r for r in rows if r[1] not in exclude and not (table != 'paras' and r[-1])]
 
     def _fresh(self, db, paths, extract):
-        """检查候选文件：不在了就忘掉；改过就重新取文字。返回是否有改动。"""
+        """检查候选文件：不在了就移出；改过就重新取文字。返回是否有改动。"""
         changed = False
         for path in paths:
             row = db.execute('SELECT size, mtime FROM files WHERE path = ?', (path,)).fetchone()
@@ -1368,7 +1368,7 @@ class Memory:
         return changed
 
     def recall(self, question, exclude=(), budget=0, extract=None):
-        """提问用的记忆：[{'path', 'facts': [{'id', 'conclusion', 'quote', 'count'}], 'paras': [文字]}]，
+        """提问用的知识库：[{'path', 'facts': [{'id', 'conclusion', 'quote', 'count'}], 'paras': [文字]}]，
         主题页要点（结论写作「主题：要点」，id 为 p 加编号）在前，其次是结论，合计不超过 budget 字
         （结论与段落都算）；同一原句只用一次。extract(path) 返回文件当前的文字。"""
         words = keywords(question)

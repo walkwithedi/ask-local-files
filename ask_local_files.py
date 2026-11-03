@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-ask_local_files  --  找资料问 AI
+ask_local_files  --  本机资料问答
 
 纯 Python 3 标准库实现。双击「双击运行」即启动本程序：只监听 127.0.0.1 的固定端口（默认 47821），
 网址带持久令牌（~/.config/ask-local-files/token，权限 600），用浏览器打开同目录的 ask_local_files.html；
@@ -25,12 +25,12 @@ ask_local_files  --  找资料问 AI
     - skill：可选一个 OpenCode 格式的 skill（工具目录 skills/ 里预装的，或 ~/.config/opencode/skills/
       里自建的），正文并进系统消息；模型可用函数调用读 skill 目录里的文件、运行其中的 .py/.sh 脚本
       （自动运行，单次 60 秒，每问最多 5 次），脚本写进临时输出目录的文件可在页面上保存。
-    - 保存位置：记忆、设置与令牌默认在家目录（XDG 目录），可在页面或用 --data-dir 一起改到指定文件夹，
-      位置记在工具目录的 data-dir.txt；位置不可用时不回退家目录，本次不记入记忆、不保存设置。
-    - 记忆（ask_memory.py，默认开，设置里可关）：提问时选过的文件按段落存进本机 SQLite 记忆
+    - 保存位置：知识库、设置与令牌默认在家目录（XDG 目录），可在页面或用 --data-dir 一起改到指定文件夹，
+      位置记在工具目录的 data-dir.txt；位置不可用时不回退家目录，本次不收录到知识库、不保存设置。
+    - 知识库（ask_memory.py，默认开，设置里可关）：提问时选过的文件按段落存进本机 SQLite 知识库
       （保存位置里的 memory.sqlite，权限 600），回答里核对通过的摘句连同结论记下；
-      之后提问时按关键字检索记忆，结论与原文段落排在已选文件之后一起发给模型，取用前按文件当前内容复核。
-      「更新记忆」或空闲时自动把记忆分批交给模型，整理成主题页，合并重复、以新代旧、改写文件改过的结论，可撤销。
+      之后提问时按关键字检索知识库，结论与原文段落排在已选文件之后一起发给模型，取用前按文件当前内容复核。
+      「更新知识库」或空闲时自动把知识库分批交给模型，整理成主题页，合并重复、以新代旧、改写文件改过的结论，可撤销。
     - 文件夹输入框接受 file:/// 地址；可由本机服务弹出系统的目录选择框（zenity、kdialog 或 tkinter）。
     - 按文件名去重：同名（不区分大小写，去掉一个副本标记后相同也算）只列修改时间最新的一个。
 
@@ -75,7 +75,7 @@ from urllib.parse import parse_qs, urlsplit
 LOG_FORMAT = '%(asctime)s [%(levelname)s] %(name)s.%(funcName)s:%(lineno)d - %(message)s'
 log = logging.getLogger('ask_local_files')
 
-VERSION = '2.10'
+VERSION = '2.11'
 HERE = os.path.dirname(os.path.abspath(__file__))
 PAGE_FILE = os.path.join(HERE, 'ask_local_files.html')
 HELP_FILE = os.path.join(HERE, 'help.html')
@@ -88,11 +88,11 @@ CONFIG_FILE = os.path.join(XDG_CONFIG, 'ask-local-files', 'config.json')
 CACHE_FILE = os.path.join(XDG_CACHE, 'ask-local-files', 'index.json')
 MEMORY_FILE = os.path.join(XDG_DATA, 'ask-local-files', 'memory.sqlite')
 TOKEN_FILE = os.path.join(XDG_CONFIG, 'ask-local-files', 'token')
-MEMORY_SHARE = 3        # 选了文件时，记忆至多占发送字数上限（扣除 skill 与对话后）的几分之一
-MEMORY_IDLE = 600       # 空闲时自动更新记忆：多少秒没有提问后开始
-MEMORY_MB = 1024        # 记忆容量上限的默认值（MB），可在「记忆设置」里改
+MEMORY_SHARE = 3        # 选了文件时，知识库至多占发送字数上限（扣除 skill 与对话后）的几分之一
+MEMORY_IDLE = 600       # 空闲时自动更新知识库：多少秒没有提问后开始
+MEMORY_MB = 1024        # 知识库容量上限的默认值（MB），可在「知识库设置」里改
 MEMORY_MB_RANGE = (50, 102400)
-INGEST_EVERY = 600      # 自动记入：至多每多少秒再查一遍勾选的文件夹（另在每次索引扫描后查）
+INGEST_EVERY = 600      # 自动收录：至多每多少秒再查一遍勾选的文件夹（另在每次索引扫描后查）
 OPENCODE_DIR = os.path.join(XDG_CONFIG, 'opencode')
 USER_SKILLS = os.path.join(OPENCODE_DIR, 'skills')
 BUNDLED_SKILLS = os.path.join(HERE, 'skills')
@@ -197,7 +197,7 @@ APP_DESKTOP_FILES = ('qaxbrowser-safe.desktop', 'qaxbrowser.desktop', 'browser36
                      'uos-browser.desktop')
 SKILL_NAME_RE = re.compile(r'^[a-z0-9]+(-[a-z0-9]+)*$')   # OpenCode 对 skill 名称的要求
 
-import ask_memory   # noqa: E402  同目录的记忆模块
+import ask_memory   # noqa: E402  同目录的知识库模块
 
 try:
     import doc2kb_core
@@ -249,11 +249,11 @@ class Config:
         self.dedup = data.get('dedup') is not False     # 按文件名去重，默认开
         self.regex = data.get('regex') is True          # 搜索框按正则表达式，默认关
         self.ignore_md = data.get('ignore_md') is not False     # 找文件不列 Markdown 文件，默认开
-        self.memory = data.get('memory') is not False   # 记忆总开关，默认开
-        self.use_memory = data.get('use_memory') is not False   # 「问 AI」里的「参考记忆」，默认开
-        self.memory_notice = data.get('memory_notice') is True  # 已提示过记忆默认打开
-        self.memory_auto = data.get('memory_auto') is not False     # 空闲时自动更新记忆，默认开
-        # 自动记入记忆的文件夹（须是已添加的文件夹），默认没有
+        self.memory = data.get('memory') is not False   # 知识库总开关，默认开
+        self.use_memory = data.get('use_memory') is not False   # 「问 AI」里的「参考知识库」，默认开
+        self.memory_notice = data.get('memory_notice') is True  # 已提示过知识库默认打开
+        self.memory_auto = data.get('memory_auto') is not False     # 空闲时自动更新知识库，默认开
+        # 自动收录到知识库的文件夹（须是已添加的文件夹），默认没有
         self.auto_folders = [f for f in data.get('auto_folders', []) if isinstance(f, str) and f in self.folders]
         mb = data.get('memory_mb')
         self.memory_mb = mb if isinstance(mb, int) and not isinstance(mb, bool) and \
@@ -289,11 +289,11 @@ class Config:
 
 # ---------------------------------------------------------------- 保存位置
 
-# 记忆、设置与令牌的保存位置记在工具目录的位置文件里（一行绝对路径），不放家目录，家目录被清理时也不丢。
+# 知识库、设置与令牌的保存位置记在工具目录的位置文件里（一行绝对路径），不放家目录，家目录被清理时也不丢。
 # 没有位置文件时用默认位置（XDG 目录）；位置文件里的目录不可用时不回退家目录，本次只在内存里运行。
 DATA_DIR_FILE = os.path.join(HERE, 'data-dir.txt')
 DATA_NAMES = ('memory.sqlite', 'config.json', 'token')
-DATA_LABELS = {'memory.sqlite': '记忆', 'config.json': '设置', 'token': '网址令牌'}
+DATA_LABELS = {'memory.sqlite': '知识库', 'config.json': '设置', 'token': '网址令牌'}
 DATA = {'dir': None, 'ok': True, 'error': ''}     # dir 为 None 时是默认位置
 
 
@@ -432,7 +432,7 @@ def move_data(src_paths, dest, names):
 
 def change_data_dir(dest, pointer=None, need_pointer=True):
     """把保存位置改到 dest（已经 norm_data_dir）：按 data_plan 移动或改用，再写位置文件，最后切换路径。
-    调用前须关闭记忆库。写不进位置文件且 need_pointer 为真时撤回移动并抛 OSError；need_pointer 为假时只记日志，
+    调用前须关闭知识库库。写不进位置文件且 need_pointer 为真时撤回移动并抛 OSError；need_pointer 为假时只记日志，
     本次照样用 dest。返回 (方式, [(文件名, 字节数)], 位置文件是否写入)。"""
     pointer = pointer or DATA_DIR_FILE
     mode, items = data_plan(dest)
@@ -641,7 +641,7 @@ class FileIndex:
         self.unreadable = []        # 读不了的文件夹，最多列 UNREADABLE_SHOWN 个
         self.scanned_at = ''
         self.built_roots = None     # 当前 snap 对应的文件夹清单
-        self.on_done = None         # 每次扫描结束后调用（自动记入记忆）
+        self.on_done = None         # 每次扫描结束后调用（自动收录到知识库）
         cache = load_json(cache_path, {})
         if cache.get('v') == 1 and isinstance(cache.get('dirs'), dict):
             self.dirs = cache['dirs']
@@ -735,7 +735,7 @@ class FileIndex:
             if self.on_done and not self.error.startswith('索引失败'):
                 try:
                     self.on_done()
-                except Exception:       # 后台线程：自动记入出错不影响索引
+                except Exception:       # 后台线程：自动收录出错不影响索引
                     log.exception('after-scan hook failed')
 
     def set_unreadable(self, errors):
@@ -1797,7 +1797,7 @@ def discover_local(servers=None):
 
 
 class LocalModels:
-    """最近一次探测到的本机模型；打开页面、展开「模型设置」或点「重新查找」时重新探测。"""
+    """最近一次探测到的本机模型；打开页面、打开设置的「模型」标签或点「重新查找」时重新探测。"""
 
     def __init__(self, servers=None):
         self.servers = servers
@@ -1860,7 +1860,7 @@ def model_targets(config, local=None):
 
 
 NOT_FOUND = '所选文件中未找到'
-SUPPLEMENT = '文件外补充（未核对）：'    # 回答末尾这一段不核对摘句、不记入记忆
+SUPPLEMENT = '文件外补充（未核对）：'    # 回答末尾这一段不核对摘句、不收录到知识库
 QUOTE_MAX = 50          # 每条摘句至多多少字
 CITE_RULE = ('只依据下面这些文件的文字回答，正文不用常识或文件以外的知识。'
              '每个结论后面紧跟出处，写成（文件 N：「原文摘句」）。摘句先在原文里找到再逐字照抄，'
@@ -1874,9 +1874,9 @@ CITE_REMINDER = ('===== 回答要求（重申）=====\n只依据上面的文件�
                  '」；文件以外的内容只能放在末尾「' + SUPPLEMENT + '」一段。')
 CITE_RE = re.compile(r'文件\s*(\d+)\s*[:：]\s*「([^「」]+)」')
 SCRIPT_NOTE = '（脚本输出）'
-MEMORY_NOTE = ('标「来自记忆」的文件是以前提问时用过的文件的节选，按这次的问题从本机记忆里找出，已按文件当前内容复核；'
+MEMORY_NOTE = ('标「来自知识库」的文件是以前提问时用过的文件的节选，按这次的问题从本机知识库里找出，已按文件当前内容复核；'
                '其中「以前的结论」只是线索，引用时照样写（文件 N：「原文摘句」），摘句从该文件「原文节选」里逐字照抄。')
-NO_MEMORY_HIT = '没有选文件，记忆里也没有相关内容：请先在「找文件」里加入要用的文件，或选一个 skill'
+NO_MEMORY_HIT = '没有选文件，知识库里也没有相关内容：请先在「找文件」里加入要用的文件，或选一个 skill'
 SKILL_INTRO = ('使用者选用了 skill「%s」，下面是它的说明，按说明完成使用者的要求。'
                '说明里提到的 skill 目录文件用 read_skill_file 读取，脚本用 run_script 运行，要交给脚本的长内容先用 '
                + WRITE_TOOL + ' 写进工作目录（只能用这几个工具，'
@@ -1891,7 +1891,7 @@ def skill_prompt(skill):
 
 
 def memory_text(block):
-    """记忆里一个文件的原文节选：摘句按它核对。"""
+    """知识库里一个文件的原文节选：摘句按它核对。"""
     return '\n\n'.join(block['paras'])
 
 
@@ -1911,7 +1911,7 @@ def shown_text(path, text, roots):
 
 
 def memory_part(n, block, roots=()):
-    lines = ['===== 文件 %d：%s（来自记忆，节选）=====' % (n, shown_path(block['path'], roots))]
+    lines = ['===== 文件 %d：%s（来自知识库，节选）=====' % (n, shown_path(block['path'], roots))]
     if block['facts']:
         lines.append('以前的结论（只作线索）：')
         lines += ['- %s（原文：「%s」）' % (f['conclusion'], f['quote']) for f in block['facts']]
@@ -1922,7 +1922,7 @@ def memory_part(n, block, roots=()):
 
 def build_messages(files, history, skill=None, memory=(), roots=()):
     """files: [(路径, 文字)]；history: [{role, content}]，最后一条是使用者的新问题；skill 为所选 skill；
-    memory: 从记忆里找出的 [{'path', 'facts', 'paras'}]，编号接在已选文件之后。
+    memory: 从知识库里找出的 [{'path', 'facts', 'paras'}]，编号接在已选文件之后。
     规则写在文件之前，所有文件之后再重申要点；选了 skill 时格式按 skill 的说明，不加 FORMAT_RULE。
     路径按 roots（已添加的文件夹）写成 shown_path。"""
     parts = [skill_prompt(skill)] if skill else []
@@ -1944,7 +1944,7 @@ def build_messages(files, history, skill=None, memory=(), roots=()):
 
 
 def main_part(answer):
-    """回答去掉末尾「文件外补充（未核对）：」一段后的正文：只核对和记住正文。"""
+    """回答去掉末尾「文件外补充（未核对）：」一段后的正文：只核对和收录正文。"""
     i = answer.find(SUPPLEMENT)
     return answer if i < 0 else answer[:i]
 
@@ -1960,7 +1960,7 @@ def clean_title(text):
 
 
 def memory_public(memory, first, roots=()):
-    """页面上「参考了记忆」的说明：用到的结论与段落及其出处；shown 为保存对话时写的 shown_path。"""
+    """页面上「参考了知识库」的说明：用到的结论与段落及其出处；shown 为保存对话时写的 shown_path。"""
     return {'facts': sum(len(b['facts']) for b in memory), 'paras': sum(len(b['paras']) for b in memory),
             'files': [{'n': i, 'path': b['path'], 'shown': shown_path(b['path'], roots), 'paras': len(b['paras']),
                        'facts': [{'conclusion': f['conclusion'], 'quote': f['quote']} for f in b['facts']]}
@@ -2101,11 +2101,11 @@ def test_target(tg):
     return ''
 
 
-# ---------------------------------------------------------------- 记忆更新
+# ---------------------------------------------------------------- 知识库更新
 
 class MemoryUpdater:
-    """在后台把记忆的更新队列（手动时另加全量体检）分批交给模型，按回答整理主题页、合并、以新代旧、改写或删除。
-    手动（「更新记忆」）可停止，退出时等它结束；自动（「空闲时自动更新」）在没有回答在生成、且 idle 秒没有提问时
+    """在后台把知识库的更新队列（手动时另加全量体检）分批交给模型，按回答整理主题页、合并、以新代旧、改写或删除。
+    手动（「更新知识库」）可停止，退出时等它结束；自动（「空闲时自动更新」）在没有回答在生成、且 idle 秒没有提问时
     处理队列，发起提问或退出时立即停下，正在处理的那一批不写入。模型调用失败时停下这一轮。"""
 
     def __init__(self, state, idle=MEMORY_IDLE):
@@ -2179,7 +2179,7 @@ class MemoryUpdater:
         try:
             units = mem.plan_update(full=mode == 'manual')
         except (sqlite3.Error, OSError) as e:
-            self._finish('error', '更新记忆失败：读不了记忆（%s）。' % e)
+            self._finish('error', '更新知识库失败：读不了知识库（%s）。' % e)
             return
         if not units:
             self._finish('done', '没有要更新的内容。' if mode == 'manual' else '')
@@ -2226,11 +2226,11 @@ class MemoryUpdater:
                         with self.lock:
                             self.total = len(units)
             except ModelError as e:
-                self._finish('error', '更新记忆失败：%s。%s' % (e, '已写入的改动保留；' if counts else '') +
-                             '请在「模型设置」里检查模型后再点「更新记忆」。')
+                self._finish('error', '更新知识库失败：%s。%s' % (e, '已写入的改动保留；' if counts else '') +
+                             '请在「模型设置」里检查模型后再点「更新知识库」。')
                 return
             except (sqlite3.Error, OSError) as e:
-                self._finish('error', '更新记忆失败：记忆写不进去（%s）。' % e)
+                self._finish('error', '更新知识库失败：知识库写不进去（%s）。' % e)
                 return
         done = ask_memory.summary(counts)
         if self.halt.is_set():
@@ -2243,10 +2243,10 @@ class MemoryUpdater:
         with self.lock:
             self.done = self.total
         note = '另有 %d 批模型的回答看不懂，没有写入，留待下次。' % unreadable if unreadable else ''
-        self._finish('done', '记忆已更新：%s。%s' % (done, note))
+        self._finish('done', '知识库已更新：%s。%s' % (done, note))
 
     def tick(self):
-        """空闲时自动更新：打开了记忆和自动更新、没有回答在生成、idle 秒没有提问（也没自动试过）、队里有内容。"""
+        """空闲时自动更新：打开了知识库和自动更新、没有回答在生成、idle 秒没有提问（也没自动试过）、队里有内容。"""
         cfg = self.st.config
         if not (cfg.memory and cfg.memory_auto) or self.st.chats or self.st.quit.is_set():
             return
@@ -2275,7 +2275,7 @@ def memory_timer(updater, interval=20, ingest=None):
             log.exception('memory auto update failed to start')
 
 
-# ---------------------------------------------------------------- 自动记入记忆
+# ---------------------------------------------------------------- 自动收录到知识库
 
 INGEST_EXT = TEXT_EXT | HTML_EXT | DOC2KB_EXT | set(OLD_OFFICE_AS)
 
@@ -2285,8 +2285,8 @@ def under(path, roots):
 
 
 class AutoIngest:
-    """把勾选了「自动记入记忆」的文件夹里新增或改过的文件取文字记进记忆（只读原文件，不调模型），
-    并排进「从文件抽结论」，由记忆更新在空闲时交给模型。每次索引扫描后、点「立即记入」时、
+    """把勾选了「自动收录到知识库」的文件夹里新增或改过的文件取文字收录到知识库（只读原文件，不调模型），
+    并排进「从文件抽结论」，由知识库更新在空闲时交给模型。每次索引扫描后、点「立即收录」时、
     以及至多每 INGEST_EVERY 秒查一遍；不算任务，不拖住退出，下次启动接着做。"""
 
     def __init__(self, state):
@@ -2297,7 +2297,7 @@ class AutoIngest:
         self.stage = ''
         self.done = self.total = 0
         self.result = None      # {'kind': done|error, 'text', 'time'}
-        self.summary = None     # 最近一次查过的记入情况（Memory.ingest_summary）
+        self.summary = None     # 最近一次查过的收录情况（Memory.ingest_summary）
         self.last = 0.0
 
     def enabled(self):
@@ -2310,7 +2310,7 @@ class AutoIngest:
                     'result': self.result, 'summary': self.summary, 'folders': list(self.st.config.auto_folders)}
 
     def start(self):
-        """查一遍；正在查时查完再来一遍。没有勾选的文件夹或记忆关闭时返回 False。"""
+        """查一遍；正在查时查完再来一遍。没有勾选的文件夹或知识库关闭时返回 False。"""
         if not self.enabled():
             with self.lock:
                 self.summary = None
@@ -2321,7 +2321,7 @@ class AutoIngest:
                 self.again = True
                 return True
             self.running, self.again = True, False
-            self.stage, self.done, self.total = '查找要记入的文件', 0, 0
+            self.stage, self.done, self.total = '查找要收录的文件', 0, 0
         threading.Thread(target=self._run, daemon=True).start()
         return True
 
@@ -2354,11 +2354,11 @@ class AutoIngest:
             except (sqlite3.Error, OSError) as e:
                 log.warning('auto ingest failed: %s', e)
                 with self.lock:
-                    self.result = {'kind': 'error', 'text': '自动记入失败：记忆写不进去（%s）。' % e, 'time': time.time()}
+                    self.result = {'kind': 'error', 'text': '自动收录失败：知识库写不进去（%s）。' % e, 'time': time.time()}
             except Exception as e:      # 后台线程不能静默卡在进行中
                 log.exception('auto ingest failed')
                 with self.lock:
-                    self.result = {'kind': 'error', 'text': '自动记入失败：%s。' % e, 'time': time.time()}
+                    self.result = {'kind': 'error', 'text': '自动收录失败：%s。' % e, 'time': time.time()}
             with self.lock:
                 if not self.again or self.st.quit.is_set():
                     self.running, self.stage = False, ''
@@ -2381,7 +2381,7 @@ class AutoIngest:
             if self.st.quit.is_set() or not self.enabled():
                 break
             with self.lock:
-                self.done, self.stage = i, '正在记入第 %d / %d 个文件' % (i + 1, len(todo))
+                self.done, self.stage = i, '正在收录第 %d / %d 个文件' % (i + 1, len(todo))
             try:
                 st = os.stat(path)
             except OSError:
@@ -2409,7 +2409,7 @@ class AutoIngest:
             self.summary = summary
             if todo:
                 self.result = {'kind': 'done', 'time': time.time(),
-                               'text': '自动记入：新记入 %d 个文件%s。' % (kept, '，%d 个没有记入' % failed if failed else '')}
+                               'text': '自动收录：新收录 %d 个文件%s。' % (kept, '，%d 个没有收录' % failed if failed else '')}
         if todo:
             log.info('auto ingest: %d recorded, %d not recorded', kept, failed)
 
@@ -2617,13 +2617,13 @@ class WebState:
         if self.chats > 0:
             return '有回答正在生成，等它结束后再改'
         if self.updater.running:
-            return '记忆正在更新，等它结束或点「停止」后再改'
+            return '知识库正在更新，等它结束或点「停止」后再改'
         if self.ingest.running:
-            return '正在自动记入记忆，等它结束后再改'
+            return '正在自动收录到知识库，等它结束后再改'
         return ''
 
     def apply_data_dir(self):
-        """保存位置改了之后：按新位置重新读设置、打开记忆库、读令牌（网址可能随之改变），刷新文件夹索引。"""
+        """保存位置改了之后：按新位置重新读设置、打开知识库库、读令牌（网址可能随之改变），刷新文件夹索引。"""
         cfg = self.config
         with cfg.lock:
             cfg.path, cfg.readonly = CONFIG_FILE, False
@@ -2811,7 +2811,7 @@ class Handler(BaseHTTPRequestHandler):
                 out = st.memory.listing(arg('q').strip()[:200])
             except (sqlite3.Error, OSError) as e:
                 log.warning('memory: listing failed: %s', e)
-                self.send_json(500, {'error': '读不了记忆（%s）' % e})
+                self.send_json(500, {'error': '读不了知识库（%s）' % e})
                 return
             out['stats'] = self.memory_stats()
             self.send_json(200, out)
@@ -2911,9 +2911,9 @@ class Handler(BaseHTTPRequestHandler):
             self.post_memory_update(data)
         elif url.path == '/api/memory-ingest':
             if not st.config.memory:
-                self.send_json(400, {'error': '记忆已关闭，请先打开记忆'})
+                self.send_json(400, {'error': '知识库已关闭，请先打开知识库'})
             elif not st.ingest.start():
-                self.send_json(400, {'error': '还没有勾选「自动记入记忆」的文件夹：请在「管理文件夹」里勾选'})
+                self.send_json(400, {'error': '还没有勾选「自动收录到知识库」的文件夹：请在「管理文件夹」里勾选'})
             else:
                 self.send_json(200, st.ingest.status())
         elif url.path == '/api/title':
@@ -2966,12 +2966,12 @@ class Handler(BaseHTTPRequestHandler):
             body = self.state.memory.export_markdown()
         except (sqlite3.Error, OSError) as e:
             log.warning('memory: export failed: %s', str(e).replace('\r', ' ').replace('\n', ' '))
-            self.send_json(500, {'error': '读不了记忆（%s）' % e})
+            self.send_json(500, {'error': '读不了知识库（%s）' % e})
             return
         if body is None:
-            self.send_json(400, {'error': '记忆里还没有主题页和结论'})
+            self.send_json(400, {'error': '知识库里还没有主题页和结论'})
             return
-        name = '记忆-%s.zip' % time.strftime('%Y%m%d-%H%M')
+        name = '知识库-%s.zip' % time.strftime('%Y%m%d-%H%M')
         self.send_response(200)
         self.send_header('Content-Type', 'application/zip')
         self.send_header('Content-Length', str(len(body)))
@@ -2993,7 +2993,7 @@ class Handler(BaseHTTPRequestHandler):
                     'error': str(e)}
 
     def post_memory(self, data):
-        """记忆的管理：「不对」（wrong）、删一条结论（fact）、删一页主题页（topic）、忘掉一个文件（file）、清空（clear）。"""
+        """知识库的管理：「不对」（wrong）、删一条结论（fact）、删一页主题页（topic）、移出一个文件（file）、清空（clear）。"""
         mem, action = self.state.memory, data.get('action')
         try:
             if action == 'wrong' and isinstance(data.get('answer_id'), str) and data['answer_id']:
@@ -3008,22 +3008,22 @@ class Handler(BaseHTTPRequestHandler):
                 mem.clear()
                 n = 0
             else:
-                self.send_json(400, {'error': '不认识的记忆操作'})
+                self.send_json(400, {'error': '不认识的知识库操作'})
                 return
         except (sqlite3.Error, OSError) as e:
             # 页面传来的取值只记已知的几种，异常文字去掉换行，免得伪造日志行
             act = {'wrong': 'wrong', 'fact': 'fact', 'topic': 'topic', 'file': 'file', 'clear': 'clear'}.get(action, '?')
             log.warning('memory: %s failed: %s', act, str(e).replace('\r', ' ').replace('\n', ' '))
-            self.send_json(500, {'error': '记忆写不进去（%s）' % e})
+            self.send_json(500, {'error': '知识库写不进去（%s）' % e})
             return
         self.send_json(200, {'ok': True, 'count': n, 'stats': self.memory_stats()})
 
     def post_memory_update(self, data):
-        """「更新记忆」（run）、停止（stop）、撤销最近一次更新（undo，id 为该次记录的编号）。"""
+        """「更新知识库」（run）、停止（stop）、撤销最近一次更新（undo，id 为该次记录的编号）。"""
         st, action = self.state, data.get('action')
         if action == 'run':
             if not st.config.memory:
-                self.send_json(400, {'error': '记忆已关闭，请先打开记忆'})
+                self.send_json(400, {'error': '知识库已关闭，请先打开知识库'})
                 return
             try:
                 if not st.updater.start('manual'):
@@ -3042,13 +3042,13 @@ class Handler(BaseHTTPRequestHandler):
                 ok = st.memory.undo_update(data['id'])
             except (sqlite3.Error, OSError) as e:
                 log.warning('memory: undo failed: %s', str(e).replace('\r', ' ').replace('\n', ' '))
-                self.send_json(500, {'error': '记忆写不进去（%s）' % e})
+                self.send_json(500, {'error': '知识库写不进去（%s）' % e})
                 return
             if not ok:
                 self.send_json(409, {'error': '只能从最近一次往回撤销，请刷新更新记录后再试'})
                 return
         else:
-            self.send_json(400, {'error': '不认识的记忆操作'})
+            self.send_json(400, {'error': '不认识的知识库操作'})
             return
         out = st.updater.status()
         out['stats'] = self.memory_stats()
@@ -3098,7 +3098,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json(200, {'text': text, 'chars': len(text), 'files': len(got), 'skipped': len(files) - len(got)})
 
     def post_folders(self, data):
-        """添加（add）、移除（remove）文件夹，或打开、关掉一个文件夹的「自动记入记忆」（auto 为文件夹，on 为是否打开）。"""
+        """添加（add）、移除（remove）文件夹，或打开、关掉一个文件夹的「自动收录到知识库」（auto 为文件夹，on 为是否打开）。"""
         st = self.state
         cfg, idx = st.config, st.index
         merged = []
@@ -3109,7 +3109,7 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 on = data.get('on') is True
                 if on and not cfg.memory:
-                    self.send_json(400, {'error': '记忆已关闭，请先在「记忆设置」里打开记忆'})
+                    self.send_json(400, {'error': '知识库已关闭，请先在「知识库设置」里打开知识库'})
                     return
                 cfg.auto_folders = [f for f in cfg.auto_folders if f != data['auto']] + ([data['auto']] if on else [])
                 cfg.save()
@@ -3134,9 +3134,11 @@ class Handler(BaseHTTPRequestHandler):
                 merged = [f for f in cfg.folders if f.startswith(folder.rstrip(os.sep) + os.sep)]
                 cfg.folders = [f for f in cfg.folders if f not in merged]
                 cfg.folders.append(folder)
+                # 新添加的文件夹默认自动收录；知识库关闭时同样记为勾选，打开知识库后开始收录
+                cfg.auto_folders = [f for f in cfg.auto_folders if f != folder] + [folder]
             elif data.get('remove'):
                 cfg.folders = [f for f in cfg.folders if f != data['remove']]
-            # 移除或并入上级的文件夹不再自动记入；已记住的保留
+            # 移除或并入上级的文件夹不再自动收录；已收录的保留
             cfg.auto_folders = [f for f in cfg.auto_folders if f in cfg.folders]
             cfg.save()
         idx.refresh()
@@ -3186,7 +3188,7 @@ class Handler(BaseHTTPRequestHandler):
                 except (sqlite3.Error, OSError) as e:
                     log.warning('memory: cannot apply capacity: %s', str(e).replace('\r', ' ').replace('\n', ' '))
             if not DATA['ok'] and any(data.get(k) for k in ('memory', 'use_memory', 'memory_auto')):
-                self.send_json(409, {'error': '保存位置不可用，本次不能打开记忆'})
+                self.send_json(409, {'error': '保存位置不可用，本次不能打开知识库'})
                 return
             for k in ('memory', 'use_memory', 'memory_notice', 'memory_auto', 'data_notice'):
                 if k in data:
@@ -3274,7 +3276,7 @@ class Handler(BaseHTTPRequestHandler):
         return lambda tmp: copy_skill_dir(src, tmp)
 
     def post_data_dir(self, data):
-        """更改保存位置。不带 confirm 时只检查并返回计划（plan），带 confirm 时执行：新位置为空就把当前的记忆、设置
+        """更改保存位置。不带 confirm 时只检查并返回计划（plan），带 confirm 时执行：新位置为空就把当前的知识库、设置
         与令牌移过去，已有就直接改用那一份；有任务进行时不改（见 busy_reason）。"""
         st = self.state
         try:
@@ -3332,7 +3334,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json(200, {'ok': True, 'path': path})
 
     def post_title(self, data):
-        """把第一问与回答节选交给所选模型，概括成 TITLE_CHARS 字以内的对话标题。不带文件与记忆，不写进对话；
+        """把第一问与回答节选交给所选模型，概括成 TITLE_CHARS 字以内的对话标题。不带文件与知识库，不写进对话；
         超过时限、出错或概括不出时返回 ok False，页面保留原来的标签文字。"""
         targets, default = model_targets(self.state.config, self.state.local_models)
         tg = targets.get(data.get('model') or default)
@@ -3457,8 +3459,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(413, {'error': 'too_long', 'total': total, 'files': files_chars,
                                  'history': history_chars, 'skill': skill_chars, 'limit': limit})
             return
-        # 记忆：没选文件时可用全部余量；选了文件时至多占余量的 1/MEMORY_SHARE，且只用文件用不完的部分，
-        # 不因记忆而要求截断；已在截断时照样给记忆留出这一份
+        # 知识库：没选文件时可用全部余量；选了文件时至多占余量的 1/MEMORY_SHARE，且只用文件用不完的部分，
+        # 不因知识库而要求截断；已在截断时照样给知识库留出这一份
         room = limit - fixed
         if not files:
             budget = room
@@ -3560,7 +3562,7 @@ class Handler(BaseHTTPRequestHandler):
                 shutil.rmtree(work, ignore_errors=True)
             st.chat_end()
 
-    # 记忆出错（库文件损坏、磁盘满等）只记日志，不影响提问
+    # 知识库出错（库文件损坏、磁盘满等）只记日志，不影响提问
     def remember_files(self, paths, texts):
         for path, text in zip(paths, texts):
             try:
@@ -3814,7 +3816,7 @@ def serve(open_browser=True, app=True, port=None, idle=IDLE_TIMEOUT):
     if DATA['ok']:
         token = load_token()
     else:
-        # 保存位置不可用：不回退家目录，本次设置只在内存、不记入也不参考记忆，令牌临时生成
+        # 保存位置不可用：不回退家目录，本次设置只在内存、不收录也不参考知识库，令牌临时生成
         config.readonly = True
         config.memory = config.use_memory = config.memory_auto = False
         token = secrets.token_urlsafe(24)
@@ -3896,7 +3898,7 @@ def cli_data_dir(value, port=None):
     if DATA['ok'] and os.path.isfile(TOKEN_FILE):
         port = port or Config().port or DEFAULT_PORT
         if probe_running(port, load_token()) == 'self':
-            print('更改保存位置失败：本工具正在运行。请先在页面上点「退出」再运行，或在「记忆设置」里更改。', file=sys.stderr)
+            print('更改保存位置失败：本工具正在运行。请先在页面上点「退出」再运行，或在页面设置的「通用」里更改。', file=sys.stderr)
             return 1
     try:
         mode, items, written = change_data_dir(dest, need_pointer=False)
@@ -3936,7 +3938,7 @@ def seconds_arg(text):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description='找资料问 AI：快速找出文件，交给 AI 提问、改写、总结（双击运行即此程序）。')
+    ap = argparse.ArgumentParser(description='本机资料问答：快速找出文件，交给 AI 提问、改写、总结（双击运行即此程序）。')
     ap.add_argument('--no-browser', action='store_true', help='不自动打开浏览器，只打印网址')
     ap.add_argument('--no-app', action='store_true',
                     help='用默认浏览器的普通窗口打开，不用 Chromium 系浏览器的应用窗口模式')
@@ -3945,7 +3947,7 @@ def main(argv=None):
     ap.add_argument('--idle-timeout', type=seconds_arg, default=IDLE_TIMEOUT, metavar='SECONDS',
                     help='没有页面、也没有任务多少秒后退出，默认 %d，0 表示不自动退出' % IDLE_TIMEOUT)
     ap.add_argument('--data-dir', metavar='DIR',
-                    help='记忆、设置与令牌的保存位置，与页面「记忆设置」里的「更改」等效：新位置为空时把现有的移过去，'
+                    help='知识库、设置与令牌的保存位置，与页面设置「通用」里的「更改」等效：新位置为空时把现有的移过去，'
                          '已有时直接改用；位置记在工具目录的 data-dir.txt，之后不带此参数也沿用')
     ap.add_argument('--print-url', action='store_true', help='只打印网址，不启动服务')
     ap.add_argument('--new-token', action='store_true', help='重新生成令牌（旧网址作废），打印新网址后结束')

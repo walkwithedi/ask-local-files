@@ -420,7 +420,7 @@ test('「保存全部文字」存成 .md', async t => {
   const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#saveTexts')]);
   const body = fs.readFileSync(await dl.path(), 'utf8');
   assert.ok(body.includes('===== 文件 1：') && body.includes('甲'.repeat(100)));
-  await page.locator('#pickStatus').getByText(/^已保存为 找资料问AI-文字-\d{8}-\d{4}\.md（在浏览器的下载文件夹里）：1 个文件/).waitFor();
+  await page.locator('#pickStatus').getByText(/^已保存为 本机资料问答-文字-\d{8}-\d{4}\.md（在浏览器的下载文件夹里）：1 个文件/).waitFor();
 });
 
 test('路径输入补全与常用位置', async t => {
@@ -980,7 +980,7 @@ test('空状态区保持存在', async t => {
 
 test('读取状态失败时页脚仍有版本号', async t => {
   const {page} = await launch(t, {beforeGoto: p => p.route(u => u.pathname === '/api/state', r => r.abort())});
-  assert.match(await page.textContent('#ver'), /找资料问 AI v\d+\.\d+/);
+  assert.match(await page.textContent('#ver'), /本机资料问答 v\d+\.\d+/);
 });
 
 test('360px 下各面板展开、有对话与预览时都没有横向滚动', async t => {
@@ -998,8 +998,10 @@ test('360px 下各面板展开、有对话与预览时都没有横向滚动', as
 
 test('保存位置：默认时提示一次，可改到空文件夹并把数据移过去', async t => {
   const {page, home, tool} = await launch(t, {ownTool: true});
-  await page.locator('#askStatus', {hasText: '可在「记忆设置」里改「保存位置」'}).waitFor();
-  await page.click('#memSettings');
+  await page.locator('#askStatus', {hasText: '可在设置的「通用」里改「保存位置」'}).waitFor();
+  await page.locator('#askStatus').getByRole('button', {name: '打开设置的「通用」标签'}).click();
+  await page.locator('#generalPanel').waitFor();
+  assert.strictEqual(await page.getAttribute('#tab-general', 'aria-selected'), 'true');
   assert.match(await page.textContent('#dataDirNow'), /^当前：默认（家目录）：/);
   const dest = path.join(home, '数据盘');
   fs.mkdirSync(dest);
@@ -1024,6 +1026,7 @@ test('保存位置：默认时提示一次，可改到空文件夹并把数据�
 test('保存位置：取消确认不改动；不存在的文件夹写明原因', async t => {
   const {page, home} = await launch(t, {ownTool: true});
   await page.click('#memSettings');
+  await page.click('#tab-general');
   await page.fill('#dataDir', path.join(home, '没有这个文件夹'));
   await page.click('#setDataDir');
   await page.locator('#dataStatus.bad', {hasText: '更改失败：文件夹不存在'}).waitFor();
@@ -1045,6 +1048,7 @@ test('保存位置：新位置已有数据时改用那一份，网址变了按�
   let msg = '';
   page.onDialog = d => { msg = d.message(); d.accept(); };
   await page.click('#memSettings');
+  await page.click('#tab-general');
   await page.fill('#dataDir', dest);
   await page.click('#setDataDir');
   await page.waitForURL(/t=other-token-other-token/);
@@ -1054,21 +1058,25 @@ test('保存位置：新位置已有数据时改用那一份，网址变了按�
   assert.ok(fs.existsSync(path.join(home, '.config', 'ask-local-files', 'config.json')));     // 原处保留
 });
 
-test('保存位置不可用：醒目提示，记忆关闭且不能打开', async t => {
+test('保存位置不可用：醒目提示，知识库关闭且不能打开', async t => {
   const {page, home} = await launch(t, {ownTool: true, pointer: '/nonexistent-mount/ask'});
   await page.locator('#dataBanner', {hasText: '保存位置不可用：/nonexistent-mount/ask'}).waitFor();
-  await page.locator('#dataBanner').getByRole('button', {name: '打开记忆设置'}).click();
-  await page.locator('#memSettingsPanel').waitFor();
+  await page.locator('#dataBanner').getByRole('button', {name: '打开设置的「通用」标签'}).click();
+  await page.locator('#generalPanel').waitFor();
   assert.match(await page.textContent('#dataDirNow'), /不可用/);
+  await page.click('#tab-mem');
   assert.ok(!await page.isChecked('#memoryOn'));
-  await page.check('#memoryOn');
+  await page.click('#memoryOn');       // 服务端拒绝后立即改回不勾，不用 check（它要求点完仍是勾选）
   await page.locator('#memStatus.bad', {hasText: '保存位置不可用'}).waitFor();
+  assert.ok(!await page.isChecked('#memoryOn'));
   assert.ok(!fs.existsSync(path.join(home, '.local', 'share', 'ask-local-files')));
 });
 
-test('360px 下记忆设置与保存位置没有横向滚动', async t => {
+test('360px 下知识库设置与保存位置没有横向滚动', async t => {
   const {page} = await launch(t, {width: 360});
   await page.click('#memSettings');
+  await noHorizontalScroll(page);
+  await page.click('#tab-general');
   await page.locator('#dataDirNow:not(:empty)').waitFor();
   await noHorizontalScroll(page);
 });
@@ -1127,44 +1135,44 @@ test('原文里找不到的摘句列在回答下方，并写进保存的对话',
   assert.match(md, /原文中未找到[\s\S]*文件 1：「编造的话」/);
 });
 
-// ---------------- 记忆
+// ---------------- 知识库
 
 const PLAN = {'项目计划.txt': '项目计划\n\n第一阶段在三月底完成验收。\n\n预算另行说明。'};
 
-test('首次打开提示记忆已默认打开，只提示一次', async t => {
+test('首次打开提示知识库已默认打开，只提示一次', async t => {
   const {page, url} = await launch(t);
-  await page.locator('#askStatus', {hasText: '记忆已默认打开'}).waitFor();
+  await page.locator('#askStatus', {hasText: '知识库已默认打开'}).waitFor();
   await page.waitForTimeout(300);
   await page.goto(url);
   await page.waitForTimeout(500);
-  assert.doesNotMatch(await page.locator('#askStatus').textContent(), /记忆已默认打开/);
+  assert.doesNotMatch(await page.locator('#askStatus').textContent(), /知识库已默认打开/);
 });
 
-test('记住核对通过的结论，不选文件也能参考记忆提问，回答上方写明用了哪些记忆', async t => {
+test('收录核对通过的结论，不选文件也能参考知识库提问，回答上方写明用了哪些知识库', async t => {
   const {page, docs} = await launch(t, {model: 'memo', files: PLAN});
   await pickByName(page, '项目计划');
   await ask(page, '第一阶段什么时候验收');
-  await page.locator('#chat .foot', {hasText: '已记住 1 条结论'}).waitFor();
+  await page.locator('#chat .foot', {hasText: '已收录 1 条结论'}).waitFor();
   await page.locator('#picked li').getByRole('button', {name: /移除/}).click();
   await page.fill('#ask', '第一阶段验收');
   await page.click('#send');
   // 改动文件清单即开始新对话，这一轮是新对话的第一条回答
   const memo = page.locator('#chat .msg.assistant').first().locator('details.memo');
   await memo.waitFor();
-  assert.match(await memo.locator('summary').textContent(), /参考了记忆：1 条结论、1 段原文/);
+  assert.match(await memo.locator('summary').textContent(), /参考了知识库：1 条结论、1 段原文/);
   await memo.locator('summary').click();
   assert.match(await memo.textContent(), new RegExp('文件 1：' + path.join(docs, '项目计划.txt')));
   assert.match(await memo.textContent(), /第一阶段三月底验收（原文：「第一阶段在三月底完成验收」）/);
   await page.waitForFunction(() => !document.querySelector('#send').disabled);
   const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#save')]);
   const md = fs.readFileSync(await dl.path(), 'utf-8');
-  assert.match(md, /参考了记忆：1 条结论、1 段原文/);
-  assert.match(md, /- 文件 1：资料\/项目计划\.txt（1 段原文）/, '保存时记忆里的路径从所添加文件夹的名字起写');
+  assert.match(md, /参考了知识库：1 条结论、1 段原文/);
+  assert.match(md, /- 文件 1：资料\/项目计划\.txt（1 段原文）/, '保存时知识库里的路径从所添加文件夹的名字起写');
   assert.ok(!md.includes(docs), '不写完整路径');
   assert.doesNotMatch(md, /## 参考文件/, '没选文件时不写参考文件');
 });
 
-test('取消「参考记忆」且没选文件时不发送', async t => {
+test('取消「参考知识库」且没选文件时不发送', async t => {
   const {page} = await launch(t);
   await page.uncheck('#useMemory');
   await page.fill('#ask', '随便问问');
@@ -1172,25 +1180,25 @@ test('取消「参考记忆」且没选文件时不发送', async t => {
   await page.locator('#askStatus', {hasText: '还没有选文件'}).waitFor();
 });
 
-test('「不对」直接忘掉这条回答记住的结论，不弹窗', async t => {
+test('「不对」直接移出这条回答收录的结论，不弹窗', async t => {
   const {page} = await launch(t, {model: 'memo', files: PLAN});
   let dialogs = 0;
   page.onDialog = d => { dialogs++; d.accept(); };
   await pickByName(page, '项目计划');
   await ask(page, '第一阶段什么时候验收');
-  await page.getByRole('button', {name: '这条回答不对：忘掉它记住的结论'}).click();
-  await page.locator('#chatStatus', {hasText: '已忘掉这条回答记住的 1 条结论'}).waitFor();
-  await page.locator('#chat .foot', {hasText: '已忘掉这条回答记住的结论'}).waitFor();
-  assert.strictEqual(await page.getByRole('button', {name: '这条回答不对：忘掉它记住的结论'}).count(), 0);
+  await page.getByRole('button', {name: '这条回答不对：移出它收录的结论'}).click();
+  await page.locator('#chatStatus', {hasText: '已移出这条回答收录的 1 条结论'}).waitFor();
+  await page.locator('#chat .foot', {hasText: '已移出这条回答收录的结论'}).waitFor();
+  assert.strictEqual(await page.getByRole('button', {name: '这条回答不对：移出它收录的结论'}).count(), 0);
   assert.strictEqual(dialogs, 0);
 });
 
-test('查看记忆：搜索、删除结论、忘掉文件、清空，关掉记忆后隐藏「参考记忆」；360px 不溢出', async t => {
+test('查看知识库：搜索、删除结论、移出文件、清空，关掉知识库后隐藏「参考知识库」；360px 不溢出', async t => {
   const {page} = await launch(t, {model: 'memo', files: PLAN, width: 360});
   await pickByName(page, '项目计划');
   await ask(page, '第一阶段什么时候验收');
   await page.click('#memSettings');
-  await page.locator('#memStats', {hasText: '已记住 1 个文件、1 条结论'}).waitFor();
+  await page.locator('#memStats', {hasText: '已收录 1 个文件、1 条结论'}).waitFor();
   await page.click('#memView');
   await page.locator('#memFacts li', {hasText: '第一阶段三月底验收'}).waitFor();
   await noHorizontalScroll(page);
@@ -1199,33 +1207,34 @@ test('查看记忆：搜索、删除结论、忘掉文件、清空，关掉记�
   await page.fill('#memQ', '');
   await page.getByRole('button', {name: '删除这条结论'}).click();
   await page.locator('#memStatus', {hasText: '已删除这条结论'}).waitFor();
-  await page.locator('#memFacts li', {hasText: '还没有记住结论'}).waitFor();
-  await page.getByRole('button', {name: '忘掉这个文件及其结论'}).click();
-  await page.locator('#memStats', {hasText: '已记住 0 个文件'}).waitFor();
+  await page.locator('#memFacts li', {hasText: '还没有收录结论'}).waitFor();
+  await page.getByRole('button', {name: '移出这个文件及其结论'}).click();
+  await page.locator('#memStats', {hasText: '已收录 0 个文件'}).waitFor();
   await page.click('#memClear');
-  await page.locator('#memStatus', {hasText: '记忆已清空'}).waitFor();
+  await page.locator('#memStatus', {hasText: '知识库已清空'}).waitFor();
   await page.uncheck('#memoryOn');
-  await page.locator('#memStatus', {hasText: '已关闭记忆'}).waitFor();
+  await page.locator('#memStatus', {hasText: '已关闭知识库'}).waitFor();
   assert.ok(await page.locator('#useMemRow').isHidden());
-  assert.ok(await page.locator('#memSettings').isVisible());      // 关掉记忆后仍能打开记忆设置
+  assert.ok(await page.locator('#memSettings').isVisible());      // 关掉知识库后仍能打开知识库设置
 });
 
-// 入口点了：记忆设置面板展开、焦点在「记忆」小标题、小标题在视口里
+// 入口点了：设置面板打开在「知识库」标签、焦点在这个标签上、标签在视口里
 async function atMemory(page) {
-  await page.waitForFunction(() => document.activeElement && document.activeElement.id === 'memHead');
+  await page.waitForFunction(() => document.activeElement && document.activeElement.id === 'tab-mem');
   assert.ok(await page.locator('#memSettingsPanel').isVisible());
+  assert.strictEqual(await page.getAttribute('#tab-mem', 'aria-selected'), 'true');
   assert.strictEqual(await page.getAttribute('#memSettings', 'aria-expanded'), 'true');
   await page.waitForFunction(() => {
-    const r = document.querySelector('#memHead').getBoundingClientRect();
+    const r = document.querySelector('#tab-mem').getBoundingClientRect();
     return r.top >= -1 && r.bottom <= window.innerHeight + 1;     // 滚到顶时可能差半个像素
   });
 }
 
-test('记忆设置是独立面板：默认收起，「记忆设置」展开收起，首次提示与回答下方「已记住 N 条结论」展开它；360px 不溢出', async t => {
+test('知识库设置是设置面板的「知识库」标签：默认收起，「知识库设置」打开收起，首次提示与回答下方「已收录 N 条结论」打开它；360px 不溢出', async t => {
   const {page} = await launch(t, {model: 'memo', files: PLAN, width: 360});
   assert.ok(await page.locator('#memSettingsPanel').isHidden());
-  assert.strictEqual(await page.locator('#modelPanel #memoryOn').count(), 0);     // 「模型设置」里不再放记忆
-  const notice = page.locator('#askStatus').getByRole('button', {name: '打开记忆设置'});
+  assert.strictEqual(await page.locator('#modelPanel #memoryOn').count(), 0);     // 「模型设置」里不再放知识库
+  const notice = page.locator('#askStatus').getByRole('button', {name: '打开知识库设置'});
   await notice.click();
   await atMemory(page);
   assert.ok(await page.locator('#memPanel').isHidden());
@@ -1238,21 +1247,22 @@ test('记忆设置是独立面板：默认收起，「记忆设置」展开收�
   assert.strictEqual(await page.getAttribute('#memSettings', 'aria-expanded'), 'false');
   await page.focus('#memSettings');
   await page.keyboard.press('Enter');
-  await page.locator('#memSettingsPanel').waitFor();
-  await page.keyboard.press('Enter');
+  await atMemory(page);
+  await page.keyboard.press('Escape');
   assert.ok(await page.locator('#memSettingsPanel').isHidden());
+  assert.strictEqual(await page.evaluate(() => document.activeElement.id), 'memSettings');
   await pickByName(page, '项目计划');
   await ask(page, '第一阶段什么时候验收');
-  await page.locator('#chat .foot').getByRole('button', {name: /已记住 1 条结论，打开记忆设置/}).click();
+  await page.locator('#chat .foot').getByRole('button', {name: /已收录 1 条结论，打开知识库设置/}).click();
   await atMemory(page);
   await page.locator('#memFacts li', {hasText: '第一阶段三月底验收'}).waitFor();
   await noHorizontalScroll(page);
   await page.uncheck('#memoryOn');
-  await page.locator('#memStatus', {hasText: '已关闭记忆'}).waitFor();
+  await page.locator('#memStatus', {hasText: '已关闭知识库'}).waitFor();
   assert.ok(await page.locator('#memSettings').isVisible());
 });
 
-test('「查看记忆」按钮用主色描边与文字，浅色、深色下都与普通按钮不同', async t => {
+test('「查看知识库」按钮用主色描边与文字，浅色、深色下都与普通按钮不同', async t => {
   for (const scheme of ['light', 'dark']) {
     const {page} = await launch(t, {beforeGoto: p => p.emulateMedia({colorScheme: scheme})});
     await page.click('#memSettings');
@@ -1273,14 +1283,14 @@ test('「查看记忆」按钮用主色描边与文字，浅色、深色下都�
   }
 });
 
-test('更新记忆：整理出主题页，更新记录可撤销，「空闲时自动更新」记住；360px 不溢出', async t => {
+test('更新知识库：整理出主题页，更新记录可撤销，「空闲时自动更新」记住；360px 不溢出', async t => {
   const {page, url} = await launch(t, {model: 'memo', files: PLAN, width: 360});
   await pickByName(page, '项目计划');
   await ask(page, '第一阶段什么时候验收');
   await page.click('#memSettings');
   await page.locator('#memStats', {hasText: '待更新 1 项'}).waitFor();
   await page.click('#memUpdate');
-  await page.locator('#memUpdStatus', {hasText: '记忆已更新：新建主题页 1 页。'}).waitFor();
+  await page.locator('#memUpdStatus', {hasText: '知识库已更新：新建主题页 1 页。'}).waitFor();
   assert.ok(await page.locator('#memUpdStop').isHidden());
   assert.strictEqual(await page.locator('#memUpdate').isDisabled(), false);
   await page.click('#memView');
@@ -1328,9 +1338,9 @@ test('「忽略 Markdown 文件」默认勾选，搜索与浏览都不列 .md，
   await noHorizontalScroll(page);
 });
 
-test('页头介绍写明记忆的用法', async t => {
+test('页头介绍写明知识库的用法', async t => {
   const {page} = await launch(t);
-  assert.match(await page.locator('.sub').first().textContent(), /勾选「参考记忆」时参考本机记住的文件和结论，可在「记忆设置」里查看或清空；在「管理文件夹」里给文件夹勾选「自动记入记忆」/);
+  assert.match(await page.locator('.sub').first().textContent(), /勾选「参考知识库」时参考本机收录的文件和结论，可在「知识库设置」里查看或清空；在「管理文件夹」里给文件夹勾选「自动收录到知识库」/);
 });
 
 
@@ -1485,7 +1495,7 @@ test('保存为 Word：单条回答与整个对话', async t => {
   const one = page.locator('#chat .msg.assistant .who').getByRole('button', {name: '把这条回答保存为 Word'});
   const [d1] = await Promise.all([page.waitForEvent('download'), one.click()]);
   assert.strictEqual(fs.readFileSync(await d1.path()).subarray(0, 2).toString(), 'PK');
-  await page.locator('#chatStatus').getByText(/已保存为 找资料问AI-(总结一下|季度要点)-\d{8}-\d{4}\.docx/).waitFor();
+  await page.locator('#chatStatus').getByText(/已保存为 本机资料问答-(总结一下|季度要点)-\d{8}-\d{4}\.docx/).waitFor();
   const docxText = file => execFileSync(PYTHON, ['-c', 'import sys,zipfile;print(zipfile.ZipFile(sys.argv[1]).read("word/document.xml").decode())',
                                                  file]).toString();
   const single = docxText(await d1.path());
@@ -1495,7 +1505,7 @@ test('保存为 Word：单条回答与整个对话', async t => {
   assert.strictEqual(zip.subarray(0, 2).toString(), 'PK');
   const unzip = execFileSync(PYTHON, ['-c', 'import sys,zipfile;print(zipfile.ZipFile(sys.argv[1]).read("word/document.xml").decode())',
                                        await d2.path()]).toString();
-  assert.match(unzip, /找资料问 AI 对话/);
+  assert.match(unzip, /本机资料问答 对话/);
   assert.match(unzip, /总结一下/);
   assert.match(unzip, /你好，世界[\s\S]*参考文件/, '参考文件在最后');
   assert.doesNotMatch(unzip, new RegExp(path.sep === '/' ? os.tmpdir() : '^$'), '不写上级路径');
@@ -2078,9 +2088,9 @@ test('复制已选择的文件路径：一行一个，提示可交给智能体',
   assert.strictEqual(clip, [path.join(docs, '季度总结.txt'), path.join(docs, '子目录', '会议记录.md')].join('\n'));
 });
 
-test('管理文件夹、模型设置带图标与展开箭头', async t => {
+test('管理文件夹与三个设置入口带图标与展开箭头', async t => {
   const {page} = await launch(t);
-  for (const id of ['manageFolders', 'modelSettings']) {
+  for (const id of ['manageFolders', 'modelSettings', 'skillManage', 'memSettings']) {
     const b = page.locator('#' + id);
     assert.strictEqual(await b.locator('svg.icon').count(), 1);
     assert.strictEqual(await b.locator('.arrow').textContent(), '▸');
@@ -2091,6 +2101,227 @@ test('管理文件夹、模型设置带图标与展开箭头', async t => {
   }
   assert.strictEqual(await page.getByRole('button', {name: '管理文件夹'}).count(), 1);
   assert.strictEqual(await page.getByRole('button', {name: '模型设置'}).count(), 1);
+  for (const name of ['skill 设置', '知识库设置']) assert.strictEqual(await page.getByRole('button', {name, exact: true}).count(), 1);
+});
+
+// ---------------- v2.11 设置面板：模型、skill、知识库、通用四个标签
+const SET_TABS = ['tab-model', 'tab-skill', 'tab-mem', 'tab-general'];
+async function selectedTab(page) {
+  return page.evaluate(() => [...document.querySelectorAll('#setTabs [role=tab]')]
+    .filter(b => b.getAttribute('aria-selected') === 'true').map(b => b.id));
+}
+// 一次只显示一页：所选标签的页可见，其余隐藏
+async function onlyPage(page, tab) {
+  for (const id of SET_TABS) {
+    const panel = await page.getAttribute('#' + id, 'aria-controls');
+    assert.strictEqual(await page.locator('#' + panel).isVisible(), id === tab, panel);
+  }
+}
+
+test('设置面板：三个入口打开对应标签，再点收起；位于选项行下方，打开时焦点在当前标签', async t => {
+  const {page} = await launch(t);
+  assert.ok(await page.locator('#setPanel').isHidden());
+  for (const [entry, tab] of [['modelSettings', 'tab-model'], ['skillManage', 'tab-skill'], ['memSettings', 'tab-mem']]) {
+    await page.click('#' + entry);
+    assert.deepStrictEqual(await selectedTab(page), [tab]);
+    await onlyPage(page, tab);
+    assert.strictEqual(await page.evaluate(() => document.activeElement.id), tab);
+    assert.strictEqual(await page.getAttribute('#' + entry, 'aria-expanded'), 'true');
+    for (const other of ['modelSettings', 'skillManage', 'memSettings'].filter(x => x !== entry)) {
+      assert.strictEqual(await page.getAttribute('#' + other, 'aria-expanded'), 'false');
+    }
+  }
+  const [optBottom, top] = await page.evaluate(() => [document.querySelector('#optRow').getBoundingClientRect().bottom,
+                                                       document.querySelector('#setPanel').getBoundingClientRect().top]);
+  assert.ok(top >= optBottom, '设置面板在选项行下方');
+  // 已开在该标签时再点收起，焦点留在入口
+  await page.click('#memSettings');
+  assert.ok(await page.locator('#setPanel').isHidden());
+  assert.strictEqual(await page.getAttribute('#memSettings', 'aria-expanded'), 'false');
+  // 「通用」没有单独入口；「重新查找」「重新读取」仍在选项行
+  assert.strictEqual(await page.locator('#optRow').getByRole('button', {name: /通用/}).count(), 0);
+  assert.ok(await page.locator('#optRow #findLocal').isVisible());
+  assert.ok(await page.locator('#optRow #skillReload').isVisible());
+});
+
+test('设置面板：方向键切换标签，Esc 与「收起」关闭并把焦点还给入口，输入框内容保留', async t => {
+  const {page} = await launch(t);
+  await page.click('#modelSettings');
+  await page.keyboard.press('ArrowRight');
+  assert.deepStrictEqual(await selectedTab(page), ['tab-skill']);
+  assert.strictEqual(await page.evaluate(() => document.activeElement.id), 'tab-skill');
+  await page.keyboard.press('ArrowRight');
+  await page.keyboard.press('ArrowRight');
+  assert.deepStrictEqual(await selectedTab(page), ['tab-general']);
+  await onlyPage(page, 'tab-general');
+  await page.keyboard.press('ArrowRight');           // 末尾再右移回到第一个
+  assert.deepStrictEqual(await selectedTab(page), ['tab-model']);
+  await page.keyboard.press('ArrowLeft');
+  assert.deepStrictEqual(await selectedTab(page), ['tab-general']);
+  await page.keyboard.press('Home');
+  assert.deepStrictEqual(await selectedTab(page), ['tab-model']);
+  await page.keyboard.press('End');
+  assert.deepStrictEqual(await selectedTab(page), ['tab-general']);
+  // 只有当前标签可用 Tab 键聚焦
+  assert.deepStrictEqual(await page.evaluate(() => [...document.querySelectorAll('#setTabs [role=tab]')].map(b => b.tabIndex)), [-1, -1, -1, 0]);
+  // 输入框里按 Esc 也收起，焦点回到打开它的入口；切换标签与收起不丢输入
+  await page.click('#tab-model');
+  await page.fill('#cBase', 'http://127.0.0.1:9/v1');
+  await page.click('#tab-mem');
+  await page.click('#tab-model');
+  assert.strictEqual(await page.inputValue('#cBase'), 'http://127.0.0.1:9/v1');
+  await page.focus('#cBase');
+  await page.keyboard.press('Escape');
+  assert.ok(await page.locator('#setPanel').isHidden());
+  assert.strictEqual(await page.evaluate(() => document.activeElement.id), 'modelSettings');
+  await page.click('#memSettings');
+  await page.click('#setClose');
+  assert.ok(await page.locator('#setPanel').isHidden());
+  assert.strictEqual(await page.evaluate(() => document.activeElement.id), 'memSettings');
+  await page.click('#modelSettings');
+  assert.strictEqual(await page.inputValue('#cBase'), 'http://127.0.0.1:9/v1');
+});
+
+test('设置面板：记住上次打开的标签，刷新后面板收起；读不到时默认模型标签', async t => {
+  const {page} = await launch(t);
+  assert.strictEqual(await page.evaluate(() => shownTab()), 'model');
+  await page.click('#memSettings');
+  await page.click('#tab-general');
+  assert.strictEqual(await page.evaluate(() => localStorage.getItem('ask-local-files.setTab')), 'general');
+  await page.reload();
+  await page.locator('#findStatus:not(:empty)').waitFor();
+  assert.ok(await page.locator('#setPanel').isHidden());
+  assert.strictEqual(await page.evaluate(() => shownTab()), 'general');
+  await page.evaluate(() => localStorage.setItem('ask-local-files.setTab', 'nope'));
+  await page.reload();
+  await page.locator('#findStatus:not(:empty)').waitFor();
+  assert.strictEqual(await page.evaluate(() => shownTab()), 'model');
+});
+
+test('设置面板：读不了本地存储时照常打开，默认模型标签', async t => {
+  const {page} = await launch(t, {beforeGoto: p => p.addInitScript(() => {
+    Object.defineProperty(window, 'localStorage', {get() { throw new Error('denied'); }});
+  })});
+  await page.locator('#findStatus:not(:empty)').waitFor();
+  await page.click('#skillManage');
+  assert.deepStrictEqual(await selectedTab(page), ['tab-skill']);
+  await page.click('#tab-general');
+  assert.deepStrictEqual(await selectedTab(page), ['tab-general']);
+});
+
+test('设置面板：有未保存改动的标签加圆点，保存或改回原值后消失，不弹窗', async t => {
+  const {page} = await launch(t);
+  let dialogs = 0;
+  page.onDialog = d => { dialogs++; d.accept(); };
+  await page.click('#modelSettings');
+  const dot = id => page.locator('#' + id + ' .dirty');
+  for (const id of SET_TABS) assert.ok(await dot(id).isHidden(), id);
+  const old = await page.inputValue('#limit');
+  await page.fill('#limit', '200000');
+  assert.ok(await dot('tab-model').isVisible());
+  assert.match(await page.locator('#tab-model').textContent(), /有未保存的改动/);
+  assert.strictEqual(await page.getByRole('tab', {name: /模型.*有未保存的改动/}).count(), 1);
+  await page.fill('#limit', old);                       // 改回原值
+  assert.ok(await dot('tab-model').isHidden());
+  await page.fill('#limit', '200000');
+  await page.click('#saveLimit');
+  await page.locator('#settingsStatus.ok', {hasText: '字数上限已保存'}).waitFor();
+  assert.ok(await dot('tab-model').isHidden());
+  // 知识库：容量上限；切换标签后圆点仍在，保存后消失
+  await page.click('#tab-mem');
+  await page.fill('#memMb', '2048');
+  await page.click('#tab-general');
+  assert.ok(await dot('tab-mem').isVisible());
+  await page.fill('#dataDir', '/tmp/x');
+  assert.ok(await dot('tab-general').isVisible());
+  await page.fill('#dataDir', '');
+  assert.ok(await dot('tab-general').isHidden());
+  // 别处改了设置（关掉知识库）也不覆盖没保存的输入
+  await page.click('#tab-mem');
+  await page.uncheck('#memoryOn');
+  await page.locator('#memStatus', {hasText: '已关闭知识库'}).waitFor();
+  assert.strictEqual(await page.inputValue('#memMb'), '2048');
+  assert.ok(await dot('tab-mem').isVisible());
+  await page.click('#saveMemMb');
+  await page.locator('#memStatus.ok', {hasText: '容量上限已改为 2,048 MB'}).waitFor();
+  assert.ok(await dot('tab-mem').isHidden());
+  // skill：填了就算改动
+  await page.click('#tab-skill');
+  await page.fill('#skDir', '/tmp/some-skill');
+  assert.ok(await dot('tab-skill').isVisible());
+  await page.fill('#skDir', '');
+  assert.ok(await dot('tab-skill').isHidden());
+  assert.strictEqual(dialogs, 0);
+});
+
+test('设置面板：本机没有可用模型时只显示模型、知识库、通用三个标签', async t => {
+  const {page} = await launch(t, {model: null});
+  await page.locator('#noAiNote').waitFor();
+  await page.click('#modelSettings');
+  assert.ok(await page.locator('#tab-skill').isHidden());
+  assert.ok(await page.locator('#skillManage').isHidden());
+  assert.deepStrictEqual(await page.locator('#setTabs [role=tab]:visible').evaluateAll(bs => bs.map(b => b.id)),
+                         ['tab-model', 'tab-mem', 'tab-general']);
+  await page.keyboard.press('ArrowRight');              // 方向键跳过隐藏的 skill 标签
+  assert.deepStrictEqual(await selectedTab(page), ['tab-mem']);
+  await page.keyboard.press('ArrowRight');
+  await page.keyboard.press('ArrowRight');
+  assert.deepStrictEqual(await selectedTab(page), ['tab-model']);
+  // 上次停在 skill 标签时改显示模型标签
+  await page.evaluate(() => localStorage.setItem('ask-local-files.setTab', 'skill'));
+  await page.reload();
+  await page.locator('#noAiNote').waitFor();
+  assert.strictEqual(await page.evaluate(() => shownTab()), 'model');
+});
+
+test('设置面板：每节常驻一句要点，「详细说明」可展开；知识库标签的小节顺序与「查看知识库」默认折叠', async t => {
+  const {page} = await launch(t);
+  await page.click('#memSettings');
+  const order = await page.locator('#memSettingsPanel').evaluate(p =>
+    ['#memoryOn', '#memStats', '#memUpdate', '#memAuto', '#memLog', '#ingestRun', '#memMb', '#memView']
+      .map(sel => p.querySelector(sel)).map(e => [...p.querySelectorAll('*')].indexOf(e)));
+  assert.deepStrictEqual(order, [...order].sort((a, b) => a - b), '知识库标签自上而下的顺序');
+  assert.ok(order.every(i => i >= 0));
+  assert.ok(await page.locator('#memPanel').isHidden());
+  assert.strictEqual(await page.getAttribute('#memView', 'aria-expanded'), 'false');
+  const more = page.locator('#memSettingsPanel details.more').first();
+  assert.ok(await more.locator('.hint').isHidden());
+  await more.locator('summary').click();
+  assert.ok(await more.locator('.hint').isVisible());
+  assert.match(await more.locator('.hint').textContent(), /memory\.sqlite/);
+  // 每页都有「详细说明」；「保存位置」在通用标签
+  for (const panel of ['modelPanel', 'skillPanel', 'memSettingsPanel', 'generalPanel']) {
+    assert.ok(await page.locator('#' + panel + ' details.more summary', {hasText: '详细说明'}).count() > 0, panel);
+  }
+  assert.strictEqual(await page.locator('#generalPanel #dataDir').count(), 1);
+  assert.strictEqual(await page.locator('#modelPanel #limit').count(), 1);
+  assert.strictEqual(await page.locator('#modelPanel #ocKey').count(), 1);
+  assert.strictEqual(await page.locator('#skillPanel #skCreate').count(), 1);
+});
+
+test('设置面板在 360px 下没有横向滚动，深色模式下标签与圆点可辨', async t => {
+  for (const scheme of ['light', 'dark']) {
+    const {page} = await launch(t, {width: 360, beforeGoto: p => p.emulateMedia({colorScheme: scheme})});
+    await page.click('#modelSettings');
+    for (const id of SET_TABS) {
+      await page.click('#' + id);
+      await page.locator('#setPanel details.more summary >> visible=true').first().click();
+      await noHorizontalScroll(page);
+    }
+    await page.click('#tab-mem');
+    await page.click('#memView');
+    await noHorizontalScroll(page);
+    await page.fill('#memMb', '4096');
+    const [bg, sel, unsel, dotColor, warn] = await page.evaluate(() => {
+      const css = v => { const d = document.createElement('div'); d.style.color = v; document.body.appendChild(d); const c = getComputedStyle(d).color; d.remove(); return c; };
+      return [getComputedStyle(document.body).backgroundColor, getComputedStyle(document.querySelector('#tab-mem')).color,
+              getComputedStyle(document.querySelector('#tab-model')).color, getComputedStyle(document.querySelector('#tab-mem .dirty')).color, css('var(--warn)')];
+    });
+    assert.strictEqual(dotColor, warn, scheme);
+    assert.notStrictEqual(sel, unsel, scheme);
+    assert.notStrictEqual(sel, bg, scheme);
+    assert.strictEqual(await page.evaluate(() => matchMedia('(prefers-color-scheme: dark)').matches), scheme === 'dark');
+  }
 });
 
 test('清空已选、清空对话用醒目的红色', async t => {
@@ -2285,9 +2516,9 @@ test('保存对话：参考文件放在最后，路径从所添加文件夹的�
   await ask(page, '把这两份材料的要点列出来');
   await page.waitForFunction(() => convTitle().text === '季度要点');
   const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#save')]);
-  await page.locator('#chatStatus').getByText(/^已保存为 找资料问AI-季度要点-\d{8}-\d{4}\.md/).waitFor();
+  await page.locator('#chatStatus').getByText(/^已保存为 本机资料问答-季度要点-\d{8}-\d{4}\.md/).waitFor();
   const md = fs.readFileSync(await dl.path(), 'utf-8');
-  assert.match(md, /^# 找资料问 AI 对话 \d{8}-\d{4}\n\n## 问\n/, '从第一问开始');
+  assert.match(md, /^# 本机资料问答 对话 \d{8}-\d{4}\n\n## 问\n/, '从第一问开始');
   assert.match(md, /核实后再用。\n\n## 参考文件\n\n1\. 资料\/季度总结\.txt\n2\. 资料\/子目录\/会议记录\.md\n$/);
   assert.ok(!md.includes(docs), '不写完整路径');
   // 复制全部文字同样只写相对路径
@@ -2348,11 +2579,11 @@ test('对话标题概括失败时保留第一问的前 12 字；只选 skill 没
   await page.waitForTimeout(300);
   assert.strictEqual(await page.evaluate(() => convTitle().text), '一二三四五六七八九十十一……');
   const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#save')]);
-  await page.locator('#chatStatus').getByText(/^已保存为 找资料问AI-一二三四五六七八九十十一……-\d{8}-\d{4}\.md/).waitFor();
+  await page.locator('#chatStatus').getByText(/^已保存为 本机资料问答-一二三四五六七八九十十一……-\d{8}-\d{4}\.md/).waitFor();
   assert.ok(dl);
   await page.click('#clear');
   assert.strictEqual(await page.evaluate(() => convTitle().text), '');
-  assert.strictEqual(await page.evaluate(() => saveStem('20260101-0000')), '找资料问AI-20260101-0000', '还没有标题时不带');
+  assert.strictEqual(await page.evaluate(() => saveStem('20260101-0000')), '本机资料问答-20260101-0000', '还没有标题时不带');
   await page.selectOption('#skillSel', 'summarize-meeting');
   await page.click('#send');
   await page.waitForFunction(() => !document.querySelector('#send').disabled && document.querySelector('#chat .msg.assistant'));
@@ -2382,7 +2613,7 @@ test('加入前 50 个：可加入的多于 50 个时出现，已选不为空时
   await noHorizontalScroll(page);
 });
 
-// ---------------- v2.6 管理 skill：新建、安装
+// ---------------- v2.6 skill 设置：新建、安装
 
 // 用 Python 标准库打一个 .zip：entries 为 {包内路径: 文字}
 function makeZip(file, entries) {
@@ -2396,7 +2627,7 @@ const PACK_SKILL = {
     "z.writestr('made/SKILL.md', chr(10).join(['---', 'name: made', 'description: AI 写的 skill', '---', '正文', '']))\nz.close()\nprint('已打包')\n"
 };
 
-test('管理 skill：新建后选中，同名时确认写明替换的文件夹与文件数，取消则不改', async t => {
+test('skill 设置：新建后选中，同名时确认写明替换的文件夹与文件数，取消则不改', async t => {
   const {page, home} = await launch(t, {skills: {weekly: {'SKILL.md': '---\nname: weekly\ndescription: 旧的\n---\n旧正文\n', 'a.md': '1'}}});
   await page.locator('#skillSel option', {hasText: 'weekly（自建'}).waitFor({state: 'attached'});
   assert.ok(await page.isHidden('#skillPanel'));
@@ -2415,10 +2646,15 @@ test('管理 skill：新建后选中，同名时确认写明替换的文件夹�
   assert.strictEqual(await page.inputValue('#skillSel'), 'report');
   assert.match(await page.textContent('#skillHint'), /写周报/);
   assert.ok(fs.existsSync(path.join(home, '.config', 'opencode', 'skills', 'report', 'SKILL.md')));
+  // 新建成功后清空输入框，「skill」标签上没有未保存圆点
+  assert.deepStrictEqual(await Promise.all(['#skName', '#skDesc', '#skBody'].map(sel => page.inputValue(sel))), ['', '', '']);
+  assert.ok(await page.locator('#tab-skill .dirty').isHidden());
   // 同名：取消则不改
   let msg = '';
   page.onDialog = d => { msg = d.message(); d.dismiss(); };
   await page.fill('#skName', 'weekly');
+  await page.fill('#skDesc', '写周报');
+  await page.fill('#skBody', '按周汇总要点。');
   await page.click('#skCreate');
   await page.locator('#skStatus', {hasText: '没有新建'}).waitFor();
   assert.match(msg, /替换已有的同名自建 skill/);
@@ -2432,7 +2668,7 @@ test('管理 skill：新建后选中，同名时确认写明替换的文件夹�
   assert.strictEqual(await page.inputValue('#skillSel'), 'weekly');
 });
 
-test('管理 skill：安装 .zip（键盘打开选文件、带脚本先确认）与文件夹，失败写明原因', async t => {
+test('skill 设置：安装 .zip（键盘打开选文件、带脚本先确认）与文件夹，失败写明原因', async t => {
   const {page, home} = await launch(t);
   await page.locator('#skillSel option', {hasText: '创建 skill（预装，1 个脚本）'}).waitFor({state: 'attached'});
   await page.click('#skillManage');
@@ -2480,36 +2716,36 @@ test('回答下方的 skill 包有「安装」，点了才装上并选中', asyn
   assert.strictEqual(await page.inputValue('#skillSel'), 'made');
 });
 
-// ---------------- 自动记入、容量、保存为 Markdown、配置 OpenCode、帮助页
+// ---------------- 自动收录、容量、保存为 Markdown、配置 OpenCode、帮助页
 
 async function openMemSettings(page) {
   await page.click('#memSettings');
   await page.locator('#memSettingsPanel').waitFor();
 }
 
-test('管理文件夹里勾选「自动记入记忆」：后台记入，记忆设置里写明记入情况与没有记入的文件', async t => {
+test('管理文件夹里勾选「自动收录到知识库」：后台收录，知识库设置里写明收录情况与没有收录的文件', async t => {
   const {page, docs} = await launch(t, {model: 'memo', files: {'计划.txt': '第一阶段在三月底完成验收。', '坏文件.docx': 'not a zip'}});
   await page.click('#manageFolders');
-  const cb = page.getByRole('checkbox', {name: '自动记入记忆：' + docs});
+  const cb = page.getByRole('checkbox', {name: '自动收录到知识库：' + docs});
   assert.strictEqual(await cb.isChecked(), false, '默认不勾');
   await cb.check();
-  await page.locator('#folderStatus').getByText(/已打开自动记入/).waitFor();
+  await page.locator('#folderStatus').getByText(/已打开自动收录/).waitFor();
   await openMemSettings(page);
-  await page.locator('#ingestStats').getByText(/共 4 个文件：已记入 3 个，没有记入 1 个。/).waitFor({timeout: 10000});
-  await page.locator('#memStats').getByText(/已记住 3 个文件/).waitFor({timeout: 10000});
+  await page.locator('#ingestStats').getByText(/共 4 个文件：已收录 3 个，没有收录 1 个。/).waitFor({timeout: 10000});
+  await page.locator('#memStats').getByText(/已收录 3 个文件/).waitFor({timeout: 10000});
   await page.click('#ingestSkipped');
   await page.locator('#ingestSkippedList').getByText(/坏文件\.docx/).waitFor();
   await page.locator('#ingestSkippedList').getByText(/^取不出文字：/).waitFor();
   await page.click('#ingestRun');
   await page.locator('#ingestStatus:not(:empty)').waitFor();
-  // 取消勾选：已记住的保留
+  // 取消勾选：已收录的保留
   await cb.uncheck();
-  await page.locator('#folderStatus').getByText(/已关闭自动记入：不再记入这个文件夹的文件，已记住的保留。/).waitFor();
-  await page.locator('#ingestStats').getByText(/还没有勾选「自动记入记忆」的文件夹/).waitFor();
+  await page.locator('#folderStatus').getByText(/已关闭自动收录：不再收录这个文件夹的文件，已收录的保留。/).waitFor();
+  await page.locator('#ingestStats').getByText(/还没有勾选「自动收录到知识库」的文件夹/).waitFor();
   assert.strictEqual(await page.isDisabled('#ingestRun'), true);
-  // 记忆关闭时勾选框不可用
+  // 知识库关闭时勾选框不可用
   await page.uncheck('#memoryOn');
-  await page.locator('#memStatus').getByText(/已关闭记忆/).waitFor();
+  await page.locator('#memStatus').getByText(/已关闭知识库/).waitFor();
   assert.strictEqual(await cb.isDisabled(), true);
 });
 
@@ -2530,16 +2766,16 @@ test('从文件抽出的结论整理成主题页；保存为 Markdown 得到 zip
   const {page, docs} = await launch(t, {model: 'memo', files: {'计划.txt': '第一阶段在三月底完成验收。\n\n预算总额为一百万元。'}});
   await openMemSettings(page);
   await page.click('#memView');
-  assert.strictEqual(await page.isDisabled('#memSaveMd'), true, '记忆为空时不可点');
+  assert.strictEqual(await page.isDisabled('#memSaveMd'), true, '知识库为空时不可点');
   await page.click('#manageFolders');
-  await page.getByRole('checkbox', {name: '自动记入记忆：' + docs}).check();
-  await page.locator('#ingestStats').getByText(/已记入 3 个/).waitFor({timeout: 10000});
+  await page.getByRole('checkbox', {name: '自动收录到知识库：' + docs}).check();
+  await page.locator('#ingestStats').getByText(/已收录 3 个/).waitFor({timeout: 10000});
   await page.click('#memUpdate');
-  await page.locator('#memUpdStatus').getByText(/记忆已更新：从文件抽出结论 \d+ 条、新建主题页 1 页/).waitFor({timeout: 15000});
+  await page.locator('#memUpdStatus').getByText(/知识库已更新：从文件抽出结论 \d+ 条、新建主题页 1 页/).waitFor({timeout: 15000});
   await page.locator('#memTopics').getByText('验收安排').waitFor();
   await page.locator('#memSaveMd:enabled').waitFor();
   const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#memSaveMd')]);
-  await page.locator('#memStatus.ok').getByText(/^已保存为 记忆-\d{8}-\d{4}\.zip（浏览器的下载文件夹）/).waitFor();
+  await page.locator('#memStatus.ok').getByText(/^已保存为 知识库-\d{8}-\d{4}\.zip（浏览器的下载文件夹）/).waitFor();
   const out = path.join(os.tmpdir(), 'alf-export-' + process.pid + '.zip');
   await dl.saveAs(out);
   const list = execFileSync(PYTHON, ['-c', 'import sys,zipfile;print("\\n".join(zipfile.ZipFile(sys.argv[1]).namelist()))', out]).toString();
@@ -2590,8 +2826,8 @@ test('页头「帮助」在新标签打开帮助页：目录可跳转、可搜�
   assert.strictEqual(await link.getAttribute('target'), '_blank');
   const [help] = await Promise.all([page.context().waitForEvent('page'), link.click()]);
   await help.waitForLoadState();
-  assert.strictEqual(await help.title(), '找资料问 AI 帮助');
-  assert.match(await help.textContent('#ver'), /找资料问 AI 帮助 v\d+\.\d+/);
+  assert.strictEqual(await help.title(), '本机资料问答 帮助');
+  assert.match(await help.textContent('#ver'), /本机资料问答 帮助 v\d+\.\d+/);
   await noHorizontalScroll(help);
   await help.click('#toc a[href="#auto"]');
   assert.strictEqual(new URL(help.url()).hash, '#auto');
@@ -2605,7 +2841,7 @@ test('页头「帮助」在新标签打开帮助页：目录可跳转、可搜�
   assert.strictEqual(await help.isVisible('#find'), true);
 });
 
-test('记忆设置与配置 OpenCode 在 360px 下没有横向滚动', async t => {
+test('知识库设置与配置 OpenCode 在 360px 下没有横向滚动', async t => {
   const {page} = await launch(t, {width: 360});
   await page.click('#manageFolders');
   await openMemSettings(page);

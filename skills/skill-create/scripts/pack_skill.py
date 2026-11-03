@@ -5,7 +5,7 @@
 检查：根上有 SKILL.md，开头 --- 之间有 name 与 description；name 只用小写字母、数字和连字符，
 不超过 64 个字符；description 不超过 1024 字；正文不超过 5 万字；只含 .md、.txt 文件（不打包脚本），
 没有链接，文件不超过 200 个、合计不超过 20 MB。
-包里的文件放在以 name 命名的文件夹下，可用「找资料问 AI」的「安装」装进自建 skill 目录。
+包里的文件放在以 name 命名的文件夹下，可用「本机资料问答」的「安装」装进自建 skill 目录。
 
 用法：
     pack_skill.py 文件夹 [--log-level LEVEL]
