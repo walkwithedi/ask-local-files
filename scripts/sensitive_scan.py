@@ -22,6 +22,7 @@ Rules (a line can be allowed with the marker  sensitive-scan: ignore):
                companies, PDF authors
   identity     commit author and committer e-mails must be GitHub noreply or service addresses
 
+The maintainer's published feedback address (PUBLIC_ADDRESSES) passes; no other address does.
 Placeholders pass: example.com / noreply addresses, user names such as user, me, alice, masked
 numbers (asterisks), the documentation IP ranges and values written as <...>, XXX or example.
 
@@ -62,6 +63,9 @@ META_EXT = {".png", ".jpg", ".jpeg", ".webp", ".heic", ".heif", ".docx", ".xlsx"
 # Addresses of services, not people: GitHub's bots sign their commits with them
 # ("Signed-off-by: dependabot[bot] <support@github.com>").
 SERVICE_ADDRESSES = {"support@github.com", "noreply@github.com"}
+# The maintainer's published feedback address (the Feedback section of the READMEs): only this
+# one full address passes; every other address is still a finding.
+PUBLIC_ADDRESSES = {"hong.xie.me@outlook.com"}
 # Commit identities that are allowed besides <id>+<login>@users.noreply.github.com
 IDENTITY_ADDRESSES = {"noreply@github.com", "noreply@anthropic.com"}
 OK_USERS = {"user", "me", "you", "alice", "bob", "runner", "name", "username", "<user>", "claude"}
@@ -98,7 +102,7 @@ def home_ok(m):
 def email_ok(m):
     s = m.group(0)
     return bool(re.search(r"@(example\.(com|org|net)|users\.noreply\.github\.com|anthropic\.com)$", s, re.I)
-                or s.lower() in SERVICE_ADDRESSES)
+                or s.lower() in SERVICE_ADDRESSES or s.lower() in PUBLIC_ADDRESSES)
 
 
 def drive_ok(m):

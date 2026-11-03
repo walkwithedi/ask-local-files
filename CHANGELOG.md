@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.12.1
+
+- The READMEs end with a Feedback section giving the maintainer's feedback address. The sensitive-data scanner allows that one full address (PUBLIC_ADDRESSES) and still reports every other e-mail address. No change to the tool. walkwithedi/edi-lab#206.
+
 ## 2.12.0
 
 - The Chinese name is now 资料管家 ("file keeper"): page title and header, footer, help page, desktop entry, messages and saved file names (`资料管家-`). The English name, folder, program, repository and release names are unchanged.
