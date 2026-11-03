@@ -59,7 +59,7 @@ def extract(path):
     try:
         import doc2kb_core
     except ImportError:
-        raise Fail('找不到 doc2kb_core.py，读不了 %s；请在找资料问 AI 里运行本 skill' % ext)
+        raise Fail('找不到 doc2kb_core.py，读不了 %s；请在本机资料问答 里运行本 skill' % ext)
     doc2kb_core.set_lang('zh')
     report = doc2kb_core.Report()
     with tempfile.TemporaryDirectory(prefix='doc-compare-') as tmp:

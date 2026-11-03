@@ -118,7 +118,7 @@ class MemoryTest(MemoryCase):
                                      missing=[{'file': 1, 'quote': '预算总额为一百万元'}])
         self.assertEqual(n, 1)
         self.assertEqual(self.mem.remember_answer('a2', '问', ANSWER, {2: self.file}), 0)
-        self.assertEqual(self.mem.remember_answer('a3', '问', ANSWER, {1: '/没有记住的文件'}), 0)
+        self.assertEqual(self.mem.remember_answer('a3', '问', ANSWER, {1: '/没有收录的文件'}), 0)
 
     def test_merge_counts(self):
         self.remember()
@@ -357,7 +357,7 @@ class UpdateTest(MemoryCase):
 
 
 class IngestTest(MemoryCase):
-    """自动记入：记入段落、排进「从文件抽结论」，分批抽结论并核对原句；容量不足、忘掉、删除。"""
+    """自动收录：收录段落、排进「从文件抽结论」，分批抽结论并核对原句；容量不足、移出、删除。"""
 
     def ingest(self, path=None):
         path = path or self.file
@@ -440,13 +440,13 @@ class IngestTest(MemoryCase):
         self.write('大' * 300, other)
         self.remember()     # 提问时选过的文件，最近用过
         self.mem.max_bytes = 900
-        self.assertEqual(self.ingest(other), 'evicted')     # 自动记入的按从没用过算，先被忘掉
+        self.assertEqual(self.ingest(other), 'evicted')     # 自动收录的按从没用过算，先被移出
         self.assertEqual(self.mem.ingest_rows()[other][2:], ('evicted', am.EVICTED))
         self.assertEqual(self.mem.stats()['files'], 1)
-        self.mem.set_max_bytes(10 ** 6)        # 调大上限：可以重新记入
+        self.mem.set_max_bytes(10 ** 6)        # 调大上限：可以重新收录
         self.assertNotIn(other, self.mem.ingest_rows())
         self.assertEqual(self.ingest(other), 'done')
-        self.assertTrue(self.mem.forget_file(other))       # 使用者忘掉的：改过之前不再记入
+        self.assertTrue(self.mem.forget_file(other))       # 使用者移出的：改过之前不再收录
         self.assertEqual(self.mem.ingest_rows()[other][2:], ('forgotten', am.FORGOTTEN))
         self.assertEqual(self.mem.stats()['extract'], 0)
         self.ingest()

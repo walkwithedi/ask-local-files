@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.11.0
+
+- "Memory" is now called the knowledge base (知识库) throughout the page, messages, help page and READMEs: 参考知识库 ("use knowledge base"), 知识库设置, 更新知识库, 查看知识库, 清空知识库; recording is 收录 ("include") and forgetting is 移出 ("remove"). Saved Markdown packages are named `知识库-<date>-<time>.zip`. Endpoints, `ask_memory.py`, `memory.sqlite` and the settings fields keep their names, so existing data and settings work unchanged.
+- Folders added from now on have 自动收录到知识库 ("include in knowledge base") ticked: their files are included in the background, and the message after adding a folder says so and how to untick it. A folder added while the knowledge base is off is ticked too and included once it is turned on. Folders added before keep their state.
+- The Chinese name is now 本机资料问答 ("local file Q&A"); saved files start with `本机资料问答-`. The English name, folder, repository and release names are unchanged.
+- Model, skill and knowledge base settings are one 设置 ("settings") panel below the model and skill row, with four tabs: 模型, skill, 知识库 and 通用 ("general", holding the storage location). 模型设置, skill 设置 (formerly 管理 skill) and 知识库设置, each with a gear icon, open their tab and close the panel when it is already showing it. Arrow keys switch tabs, Esc or 收起 closes the panel and returns focus to the entry, the last tab is remembered in the browser, and a tab with unsaved input shows a dot that screen readers announce. Each section keeps one line of explanation with the rest under 详细说明 ("details"); 查看知识库 comes last in its tab, folded. Without a usable model the skill tab is hidden.
+
 ## 2.10.0
 
 - Folders that record themselves: each added folder has 自动记入记忆 ("record into memory"), off by default. Ticked folders are scanned after every index scan and at most every 10 minutes; new and changed supported files are read into memory by paragraph in the background (files are only read, no model is called), and files that give no text are listed with the reason. Updates then send each recorded file paragraph by paragraph in batches (within the character limit and at most 12,000 characters) to the selected model to extract conclusions with word-for-word quotes; only quotes found in the current file text are stored, and the same update files them into topic pages. Deleted files are forgotten; unticking keeps what was recorded. Recording never holds the tool open and resumes on the next start.

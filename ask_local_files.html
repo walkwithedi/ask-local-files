@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>找资料问 AI</title>
+<title>本机资料问答</title>
 <script>if (new URLSearchParams(location.search).get('embed') === '1') document.documentElement.classList.add('embed');</script>
 <style>
   :root { --bg:#f6f7f9; --card:#fff; --text:#1f2328; --muted:#656d76; --line:#d0d7de; --accent:#0969da; --ok:#1a7f37; --warn:#9a6700; --bad:#cf222e; --pick:#ddf4ff; --bad-bg:#ffebe9; --folder:#9a5b00; }
@@ -49,7 +49,7 @@
   button.reveal { padding:1px 6px; color:var(--folder); }
   /* 本机没有可用模型：「问 AI」只留一行说明和「模型设置」，与「已选」对调位置 */
   #noAiNote { margin:4px 0 0; font-size:14px; color:var(--muted); }
-  .no-ai #askBody > :not(#noAiNote):not(#optRow):not(#localStatus):not(#modelPanel):not(#memSettingsPanel),
+  .no-ai #askBody > :not(#noAiNote):not(#optRow):not(#localStatus):not(#setPanel), .no-ai #tab-skill,
   .no-ai #askCard .card-head > button, .no-ai #skillRow, .no-ai #modelRow > :not(#modelSettings):not(#findLocal) { display:none; }
   /* 各模块点标题收起，收起时标题旁写一行摘要 */
   h2 button.fold { display:inline-flex; align-items:center; gap:6px; border:none; background:none; color:inherit; padding:0; font:inherit; font-weight:bold; text-align:left; }
@@ -114,6 +114,17 @@
   button.link { border:none; background:none; color:var(--accent); padding:2px 4px; font-size:13px; }
   .panel { border:1px solid var(--line); border-radius:6px; padding:8px 10px; margin:8px 0; }
   .panel h3 { font-size:15px; margin:4px 0 6px; }
+  /* 设置面板：模型、skill、知识库、通用四个标签，一次只显示一页 */
+  .set-head { display:flex; flex-wrap:wrap; align-items:flex-end; gap:4px 8px; border-bottom:1px solid var(--line); margin:0 0 8px; }
+  #setTabs { display:flex; flex-wrap:wrap; gap:2px 4px; min-width:0; }
+  #setTabs [role=tab] { border:none; border-bottom:2px solid transparent; border-radius:0; background:none; color:var(--muted); padding:4px 10px; }
+  #setTabs [role=tab][aria-selected=true] { color:var(--text); border-bottom-color:var(--accent); font-weight:bold; }
+  #setTabs .dirty { color:var(--warn); margin-left:3px; font-size:10px; vertical-align:2px; }
+  #setClose { margin:0 0 4px auto; }
+  .panel h3.sep { margin-top:14px; }
+  details.more { margin:2px 0 0; font-size:13px; color:var(--muted); }
+  details.more summary { font-weight:normal; color:var(--accent); width:max-content; max-width:100%; }
+  details.more .hint { margin-top:2px; }
   #chatWrap { margin-bottom:8px; }
   #chat { max-height:60vh; overflow-y:auto; }
   #skillHint .one { display:flex; gap:6px; align-items:baseline; }
@@ -222,7 +233,7 @@
 <main>
   <header>
     <div class="head-title">
-      <h1>找资料问 AI</h1>
+      <h1>本机资料问答</h1>
       <button id="foldSub" class="toggle" type="button" aria-expanded="false" aria-controls="sub">说明<span class="arrow" aria-hidden="true">▸</span></button>
     </div>
     <div class="row">
@@ -231,7 +242,7 @@
       <button id="quit" type="button">退出</button>
     </div>
   </header>
-  <p id="sub" class="sub" hidden>逐层浏览或按文件名找出文件交给 AI，或选用 skill 让 AI 运行脚本处理；点「＋ 新对话」可在新标签里并行。支持 Word（docx）、Excel（xlsx、xlsm）、PowerPoint（pptx）、旧版 doc、xls、ppt（wps、et、dps 按同类格式试读）、PDF、邮件（eml）、网页（html、htm）、纯文本与代码文件；压缩包等读不了的文件可点「打开文件夹」自己处理。勾选「参考记忆」时参考本机记住的文件和结论，可在「记忆设置」里查看或清空；在「管理文件夹」里给文件夹勾选「自动记入记忆」，其中的文件会自动记进记忆。怎么用、原理与常见问题见右上角「帮助」。</p>
+  <p id="sub" class="sub" hidden>逐层浏览或按文件名找出文件交给 AI，或选用 skill 让 AI 运行脚本处理；点「＋ 新对话」可在新标签里并行。支持 Word（docx）、Excel（xlsx、xlsm）、PowerPoint（pptx）、旧版 doc、xls、ppt（wps、et、dps 按同类格式试读）、PDF、邮件（eml）、网页（html、htm）、纯文本与代码文件；压缩包等读不了的文件可点「打开文件夹」自己处理。勾选「参考知识库」时参考本机收录的文件和结论，可在「知识库设置」里查看或清空；在「管理文件夹」里给文件夹勾选「自动收录到知识库」（新添加的文件夹默认勾选），其中的文件会自动收录到知识库。怎么用、原理与常见问题见右上角「帮助」。</p>
   <div id="closed">服务已退出，可关闭本页。需要再用时重新双击「双击运行」。</div>
   <div id="banner" class="banner" role="status" hidden></div>
   <div id="dataBanner" class="banner bad" role="alert" hidden></div>
@@ -347,131 +358,152 @@
     <div id="modelRow" class="row">
       <label for="model" class="hint" style="margin:0">模型</label>
       <select id="model"></select>
-      <button id="modelSettings" class="toggle" type="button" aria-expanded="false" aria-controls="modelPanel"><svg class="icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false"><g fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="8" cy="8" r="2.2"/><circle cx="8" cy="8" r="4.6"/><path d="M8 1.2v2.2M8 12.6v2.2M1.2 8h2.2M12.6 8h2.2M3.2 3.2l1.5 1.5M11.3 11.3l1.5 1.5M3.2 12.8l1.5-1.5M11.3 4.7l1.5-1.5"/></g></svg>模型设置<span class="arrow" aria-hidden="true">▸</span></button>
+      <button id="modelSettings" class="toggle" type="button" aria-expanded="false" aria-controls="setPanel"><svg class="icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false"><g fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="8" cy="8" r="2.2"/><circle cx="8" cy="8" r="4.6"/><path d="M8 1.2v2.2M8 12.6v2.2M1.2 8h2.2M12.6 8h2.2M3.2 3.2l1.5 1.5M11.3 11.3l1.5 1.5M3.2 12.8l1.5-1.5M11.3 4.7l1.5-1.5"/></g></svg>模型设置<span class="arrow" aria-hidden="true">▸</span></button>
       <button id="findLocal" class="link" type="button">重新查找</button>
     </div>
     <div id="skillRow" class="row">
       <label for="skillSel" class="hint" style="margin:0">skill</label>
       <select id="skillSel"><option value="">不用 skill</option></select>
       <button id="skillReload" class="link" type="button">重新读取</button>
-      <button id="skillManage" class="toggle" type="button" aria-expanded="false" aria-controls="skillPanel">管理 skill<span class="arrow" aria-hidden="true">▸</span></button>
+      <button id="skillManage" class="toggle" type="button" aria-expanded="false" aria-controls="setPanel"><svg class="icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false"><g fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="8" cy="8" r="2.2"/><circle cx="8" cy="8" r="4.6"/><path d="M8 1.2v2.2M8 12.6v2.2M1.2 8h2.2M12.6 8h2.2M3.2 3.2l1.5 1.5M11.3 11.3l1.5 1.5M3.2 12.8l1.5-1.5M11.3 4.7l1.5-1.5"/></g></svg>skill 设置<span class="arrow" aria-hidden="true">▸</span></button>
     </div>
-    <span class="mem-row"><label id="useMemRow" class="dedup" style="margin-top:0"><input id="useMemory" type="checkbox" checked>参考记忆</label><button id="memSettings" class="toggle" type="button" aria-expanded="false" aria-controls="memSettingsPanel">记忆设置<span class="arrow" aria-hidden="true">▸</span></button></span>
+    <span class="mem-row"><label id="useMemRow" class="dedup" style="margin-top:0"><input id="useMemory" type="checkbox" checked>参考知识库</label><button id="memSettings" class="toggle" type="button" aria-expanded="false" aria-controls="setPanel"><svg class="icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false"><g fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="8" cy="8" r="2.2"/><circle cx="8" cy="8" r="4.6"/><path d="M8 1.2v2.2M8 12.6v2.2M1.2 8h2.2M12.6 8h2.2M3.2 3.2l1.5 1.5M11.3 11.3l1.5 1.5M3.2 12.8l1.5-1.5M11.3 4.7l1.5-1.5"/></g></svg>知识库设置<span class="arrow" aria-hidden="true">▸</span></button></span>
     </div>
     <div id="localStatus" class="status" aria-live="polite"></div>
     <div id="skillHint" class="hint" aria-live="polite"></div>
-    <div id="skillPanel" class="panel" hidden>
-      <p class="hint">新建或安装的 skill 放进自建目录 <span id="skUserDir" style="word-break:break-all"></span>，装好后自动选中。也可以选预装的「创建 skill」，在对话里让 AI 写一个，写好后点回答下方的「安装」。</p>
-      <h3>新建</h3>
-      <div class="row">
-        <input id="skName" type="text" placeholder="名称：小写字母、数字和连字符，如 weekly-report" autocomplete="off" aria-label="skill 名称">
-        <input id="skDesc" type="text" placeholder="用途：做什么、什么时候用" autocomplete="off" aria-label="skill 用途">
+    <div id="setPanel" class="panel" role="region" aria-label="设置" hidden>
+      <div class="set-head">
+        <div id="setTabs" role="tablist" aria-label="设置">
+          <button id="tab-model" type="button" role="tab" aria-selected="true" aria-controls="modelPanel">模型<span class="dirty" hidden><span aria-hidden="true">●</span><span class="vh">（有未保存的改动）</span></span></button>
+          <button id="tab-skill" type="button" role="tab" aria-selected="false" aria-controls="skillPanel" tabindex="-1">skill<span class="dirty" hidden><span aria-hidden="true">●</span><span class="vh">（有未保存的改动）</span></span></button>
+          <button id="tab-mem" type="button" role="tab" aria-selected="false" aria-controls="memSettingsPanel" tabindex="-1">知识库<span class="dirty" hidden><span aria-hidden="true">●</span><span class="vh">（有未保存的改动）</span></span></button>
+          <button id="tab-general" type="button" role="tab" aria-selected="false" aria-controls="generalPanel" tabindex="-1">通用<span class="dirty" hidden><span aria-hidden="true">●</span><span class="vh">（有未保存的改动）</span></span></button>
+        </div>
+        <button id="setClose" class="small" type="button" title="收起设置（Esc）">收起</button>
       </div>
-      <textarea id="skBody" aria-label="skill 说明正文" placeholder="说明正文：写给模型的做法、步骤和输出格式"></textarea>
-      <div class="row"><button id="skCreate" type="button">新建</button></div>
-      <h3>安装</h3>
-      <label id="skDrop" class="drop" tabindex="0">点击选择或拖入 skill 的 .zip 包（最大 5 MB）<input id="skZip" class="vh" type="file" accept=".zip,application/zip" tabindex="-1"></label>
-      <div class="row" style="margin-top:6px">
-        <input id="skDir" type="text" placeholder="或填 skill 文件夹的路径（内有 SKILL.md）" autocomplete="off" aria-label="要安装的 skill 文件夹">
-        <button id="skPickDir" type="button" aria-label="选择要安装的 skill 文件夹" hidden>选择……</button>
-        <button id="skInstallDir" type="button">安装文件夹</button>
-      </div>
-      <div id="skStatus" class="status" aria-live="polite"></div>
-    </div>
-    <div id="dest" class="hint"></div>
-    <div id="modelPanel" class="panel" hidden>
-      <h3>发送字数上限</h3>
-      <div class="row">
-        <input id="limit" type="number" min="1000" max="2000000" step="1000" aria-label="发送字数上限">
-        <button id="saveLimit" type="button" aria-label="保存字数上限">保存</button>
-      </div>
-      <p class="hint">范围 1,000 到 2,000,000，默认 100,000，回车即保存。选中文件和对话的文字合计超过上限时先不发送。按所用模型能接受的长度设置；本机模型另按其上下文折算（1 token 计 1 字，留四分之一给回答），取两者中较小的。</p>
-      <h3 style="margin-top:12px">自定义模型接口</h3>
-      <p class="hint">优先读 OpenCode 配置（~/.config/opencode/opencode.json）里的模型，并自动查找本机运行中的 llama-server（端口 8080）和 Ollama（端口 11434）；没有或想另用一个时在这里填 OpenAI 兼容接口。接口不需要鉴权时 AK 可以不填。AK 只存在本机设置文件里（权限 600），不会显示在页面上。</p>
-      <div class="grid">
-        <label for="cBase">接口地址</label><input id="cBase" type="text" placeholder="https://api.example.com/v1" autocomplete="off">
-        <label for="cModel">模型名</label><input id="cModel" type="text" autocomplete="off">
-        <label for="cKey">AK</label><input id="cKey" type="password" autocomplete="new-password">
-      </div>
-      <div class="row" style="margin-top:8px">
-        <button id="saveCustom" type="button" aria-label="保存自定义接口">保存</button>
-        <button id="clearKey" type="button">清除 AK</button>
-        <button id="testModel" type="button">测试连接</button>
-      </div>
-      <div id="settingsStatus" class="status" aria-live="polite"></div>
-      <h3 style="margin-top:12px">配置 OpenCode</h3>
-      <p class="hint">本机已有 OpenCode 配置时，在这里换上自己的 AK：只替换所选服务商的 AK，接口地址、模型、注释和其余设置原样保留。先用新 AK 发一条测试请求，通过才写入，不通过时配置文件不改；写入前备份原文件，可点「回滚」恢复。配好后本工具和 OpenCode 用同一个模型。</p>
-      <p id="ocPath" class="hint name"></p>
-      <div id="ocBox" hidden>
+      <div id="modelPanel" role="tabpanel" aria-labelledby="tab-model">
+        <h3>发送字数上限</h3>
+        <div class="row">
+          <input id="limit" type="number" min="1000" max="2000000" step="1000" aria-label="发送字数上限">
+          <button id="saveLimit" type="button" aria-label="保存字数上限">保存</button>
+        </div>
+        <p class="hint">选中文件和对话的文字合计超过上限时先不发送。范围 1,000 到 2,000,000，默认 100,000，回车即保存。</p>
+        <details class="more"><summary>详细说明</summary><p class="hint">按所用模型能接受的长度设置；本机模型另按其上下文折算（1 token 计 1 字，留四分之一给回答），取两者中较小的。</p></details>
+        <h3 class="sep">自定义模型接口</h3>
+        <p class="hint">没有可用的模型或想另用一个时，在这里填 OpenAI 兼容接口。</p>
+        <details class="more"><summary>详细说明</summary><p class="hint">优先读 OpenCode 配置（~/.config/opencode/opencode.json）里的模型，并自动查找本机运行中的 llama-server（端口 8080）和 Ollama（端口 11434）。接口不需要鉴权时 AK 可以不填。AK 只存在本机设置文件里（权限 600），不会显示在页面上。</p></details>
         <div class="grid">
-          <label for="ocProv">服务商</label><select id="ocProv"></select>
-          <label for="ocKey">新的 AK</label><input id="ocKey" type="password" autocomplete="new-password">
+          <label for="cBase">接口地址</label><input id="cBase" type="text" placeholder="https://api.example.com/v1" autocomplete="off">
+          <label for="cModel">模型名</label><input id="cModel" type="text" autocomplete="off">
+          <label for="cKey">AK</label><input id="cKey" type="password" autocomplete="new-password">
         </div>
         <div class="row" style="margin-top:8px">
-          <button id="ocSave" type="button">测试并写入</button>
-          <button id="ocRollback" type="button" hidden>回滚</button>
+          <button id="saveCustom" type="button" aria-label="保存自定义接口">保存</button>
+          <button id="clearKey" type="button">清除 AK</button>
+          <button id="testModel" type="button">测试连接</button>
         </div>
+        <div id="settingsStatus" class="status" aria-live="polite"></div>
+        <h3 class="sep">配置 OpenCode</h3>
+        <p class="hint">本机已有 OpenCode 配置时，在这里换上自己的 AK，测试通过才写入。</p>
+        <details class="more"><summary>详细说明</summary><p class="hint">只替换所选服务商的 AK，接口地址、模型、注释和其余设置原样保留。先用新 AK 发一条测试请求，通过才写入，不通过时配置文件不改；写入前备份原文件，可点「回滚」恢复。配好后本工具和 OpenCode 用同一个模型。</p></details>
+        <p id="ocPath" class="hint name"></p>
+        <div id="ocBox" hidden>
+          <div class="grid">
+            <label for="ocProv">服务商</label><select id="ocProv"></select>
+            <label for="ocKey">新的 AK</label><input id="ocKey" type="password" autocomplete="new-password">
+          </div>
+          <div class="row" style="margin-top:8px">
+            <button id="ocSave" type="button">测试并写入</button>
+            <button id="ocRollback" type="button" hidden>回滚</button>
+          </div>
+        </div>
+        <div id="ocStatus" class="status" aria-live="polite"></div>
       </div>
-      <div id="ocStatus" class="status" aria-live="polite"></div>
-    </div>
-    <div id="memSettingsPanel" class="panel" hidden>
-      <h3 id="memHead" tabindex="-1">记忆</h3>
-      <label class="dedup"><input id="memoryOn" type="checkbox" checked>记住提问时选过的文件和核对通过的结论</label>
-      <p class="hint">记忆存在下方「保存位置」里的 memory.sqlite（权限 600，只有你能读）。勾选「参考记忆」时，提问会按问题从记忆里找出相关的以前结论和原文段落，排在已选文件之后一起发给模型；文件改了按新内容复核，文件不在了就忘掉。关掉后不再记入、也不再参考，已记住的保留，可在下面清空。</p>
-      <div class="row">
-        <span id="memStats" class="hint" style="margin:0"></span>
-        <button id="memView" class="toggle" type="button" aria-expanded="false" aria-controls="memPanel">查看记忆<span class="arrow" aria-hidden="true">▸</span></button>
-      </div>
-      <div class="row" style="margin-top:6px">
-        <label for="memMb" class="hint" style="margin:0">容量上限（MB）</label>
-        <input id="memMb" type="number" min="50" max="102400" step="50" style="width:7em">
-        <button id="saveMemMb" type="button" aria-label="保存容量上限">保存</button>
-      </div>
-      <p class="hint">范围 50 到 102,400，默认 1,024（1 GB），回车即保存。记忆里的文字超过上限时，先忘掉最久没被选用或参考的文件；调小时立即按新上限忘掉多出的部分。</p>
-      <h4 class="mem-h">自动记入</h4>
-      <div class="row">
-        <span id="ingestStats" class="hint" style="margin:0"></span>
-        <button id="ingestRun" type="button">立即记入</button>
-        <button id="ingestSkipped" class="toggle" type="button" aria-expanded="false" aria-controls="ingestSkippedPanel" hidden>没有记入的文件<span class="arrow" aria-hidden="true">▸</span></button>
-      </div>
-      <div id="ingestSkippedPanel" hidden><ul id="ingestSkippedList" class="list"></ul></div>
-      <div id="ingestStatus" class="status" aria-live="polite"></div>
-      <p class="hint">在「管理文件夹」里给文件夹勾选「自动记入记忆」后，其中支持格式的文件（勾选「忽略 Markdown 文件」时不含 .md）自动记进记忆：每次扫描文件夹后在后台取出新增或改过的文件的文字，马上能被提问参考，不移动、不修改原文件；之后在「更新记忆」或空闲时自动更新里，由所选模型从文件里抽出带原句的结论，核对原句后写入，再整理进主题页。文件删除后忘掉它记下的内容；取消勾选只是不再记入，已记住的保留。自动记入不拖住退出，下次启动接着做。</p>
-      <div class="row" style="margin-top:6px">
-        <button id="memUpdate" type="button">更新记忆</button>
-        <button id="memUpdStop" type="button" hidden>停止</button>
-        <label class="dedup" style="margin-top:0"><input id="memAuto" type="checkbox" checked>空闲时自动更新</label>
-        <button id="memLog" class="toggle" type="button" aria-expanded="false" aria-controls="memLogPanel">更新记录<span class="arrow" aria-hidden="true">▸</span></button>
-      </div>
-      <p class="hint">更新时把记忆里的结论、原句和相关段落分批发给所选模型，由它把结论按主题整理成主题页并标出相关主题，合并重复、以新代旧、删除不再成立的说法，文件改过的按新内容改写结论，自动记入的文件按段落分批抽出结论；写入前逐条核对原句。点「更新记忆」先处理待更新的内容，再把全部结论体检一遍；勾选「空闲时自动更新」时，工具开着、10 分钟没有提问时自动处理待更新的内容，一提问就让路。最近 20 次更新可以从最近一次往回撤销。</p>
-      <div id="memUpdStatus" class="status" aria-live="polite"></div>
-      <div id="memLogPanel" hidden>
-        <ul id="memLogList" class="list"></ul>
-      </div>
-      <div id="memPanel" hidden>
+      <div id="skillPanel" role="tabpanel" aria-labelledby="tab-skill" hidden>
+        <p class="hint">新建或安装的 skill 放进自建目录 <span id="skUserDir" style="word-break:break-all"></span>，装好后自动选中。</p>
+        <details class="more"><summary>详细说明</summary><p class="hint">也可以选预装的「创建 skill」，在对话里让 AI 写一个，写好后点回答下方的「安装」。</p></details>
+        <h3 class="sep">新建</h3>
+        <div class="row">
+          <input id="skName" type="text" placeholder="名称：小写字母、数字和连字符，如 weekly-report" autocomplete="off" aria-label="skill 名称">
+          <input id="skDesc" type="text" placeholder="用途：做什么、什么时候用" autocomplete="off" aria-label="skill 用途">
+        </div>
+        <textarea id="skBody" aria-label="skill 说明正文" placeholder="说明正文：写给模型的做法、步骤和输出格式"></textarea>
+        <div class="row"><button id="skCreate" type="button">新建</button></div>
+        <h3 class="sep">安装</h3>
+        <label id="skDrop" class="drop" tabindex="0">点击选择或拖入 skill 的 .zip 包（最大 5 MB）<input id="skZip" class="vh" type="file" accept=".zip,application/zip" tabindex="-1"></label>
         <div class="row" style="margin-top:6px">
-          <input id="memQ" type="text" placeholder="搜索结论、原句或文件路径" autocomplete="off" aria-label="搜索记忆" style="flex:1 1 200px">
-          <button id="memSaveMd" class="small" type="button" title="把主题页与结论保存成一组 Markdown 文件（zip），解压后可用 Obsidian 打开，看主题与文件之间的链接">保存为 Markdown</button>
-          <button id="memClear" class="small danger" type="button">清空记忆</button>
+          <input id="skDir" type="text" placeholder="或填 skill 文件夹的路径（内有 SKILL.md）" autocomplete="off" aria-label="要安装的 skill 文件夹">
+          <button id="skPickDir" type="button" aria-label="选择要安装的 skill 文件夹" hidden>选择……</button>
+          <button id="skInstallDir" type="button">安装文件夹</button>
         </div>
-        <h4 class="mem-h">主题</h4>
-        <ul id="memTopics" class="list"></ul>
-        <h4 class="mem-h">结论</h4>
-        <ul id="memFacts" class="list"></ul>
-        <h4 class="mem-h">文件</h4>
-        <ul id="memFiles" class="list"></ul>
+        <div id="skStatus" class="status" aria-live="polite"></div>
       </div>
-      <div id="memStatus" class="status" aria-live="polite"></div>
-      <h4 class="mem-h">保存位置</h4>
-      <p id="dataDirNow" class="hint name"></p>
-      <div class="row">
-        <input id="dataDir" type="text" placeholder="不会被清理的文件夹的完整路径" autocomplete="off" aria-label="新的保存位置" style="flex:1 1 200px">
-        <button id="pickDataDir" type="button" hidden>选择……</button>
-        <button id="setDataDir" type="button">更改</button>
+      <div id="memSettingsPanel" role="tabpanel" aria-labelledby="tab-mem" hidden>
+        <label class="dedup" style="margin-top:0"><input id="memoryOn" type="checkbox" checked>收录提问时选过的文件和核对通过的结论</label>
+        <p class="hint">勾选「参考知识库」时，提问会参考知识库里相关的以前结论和原文段落；关掉后不再收录、也不再参考，已收录的保留。</p>
+        <details class="more"><summary>详细说明</summary><p class="hint">知识库存在「通用」里「保存位置」的 memory.sqlite（权限 600，只有你能读）。提问时按问题从知识库里找出相关的以前结论和原文段落，排在已选文件之后一起发给模型；文件改了按新内容复核，文件不在了就移出。已收录的可在「查看知识库」里清空。</p></details>
+        <p id="memStats" class="hint"></p>
+        <h4 class="mem-h">更新知识库</h4>
+        <div class="row" style="margin-top:6px">
+          <button id="memUpdate" type="button">更新知识库</button>
+          <button id="memUpdStop" type="button" hidden>停止</button>
+          <label class="dedup" style="margin-top:0"><input id="memAuto" type="checkbox" checked>空闲时自动更新</label>
+          <button id="memLog" class="toggle" type="button" aria-expanded="false" aria-controls="memLogPanel">更新记录<span class="arrow" aria-hidden="true">▸</span></button>
+        </div>
+        <p class="hint">由所选模型把结论整理成主题页；勾选「空闲时自动更新」时，10 分钟没有提问后自动处理待更新的内容。</p>
+        <details class="more"><summary>详细说明</summary><p class="hint">更新时把知识库里的结论、原句和相关段落分批发给所选模型，由它把结论按主题整理成主题页并标出相关主题，合并重复、以新代旧、删除不再成立的说法，文件改过的按新内容改写结论，自动收录的文件按段落分批抽出结论；写入前逐条核对原句。点「更新知识库」先处理待更新的内容，再把全部结论体检一遍；空闲时自动更新只在工具开着时进行，一提问就让路。最近 20 次更新可以从最近一次往回撤销。</p></details>
+        <div id="memUpdStatus" class="status" aria-live="polite"></div>
+        <div id="memLogPanel" hidden>
+          <ul id="memLogList" class="list"></ul>
+        </div>
+        <h4 class="mem-h">自动收录</h4>
+        <div class="row">
+          <span id="ingestStats" class="hint" style="margin:0"></span>
+          <button id="ingestRun" type="button">立即收录</button>
+          <button id="ingestSkipped" class="toggle" type="button" aria-expanded="false" aria-controls="ingestSkippedPanel" hidden>没有收录的文件<span class="arrow" aria-hidden="true">▸</span></button>
+        </div>
+        <div id="ingestSkippedPanel" hidden><ul id="ingestSkippedList" class="list"></ul></div>
+        <div id="ingestStatus" class="status" aria-live="polite"></div>
+        <p class="hint">「管理文件夹」里勾选了「自动收录到知识库」的文件夹（新添加的默认勾选），其中支持格式的文件在后台自动收录到知识库。</p>
+        <details class="more"><summary>详细说明</summary><p class="hint">勾选「忽略 Markdown 文件」时不含 .md。每次扫描文件夹后在后台取出新增或改过的文件的文字，马上能被提问参考，不移动、不修改原文件；之后在「更新知识库」或空闲时自动更新里，由所选模型从文件里抽出带原句的结论，核对原句后写入，再整理进主题页。文件删除后移出它记下的内容；取消勾选只是不再收录，已收录的保留。自动收录不拖住退出，下次启动接着做。</p></details>
+        <h4 class="mem-h">容量上限</h4>
+        <div class="row" style="margin-top:6px">
+          <label for="memMb" class="hint" style="margin:0">容量上限（MB）</label>
+          <input id="memMb" type="number" min="50" max="102400" step="50" style="width:7em">
+          <button id="saveMemMb" type="button" aria-label="保存容量上限">保存</button>
+        </div>
+        <p class="hint">超过上限时先移出最久没被选用或参考的文件。范围 50 到 102,400，默认 1,024（1 GB），回车即保存。</p>
+        <details class="more"><summary>详细说明</summary><p class="hint">上限按知识库里的文字计算；调小时立即按新上限移出多出的部分，调大后因容量不足没收录的文件可以重新自动收录。</p></details>
+        <h4 class="mem-h"><button id="memView" class="toggle" type="button" aria-expanded="false" aria-controls="memPanel">查看知识库<span class="arrow" aria-hidden="true">▸</span></button></h4>
+        <div id="memPanel" hidden>
+          <div class="row" style="margin-top:6px">
+            <input id="memQ" type="text" placeholder="搜索结论、原句或文件路径" autocomplete="off" aria-label="搜索知识库" style="flex:1 1 200px">
+            <button id="memSaveMd" class="small" type="button" title="把主题页与结论保存成一组 Markdown 文件（zip），解压后可用 Obsidian 打开，看主题与文件之间的链接">保存为 Markdown</button>
+            <button id="memClear" class="small danger" type="button">清空知识库</button>
+          </div>
+          <h4 class="mem-h">主题</h4>
+          <ul id="memTopics" class="list"></ul>
+          <h4 class="mem-h">结论</h4>
+          <ul id="memFacts" class="list"></ul>
+          <h4 class="mem-h">文件</h4>
+          <ul id="memFiles" class="list"></ul>
+        </div>
+        <div id="memStatus" class="status" aria-live="polite"></div>
       </div>
-      <p class="hint">记忆、设置（已添加的文件夹、模型设置等）和网址令牌一起存在这里。家目录可能被清理时，改到不会被清理的文件夹，如数据盘上的文件夹。新位置是空文件夹时，把现有的移过去，原处不保留；新位置已有本工具的数据时直接改用那一份，不合并，当前的保留不动。有回答在生成、记忆在更新等任务进行时不能改。位置记在工具目录的 data-dir.txt；升级时把它复制到新版本的工具目录，或在新版本里重新选一次同一个文件夹。</p>
-      <div id="dataStatus" class="status" aria-live="polite"></div>
+      <div id="generalPanel" role="tabpanel" aria-labelledby="tab-general" hidden>
+        <h3>保存位置</h3>
+        <p id="dataDirNow" class="hint name"></p>
+        <div class="row">
+          <input id="dataDir" type="text" placeholder="不会被清理的文件夹的完整路径" autocomplete="off" aria-label="新的保存位置" style="flex:1 1 200px">
+          <button id="pickDataDir" type="button" hidden>选择……</button>
+          <button id="setDataDir" type="button">更改</button>
+        </div>
+        <p class="hint">知识库、设置（已添加的文件夹、模型设置等）和网址令牌一起存在这里；家目录可能被清理时，改到不会被清理的文件夹。</p>
+        <details class="more"><summary>详细说明</summary><p class="hint">例如数据盘上的文件夹。新位置是空文件夹时，把现有的移过去，原处不保留；新位置已有本工具的数据时直接改用那一份，不合并，当前的保留不动。有回答在生成、知识库在更新等任务进行时不能改。位置记在工具目录的 data-dir.txt；升级时把它复制到新版本的工具目录，或在新版本里重新选一次同一个文件夹。</p></details>
+        <div id="dataStatus" class="status" aria-live="polite"></div>
+      </div>
     </div>
+    <div id="dest" class="hint"></div>
     <textarea id="ask" aria-label="要问的内容" placeholder="写下要 AI 做什么，例如：总结这几份文件的要点；把第 2 份改写成一则通知；这几份材料的说法有什么不同"></textarea>
     <div class="row" style="margin-top:8px">
       <button id="send" class="primary" type="button">发送</button>
@@ -489,7 +521,7 @@
   <div id="convFrames" hidden></div>
 
 
-  <footer><span id="ver">找资料问 AI v2.10</span>　<button id="copyUrl" type="button" class="small">复制网址</button>　网址固定不变，可收藏或复制到浏览器打开。关闭页面后服务继续运行，没有页面、也没有任务 30 分钟后自动退出；点「退出」立即结束，开着的页面一起结束。有回答正在生成（含 skill 脚本运行）或记忆正在手动更新时，服务等它结束再退出；自动记入与空闲时自动更新不拖住退出，下次启动接着做。对话不自动保存，退出即清空；记忆存在本机，可在「记忆设置」里关闭或清空。<div id="urlStatus" class="status info" aria-live="polite"></div></footer>
+  <footer><span id="ver">本机资料问答 v2.11</span>　<button id="copyUrl" type="button" class="small">复制网址</button>　网址固定不变，可收藏或复制到浏览器打开。关闭页面后服务继续运行，没有页面、也没有任务 30 分钟后自动退出；点「退出」立即结束，开着的页面一起结束。有回答正在生成（含 skill 脚本运行）或知识库正在手动更新时，服务等它结束再退出；自动收录与空闲时自动更新不拖住退出，下次启动接着做。对话不自动保存，退出即清空；知识库存在本机，可在「知识库设置」里关闭或清空。<div id="urlStatus" class="status info" aria-live="polite"></div></footer>
 </main>
 <script>
 'use strict';
@@ -1388,7 +1420,7 @@ $('copyPaths').addEventListener('click', () => {
   fallback();
 });
 $('saveTexts').addEventListener('click', () => exportRun('保存', () => exportText().then(r => {
-  const name = '找资料问AI-文字-' + stampNow() + '.md';
+  const name = '本机资料问答-文字-' + stampNow() + '.md';
   saveBlob(new Blob([r.text], {type: 'text/markdown;charset=utf-8'}), name);
   say('pickStatus', '已保存为 ' + name + '（在浏览器的下载文件夹里）：' + r.note + '。', 'ok');
 })));
@@ -1459,7 +1491,7 @@ function renderDest() {
   const m = currentModel();
   $('dest').className = m ? 'hint' : 'hint warn';
   $('dest').textContent = m
-    ? '将发送到：' + m.host + (m.auth || m.loopback ? '' : '（未鉴权）') + '，模型 ' + m.label + '，' + picked.length + ' 个文件' + (currentSkill() ? '，skill ' + currentSkill().label : '') + (memoryActive() ? '，参考记忆' : '') +
+    ? '将发送到：' + m.host + (m.auth || m.loopback ? '' : '（未鉴权）') + '，模型 ' + m.label + '，' + picked.length + ' 个文件' + (currentSkill() ? '，skill ' + currentSkill().label : '') + (memoryActive() ? '，参考知识库' : '') +
       '；文件 ' + fmtNum(totalChars()) + ' 字' + (currentSkill() ? ' + skill ' + fmtNum(skillChars()) + ' 字' : '') + ' + 对话 ' + fmtNum(historyChars()) + ' 字' +
       (m.limit && m.limit < charLimit ? '；发送上限 ' + fmtNum(m.limit) + ' 字（' + m.limit_note + '）' : '')
     : '没有可用的模型：OpenCode 配置里找不到带接口地址和 AK 的模型，本机也没有运行中的 llama-server 或 Ollama；请在「模型设置」里填写自定义接口（本机有 OpenCode 配置时可用「配置 OpenCode」换上自己的 AK），或启动本机模型服务后点「重新查找」。';
@@ -1511,7 +1543,7 @@ function renderSkillHint() {
       box.appendChild(el('div', '', '选了 skill 时可以不选文件，也可以不写问题直接发送（代为提问「' + EMPTY_ASK + '」）。'));
     }
   } else if (skillsDir) {
-    box.appendChild(el('div', '', '自建 skill 放在 ' + skillsDir + '/<名称>/SKILL.md，放好后点「重新读取」；也可以点「管理 skill」新建或安装。'));
+    box.appendChild(el('div', '', '自建 skill 放在 ' + skillsDir + '/<名称>/SKILL.md，放好后点「重新读取」；也可以点「skill 设置」新建或安装。'));
   }
   renderDest();
   noticeLimit();
@@ -1531,7 +1563,7 @@ function loadSkills(manual) {
 
 $('skillSel').addEventListener('change', () => { skillOpen = false; renderSkillHint(); });
 
-// ---------------- 管理 skill：新建、安装。已有同名自建 skill 或带脚本时服务端先返回 confirm，确认后带 confirm 重发
+// ---------------- skill 设置：新建、安装。已有同名自建 skill 或带脚本时服务端先返回 confirm，确认后带 confirm 重发
 function skillConfirmText(c, what) {
   const parts = [];
   if (c.replaced) parts.push('替换已有的同名自建 skill：\n' + c.target + '\n其中的 ' + c.old_files + ' 个文件会被删除，换成' + what + '的内容。');
@@ -1550,7 +1582,12 @@ function skillCall(path, body, b, statusId, what) {
   b.disabled = true;
   say(statusId, '正在' + what + '……', 'info');
   const go = confirmed => post(path, Object.assign({}, body, confirmed ? {confirm: true} : {})).then(r => {
-    if (r.ok) return skillDone(r, statusId, what);
+    if (r.ok) {
+      // 新建或从文件夹安装成功后清空对应输入框，未保存圆点随之消失
+      (body.dir ? ['skDir'] : body.name !== undefined ? ['skName', 'skDesc', 'skBody'] : []).forEach(id => { $(id).value = ''; });
+      updateDirty();
+      return skillDone(r, statusId, what);
+    }
     if (r.confirm) {
       if (!confirm(skillConfirmText(r.confirm, what))) { say(statusId, '没有' + what + '。', 'info'); return; }
       return go(true);
@@ -1562,7 +1599,6 @@ function skillCall(path, body, b, statusId, what) {
 }
 function installSkill(body, b, statusId) { return skillCall('/api/skill-install', body, b, statusId, '安装'); }
 
-$('skillManage').addEventListener('click', () => togglePanel($('skillManage'), $('skillPanel')));
 $('skCreate').addEventListener('click', () => {
   const body = {name: $('skName').value.trim(), description: $('skDesc').value.trim(), body: $('skBody').value};
   const miss = [['名称', body.name], ['用途', body.description], ['说明正文', body.body.trim()]].filter(x => !x[1]).map(x => x[0]);
@@ -1627,7 +1663,7 @@ function saveOutput(f) {
 function saveStem(stamp) {
   const trim = x => x.replace(/^[\s.]+|[\s.]+$/g, '');
   const t = trim(trim(convTitle().text.replace(/[\/\\:*?"<>|\x00-\x1f\x7f]/g, '')).slice(0, 20));
-  return '找资料问AI-' + (t ? t + '-' : '') + stamp;
+  return '本机资料问答-' + (t ? t + '-' : '') + stamp;
 }
 
 function stampNow() {
@@ -1720,7 +1756,7 @@ function renderChat() {
       who.appendChild(w);
       if (m.answerId && !m.wrong) {
         const x = btn('不对', 'small', () => forgetAnswer(m, x));
-        x.setAttribute('aria-label', '这条回答不对：忘掉它记住的结论');
+        x.setAttribute('aria-label', '这条回答不对：移出它收录的结论');
         who.appendChild(x);
       }
     }
@@ -1737,10 +1773,10 @@ function renderChat() {
       const c = btn('复制', 'small', () => copyText(m.content, c));
       c.setAttribute('aria-label', '复制这条回答');
       foot.appendChild(c);
-      if (m.answerId && m.wrong) foot.appendChild(el('span', 'hint', '已忘掉这条回答记住的结论'));
+      if (m.answerId && m.wrong) foot.appendChild(el('span', 'hint', '已移出这条回答收录的结论'));
       else if (m.answerId) {
-        const r = btn('已记住 ' + m.remembered + ' 条结论', 'link', () => openMemory(true));
-        r.setAttribute('aria-label', '已记住 ' + m.remembered + ' 条结论，打开记忆设置');
+        const r = btn('已收录 ' + m.remembered + ' 条结论', 'link', () => openMemory(true));
+        r.setAttribute('aria-label', '已收录 ' + m.remembered + ' 条结论，打开知识库设置');
         foot.appendChild(r);
       }
       // 只在最后一条回答不完整时给「继续」「重新生成」；发了新问题后旧的只留标记
@@ -1777,12 +1813,12 @@ function setBusy(on) {
   document.querySelectorAll('#chat button.resume').forEach(b => { b.disabled = on || !alive; });
 }
 
-// ---------------- 记忆
+// ---------------- 知识库
 
 function memoryActive() { return !!state && state.memory && $('useMemory').checked; }
-function memoryTitle(mem) { return '参考了记忆：' + mem.facts + ' 条结论、' + mem.paras + ' 段原文'; }
+function memoryTitle(mem) { return '参考了知识库：' + mem.facts + ' 条结论、' + mem.paras + ' 段原文'; }
 
-// 回答上方可展开的一行：用到了哪些记忆，出处可打开所在文件夹
+// 回答上方可展开的一行：用到了哪些知识库，出处可打开所在文件夹
 function memoryNode(mem) {
   const d = el('details', 'memo');
   d.appendChild(el('summary', '', memoryTitle(mem)));
@@ -1800,25 +1836,25 @@ function memoryNode(mem) {
   return d;
 }
 
-// 「不对」：忘掉这条回答记住的结论，之后不再记入；不弹窗
+// 「不对」：移出这条回答收录的结论，之后不再收录；不弹窗
 function forgetAnswer(m, b) {
   b.disabled = true;
   post('/api/memory', {action: 'wrong', answer_id: m.answerId}).then(r => {
     m.wrong = true;
     renderChat();
-    say('chatStatus', '已忘掉这条回答记住的 ' + r.count + ' 条结论，之后不再记入。', 'ok');
+    say('chatStatus', '已移出这条回答收录的 ' + r.count + ' 条结论，之后不再收录。', 'ok');
     showMemStats(r.stats);
-  }).catch(e => { b.disabled = !alive; say('chatStatus', failText('忘掉', e.message, RETRY), 'bad'); });
+  }).catch(e => { b.disabled = !alive; say('chatStatus', failText('移出', e.message, RETRY), 'bad'); });
 }
 
 function showMemStats(st) {
   if (!st) return;
   state.memory_stats = st;
   const full = st.max_bytes && st.bytes >= st.max_bytes * 0.95;
-  $('memStats').textContent = st.error ? '读不了记忆：' + st.error : '已记住 ' + fmtNum(st.files) + ' 个文件、' + fmtNum(st.facts) +
+  $('memStats').textContent = st.error ? '读不了知识库：' + st.error : '已收录 ' + fmtNum(st.files) + ' 个文件、' + fmtNum(st.facts) +
     ' 条结论、' + fmtNum(st.topics || 0) + ' 页主题页' + (st.queued ? '，待更新 ' + fmtNum(st.queued) + ' 项' : '') +
     (st.extract ? '（其中从文件抽结论 ' + fmtNum(st.extract) + ' 个文件）' : '') +
-    '，约 ' + fmtSize(st.bytes) + '（上限 ' + fmtSize(st.max_bytes) + (full ? '，容量快满了，可调大上限' : '，超出时先忘掉最久没用的文件') + '）';
+    '，约 ' + fmtSize(st.bytes) + '（上限 ' + fmtSize(st.max_bytes) + (full ? '，容量快满了，可调大上限' : '，超出时先移出最久没用的文件') + '）';
   $('memStats').className = full ? 'hint warn' : 'hint';
   $('memSaveMd').disabled = !alive || !(st.facts || st.topics);
 }
@@ -1835,7 +1871,7 @@ function renderMemory(r) {
   files.textContent = '';
   topics.textContent = '';
   const q = $('memQ').value.trim();
-  if (!r.topics.length) topics.appendChild(el('li', 'meta', q ? '没有含「' + q + '」的主题页。' : '还没有主题页：点「更新记忆」整理。'));
+  if (!r.topics.length) topics.appendChild(el('li', 'meta', q ? '没有含「' + q + '」的主题页。' : '还没有主题页：点「更新知识库」整理。'));
   r.topics.forEach(t => {
     const li = el('li');
     const g = el('div', 'grow');
@@ -1849,7 +1885,7 @@ function renderMemory(r) {
     li.appendChild(x);
     topics.appendChild(li);
   });
-  if (!r.facts.length) facts.appendChild(el('li', 'meta', q ? '没有含「' + q + '」的结论。' : '还没有记住结论。'));
+  if (!r.facts.length) facts.appendChild(el('li', 'meta', q ? '没有含「' + q + '」的结论。' : '还没有收录结论。'));
   r.facts.forEach(f => {
     const li = el('li');
     const g = el('div', 'grow');
@@ -1861,15 +1897,15 @@ function renderMemory(r) {
     li.appendChild(x);
     facts.appendChild(li);
   });
-  if (!r.files.length) files.appendChild(el('li', 'meta', q ? '没有路径含「' + q + '」的文件。' : '还没有记住文件。'));
+  if (!r.files.length) files.appendChild(el('li', 'meta', q ? '没有路径含「' + q + '」的文件。' : '还没有收录文件。'));
   r.files.forEach(f => {
     const li = el('li');
     const g = el('div', 'grow');
     g.appendChild(el('div', 'name', f.path));
     g.appendChild(el('div', 'hint', f.facts + ' 条结论 · ' + fmtSize(f.bytes)));
     li.appendChild(g);
-    const x = btn('忘掉', 'small', () => memAction({action: 'file', path: f.path}, x, '已忘掉这个文件及其 ' + f.facts + ' 条结论。'));
-    x.setAttribute('aria-label', '忘掉这个文件及其结论');
+    const x = btn('移出', 'small', () => memAction({action: 'file', path: f.path}, x, '已移出这个文件及其 ' + f.facts + ' 条结论。'));
+    x.setAttribute('aria-label', '移出这个文件及其结论');
     li.appendChild(x);
     files.appendChild(li);
   });
@@ -1884,18 +1920,12 @@ function memAction(body, b, done) {
   }).catch(e => { b.disabled = !alive; say('memStatus', failText('操作', e.message, RETRY), 'bad'); });
 }
 
-// 记忆设置面板：「记忆设置」展开或收起；入口展开它、滚到面板顶部并聚焦，view 为真时另外展开「查看记忆」
-function toggleMemSettings(open) {
-  togglePanel($('memSettings'), $('memSettingsPanel'), open);
-  if (!$('memSettingsPanel').hidden) { refreshMemStats(); pollMemUpdate(); pollIngest(); }
-}
+// 打开设置的「知识库」标签（提示条与回答下方的入口）；view 为真时另外展开「查看知识库」
 function openMemory(view) {
-  if ($('memSettingsPanel').hidden) toggleMemSettings(true);
+  if (!settingsOpen('mem')) openSettings('mem', document.activeElement);
+  else tabBtn('mem').focus();
   if (view && $('memPanel').hidden) $('memView').click();
-  $('memHead').scrollIntoView({block: 'start'});
-  $('memHead').focus({preventScroll: true});
 }
-$('memSettings').addEventListener('click', () => toggleMemSettings());
 
 $('memView').addEventListener('click', () => {
   togglePanel($('memView'), $('memPanel'));
@@ -1904,17 +1934,17 @@ $('memView').addEventListener('click', () => {
 let memTimer = 0;
 $('memQ').addEventListener('input', () => { clearTimeout(memTimer); memTimer = setTimeout(refreshMemStats, 250); });
 // 「清空」类操作直接清，不弹确认
-$('memClear').addEventListener('click', () => memAction({action: 'clear'}, $('memClear'), '记忆已清空。')
+$('memClear').addEventListener('click', () => memAction({action: 'clear'}, $('memClear'), '知识库已清空。')
   .then(() => { $('memClear').disabled = !alive; }));
 $('memoryOn').addEventListener('change', () => {
   const on = $('memoryOn').checked;
   post('/api/settings', {memory: on}).then(r => {
     applyState(r);
     renderFolders();
-    say('memStatus', on ? '已打开记忆。' : '已关闭记忆：不再记入、也不再参考，已记住的保留。', 'ok');
+    say('memStatus', on ? '已打开知识库。' : '已关闭知识库：不再收录、也不再参考，已收录的保留。', 'ok');
   }).catch(e => { $('memoryOn').checked = !on; say('memStatus', failText('保存', e.message, RETRY), 'bad'); });
 });
-// ---------------- 保存位置：记忆、设置与令牌存放的文件夹
+// ---------------- 保存位置：知识库、设置与令牌存放的文件夹
 
 function showDataDir(d) {
   if (!d) return;
@@ -1925,7 +1955,7 @@ function dataConfirmText(p) {
   const list = p.items.map(i => i.label + '（' + i.name + '，' + fmtSize(i.bytes) + '）').join('、');
   if (p.mode === 'use') {
     let t = '改用新位置已有的数据？\n\n' + p.to + ' 里已有：' + list;
-    if (p.stats) t += '\n其中记忆：' + p.stats.files + ' 个文件、' + p.stats.facts + ' 条结论';
+    if (p.stats) t += '\n其中知识库：' + p.stats.files + ' 个文件、' + p.stats.facts + ' 条结论';
     t += '\n\n不合并：当前位置（' + p.from + '）的数据保留不动，之后不再使用。';
     if (p.url_change) t += '\n网址会随之改变，更改后按新网址重新打开页面。';
     return t;
@@ -1950,6 +1980,7 @@ $('setDataDir').addEventListener('click', () => {
     return post('/api/data-dir', {path: v, confirm: true}).then(d => {
       showDataDir(d.data);
       $('dataDir').value = '';
+      updateDirty();
       const where = d.data.path;
       if (d.mode === 'use' || d.url_changed) {
         say('dataStatus', '已改用 ' + where + ' 里的数据，正在重新打开页面……', 'ok');
@@ -1963,7 +1994,7 @@ $('setDataDir').addEventListener('click', () => {
     .then(() => { b.disabled = !alive; });
 });
 
-// ---------------- 记忆更新：手动、空闲时自动、更新记录与撤销
+// ---------------- 知识库更新：手动、空闲时自动、更新记录与撤销
 
 let memUpd = {running: false, mode: '', history: []}, memUpdShown = null, memUpdTimer = 0;
 function memTime(sec) {
@@ -1977,9 +2008,9 @@ function showMemUpdate(st) {
   $('memUpdStop').hidden = !(st.running && st.mode === 'manual');
   $('memAuto').checked = st.auto;
   if (st.running && st.mode === 'manual') {
-    say('memUpdStatus', '正在更新记忆：' + (st.stage || '准备') + (st.total ? '，第 ' + Math.min(st.done + 1, st.total) + ' / ' + st.total + ' 批' : '') + '……', 'info');
+    say('memUpdStatus', '正在更新知识库：' + (st.stage || '准备') + (st.total ? '，第 ' + Math.min(st.done + 1, st.total) + ' / ' + st.total + ' 批' : '') + '……', 'info');
   } else if (st.running) {
-    say('memUpdStatus', '正在空闲时自动更新记忆，提问时会让路……', 'info');
+    say('memUpdStatus', '正在空闲时自动更新知识库，提问时会让路……', 'info');
   } else if (st.result && st.result.time !== memUpdShown && st.result.text) {
     memUpdShown = st.result.time;
     say('memUpdStatus', st.result.text, {done: 'ok', stopped: 'warn', yielded: 'info', error: 'bad'}[st.result.kind]);
@@ -1989,8 +2020,8 @@ function showMemUpdate(st) {
   if (was && !st.running) refreshMemStats();
   renderMemLog();
   clearTimeout(memUpdTimer);
-  // 进行中每秒看一次进度；记忆设置开着时每 15 秒看一次，以便显示自动更新
-  if (alive && (st.running || !$('memSettingsPanel').hidden)) memUpdTimer = setTimeout(pollMemUpdate, st.running ? 1000 : 15000);
+  // 进行中每秒看一次进度；知识库设置开着时每 15 秒看一次，以便显示自动更新
+  if (alive && (st.running || settingsOpen('mem'))) memUpdTimer = setTimeout(pollMemUpdate, st.running ? 1000 : 15000);
 }
 function pollMemUpdate() { return api('/api/memory-update').then(showMemUpdate).catch(() => {}); }
 function renderMemLog() {
@@ -2023,9 +2054,9 @@ function renderMemLog() {
 }
 $('memUpdate').addEventListener('click', () => {
   $('memUpdate').disabled = true;
-  say('memUpdStatus', '正在更新记忆：准备……', 'info');
+  say('memUpdStatus', '正在更新知识库：准备……', 'info');
   post('/api/memory-update', {action: 'run'}).then(showMemUpdate)
-    .catch(e => { $('memUpdate').disabled = !alive; say('memUpdStatus', failText('更新记忆', e.message, RETRY), 'bad'); });
+    .catch(e => { $('memUpdate').disabled = !alive; say('memUpdStatus', failText('更新知识库', e.message, RETRY), 'bad'); });
 });
 $('memUpdStop').addEventListener('click', () => {
   $('memUpdStop').disabled = true;
@@ -2036,15 +2067,15 @@ $('memAuto').addEventListener('change', () => {
   const on = $('memAuto').checked;
   post('/api/settings', {memory_auto: on}).then(() => {
     memUpd.auto = on;
-    say('memUpdStatus', on ? '已打开空闲时自动更新。' : '已关闭空闲时自动更新，可随时点「更新记忆」。', 'ok');
+    say('memUpdStatus', on ? '已打开空闲时自动更新。' : '已关闭空闲时自动更新，可随时点「更新知识库」。', 'ok');
   }).catch(e => { $('memAuto').checked = !on; say('memUpdStatus', failText('保存', e.message, RETRY), 'bad'); });
 });
 $('memLog').addEventListener('click', () => togglePanel($('memLog'), $('memLogPanel')));
 
-// ---------------- 自动记入：勾选的文件夹里的文件自动记进记忆
+// ---------------- 自动收录：勾选的文件夹里的文件自动收录到知识库
 
 let ingest = null, ingestShown = null, ingestTimer = 0;
-const INGEST_STATE = {failed: '取不出文字', evicted: '容量不足', forgotten: '已忘掉'};
+const INGEST_STATE = {failed: '取不出文字', evicted: '容量不足', forgotten: '已移出'};
 function showIngest(st) {
   if (!st) return;
   const was = ingest && ingest.running;
@@ -2053,13 +2084,13 @@ function showIngest(st) {
   $('ingestRun').disabled = st.running || !alive || !state.memory || !on;
   const sum = st.summary;
   let text = '';
-  if (!state.memory) text = '记忆已关闭，不自动记入。';
-  else if (!on) text = '还没有勾选「自动记入记忆」的文件夹：在「管理文件夹」里给要记入的文件夹勾选。';
+  if (!state.memory) text = '知识库已关闭，不自动收录。';
+  else if (!on) text = '还没有勾选「自动收录到知识库」的文件夹：在「管理文件夹」里给要收录的文件夹勾选。';
   else if (sum) {
-    text = '勾选的 ' + st.folders.length + ' 个文件夹里共 ' + fmtNum(sum.total) + ' 个文件：已记入 ' + fmtNum(sum.done) + ' 个' +
-      (sum.waiting ? '，待记入 ' + fmtNum(sum.waiting) + ' 个' : '') +
-      (sum.skipped_total ? '，没有记入 ' + fmtNum(sum.skipped_total) + ' 个' : '') + '。';
-  } else text = '勾选了 ' + st.folders.length + ' 个文件夹，正在查找要记入的文件……';
+    text = '勾选的 ' + st.folders.length + ' 个文件夹里共 ' + fmtNum(sum.total) + ' 个文件：已收录 ' + fmtNum(sum.done) + ' 个' +
+      (sum.waiting ? '，待收录 ' + fmtNum(sum.waiting) + ' 个' : '') +
+      (sum.skipped_total ? '，没有收录 ' + fmtNum(sum.skipped_total) + ' 个' : '') + '。';
+  } else text = '勾选了 ' + st.folders.length + ' 个文件夹，正在查找要收录的文件……';
   $('ingestStats').textContent = text;
   $('ingestStats').className = sum && sum.skipped.some(x => x.state === 'evicted') ? 'hint warn' : 'hint';
   const skipped = sum ? sum.skipped : [];
@@ -2075,21 +2106,21 @@ function showIngest(st) {
   });
   if (sum && sum.skipped_total > skipped.length) ul.appendChild(el('li', 'meta', '……另有 ' + fmtNum(sum.skipped_total - skipped.length) + ' 个'));
   if (!skipped.length && !$('ingestSkippedPanel').hidden) togglePanel($('ingestSkipped'), $('ingestSkippedPanel'), false);
-  if (st.running) say('ingestStatus', '正在自动记入：' + (st.stage || '准备') + '……', 'info');
+  if (st.running) say('ingestStatus', '正在自动收录：' + (st.stage || '准备') + '……', 'info');
   else if (st.result && st.result.time !== ingestShown) {
     ingestShown = st.result.time;
     say('ingestStatus', st.result.text, st.result.kind === 'error' ? 'bad' : 'ok');
   } else if (!st.result) say('ingestStatus', '');
   if (was && !st.running) refreshMemStats();
   clearTimeout(ingestTimer);
-  if (alive && (st.running || !$('memSettingsPanel').hidden)) ingestTimer = setTimeout(pollIngest, st.running ? 1000 : 15000);
+  if (alive && (st.running || settingsOpen('mem'))) ingestTimer = setTimeout(pollIngest, st.running ? 1000 : 15000);
 }
 function pollIngest() { return api('/api/memory-ingest').then(showIngest).catch(() => {}); }
 $('ingestRun').addEventListener('click', () => {
   $('ingestRun').disabled = true;
-  say('ingestStatus', '正在自动记入：查找要记入的文件……', 'info');
+  say('ingestStatus', '正在自动收录：查找要收录的文件……', 'info');
   post('/api/memory-ingest', {action: 'run'}).then(showIngest)
-    .catch(e => { $('ingestRun').disabled = !alive; say('ingestStatus', failText('记入', e.message, RETRY), 'bad'); });
+    .catch(e => { $('ingestRun').disabled = !alive; say('ingestStatus', failText('收录', e.message, RETRY), 'bad'); });
 });
 $('ingestSkipped').addEventListener('click', () => togglePanel($('ingestSkipped'), $('ingestSkippedPanel')));
 
@@ -2103,6 +2134,7 @@ $('saveMemMb').addEventListener('click', () => {
   }
   $('saveMemMb').disabled = true;
   post('/api/settings', {memory_mb: v}).then(r => {
+    fillSaved('memMb', v, true);
     applyState(r);
     say('memStatus', '容量上限已改为 ' + fmtNum(v) + ' MB。', 'ok');
     refreshMemStats();
@@ -2119,7 +2151,7 @@ $('memSaveMd').addEventListener('click', () => {
   fetch('/api/memory-export', {headers: {'X-Token': TOKEN}}).then(r => {
     if (!r.ok) return r.json().then(j => { throw new Error(j.error || ('HTTP ' + r.status)); });
     return r.blob().then(blob => {
-      const name = '记忆-' + stampNow() + '.zip';
+      const name = '知识库-' + stampNow() + '.zip';
       saveBlob(blob, name);
       say('memStatus', '已保存为 ' + name + '（浏览器的下载文件夹）：解压后用 Obsidian「打开文件夹作为库」即可浏览主题与文件之间的链接。', 'ok');
     });
@@ -2396,10 +2428,97 @@ function togglePanel(b, panel, open) {
   if (arrow) arrow.textContent = open ? '▾' : '▸';
 }
 $('manageFolders').addEventListener('click', () => togglePanel($('manageFolders'), $('folderPanel')));
-$('modelSettings').addEventListener('click', () => {
-  togglePanel($('modelSettings'), $('modelPanel'));
-  if (!$('modelPanel').hidden) { findLocal(false); loadOpencode(); }
+
+// ---------------- 设置面板：模型、skill、知识库、通用四个标签，一次只显示一页
+// 三个入口各开对应标签，已开在该标签时收起；Esc 或「收起」关闭，焦点回到打开它的入口。
+// 上次打开的标签记在本浏览器，读不到时为「模型」；刷新后面板收起。本机没有可用模型时不显示 skill 标签。
+const SET_KEY = 'ask-local-files.setTab';
+const SET_TABS = ['model', 'skill', 'mem', 'general'];
+const SET_ENTRY = {model: 'modelSettings', skill: 'skillManage', mem: 'memSettings'};
+let setTab = 'model', setOpener = null;
+try { const t = localStorage.getItem(SET_KEY); if (SET_TABS.includes(t)) setTab = t; } catch (e) { /* 读不到时按默认 */ }
+function tabBtn(t) { return $('tab-' + t); }
+function setTabsShown() { return SET_TABS.filter(t => !(t === 'skill' && noAi())); }
+function shownTab() { return setTabsShown().includes(setTab) ? setTab : 'model'; }
+function settingsOpen(t) { return !$('setPanel').hidden && (t === undefined || shownTab() === t); }
+function renderSetPanel() {
+  const cur = shownTab(), open = !$('setPanel').hidden;
+  SET_TABS.forEach(t => {
+    const b = tabBtn(t), on = t === cur;
+    b.setAttribute('aria-selected', String(on));
+    b.tabIndex = on ? 0 : -1;
+    $(b.getAttribute('aria-controls')).hidden = !on;
+    const entry = SET_ENTRY[t] && $(SET_ENTRY[t]);
+    if (entry) {
+      entry.setAttribute('aria-expanded', String(open && on));
+      entry.querySelector('.arrow').textContent = open && on ? '▾' : '▸';
+    }
+  });
+}
+// 打开或切到某一页时刷新它显示的内容
+function loadSetTab(t) {
+  if (t === 'model') { findLocal(false); loadOpencode(); }
+  else if (t === 'mem') { refreshMemStats(); pollMemUpdate(); pollIngest(); }
+}
+function selectSetTab(t, focus) {
+  setTab = t;
+  try { localStorage.setItem(SET_KEY, t); } catch (e) { /* 存不了时只在本页有效 */ }
+  renderSetPanel();
+  if (focus) tabBtn(shownTab()).focus();
+  loadSetTab(shownTab());
+}
+function openSettings(t, opener) {
+  setOpener = opener && opener !== document.body ? opener : null;
+  $('setPanel').hidden = false;
+  selectSetTab(t, false);
+  $('setPanel').scrollIntoView({block: 'nearest'});
+  tabBtn(shownTab()).focus({preventScroll: true});
+}
+function closeSettings() {
+  const entry = $(SET_ENTRY[shownTab()] || 'modelSettings');
+  const back = setOpener && setOpener.isConnected && setOpener.offsetParent ? setOpener : entry;
+  $('setPanel').hidden = true;
+  setOpener = null;
+  renderSetPanel();
+  if (back && back.offsetParent) back.focus();
+}
+Object.keys(SET_ENTRY).forEach(t => $(SET_ENTRY[t]).addEventListener('click', ev => {
+  if (settingsOpen(t)) closeSettings();
+  else openSettings(t, ev.currentTarget);
+}));
+SET_TABS.forEach(t => tabBtn(t).addEventListener('click', () => selectSetTab(t, false)));
+$('setTabs').addEventListener('keydown', ev => {
+  const list = setTabsShown(), i = list.indexOf(shownTab()), n = list.length;
+  const j = {ArrowRight: (i + 1) % n, ArrowLeft: (i + n - 1) % n, Home: 0, End: n - 1}[ev.key];
+  if (j === undefined) return;
+  ev.preventDefault();
+  selectSetTab(list[j], true);
 });
+$('setPanel').addEventListener('keydown', ev => {
+  if (ev.key !== 'Escape' || ev.defaultPrevented) return;
+  ev.preventDefault();
+  closeSettings();
+});
+$('setClose').addEventListener('click', closeSettings);
+
+// 未保存的改动：标签文字后加圆点，保存或恢复原值后消失；切换标签或收起时输入框内容保留
+const SET_FIELDS = {model: ['limit', 'cBase', 'cModel', 'cKey', 'ocKey'], skill: ['skName', 'skDesc', 'skBody', 'skDir'],
+                    mem: ['memMb'], general: ['dataDir']};
+// 有已存值的输入框（字数上限、接口地址、模型名、容量上限）与已存值比较，其余的填了就算改动
+function isDirty(id) {
+  const x = $(id);
+  return x.dataset.saved !== undefined ? x.value !== x.dataset.saved : x.value.trim() !== '';
+}
+// 按服务端的值更新输入框：有未保存的改动时只更新已存值，不覆盖输入；force 为刚保存过，直接换成已存值
+function fillSaved(id, v, force) {
+  const x = $(id), clean = force || x.dataset.saved === undefined || x.value === x.dataset.saved;
+  x.dataset.saved = v === undefined || v === null ? '' : String(v);
+  if (clean) x.value = x.dataset.saved;
+}
+function updateDirty() {
+  SET_TABS.forEach(t => { tabBtn(t).querySelector('.dirty').hidden = !SET_FIELDS[t].some(isDirty); });
+}
+$('setPanel').addEventListener('input', updateDirty);
 
 // 重新探测本机的 llama-server 与 Ollama；shout 为使用者点了「重新查找」，写明找到了什么
 function findLocal(shout) {
@@ -2427,7 +2546,7 @@ function run(action, truncate) {
   cutAction = null;
   const skill = currentSkill(), last = chat[chat.length - 1];
   if (kind !== 'send' && !(last && last.partial)) return;
-  if (!picked.length && !skill && !memoryActive()) { say('askStatus', '还没有选文件：先在「找文件」里加入要用的文件、选一个 skill，或勾选「参考记忆」。', 'warn'); return; }
+  if (!picked.length && !skill && !memoryActive()) { say('askStatus', '还没有选文件：先在「找文件」里加入要用的文件、选一个 skill，或勾选「参考知识库」。', 'warn'); return; }
   if (picked.some(p => p.loading)) { say('askStatus', '还在取文字，请稍等。', 'warn'); return; }
   if (picked.some(p => p.error)) { say('askStatus', '有文件取不出文字：请先在「已选」里点「移除取不出文字的文件」。', 'bad'); return; }
   if (kind === 'send' && !typed && !skill) { say('askStatus', '请先写下要 AI 做什么；选了 skill 时可以不写。', 'warn'); $('ask').focus(); return; }
@@ -2523,7 +2642,7 @@ function noticeTitle() {
     if (w && typeof w.renderConvs === 'function') w.renderConvs();
   } catch (e) { /* 窗口已关闭 */ }
 }
-// 第一轮回答正常结束后另问一次模型要标题：不带文件和记忆，失败或超时时保留第一问的前几个字，不提示
+// 第一轮回答正常结束后另问一次模型要标题：不带文件和知识库，失败或超时时保留第一问的前几个字，不提示
 function askTitle(answer) {
   const first = chat[0];
   if (!first || chat[1] !== answer || !answer.done || first.aiTitle || first.titleAsked) return;
@@ -2641,7 +2760,7 @@ function refsMarkdown() {
 
 // 整个对话写成 Markdown：「保存对话」与「保存为 Word」共用
 function chatMarkdown(stamp) {
-  const lines = ['# 找资料问 AI 对话 ' + stamp];
+  const lines = ['# 本机资料问答 对话 ' + stamp];
   chat.forEach(m => {
     lines.push('', m.role === 'user' ? '## 问' : '## 答' + (m.model ? '（' + m.model + (m.skill ? '，skill ' + m.skill : '') + '）' : ''));
     if (m.memory && m.memory.files.length) {
@@ -2685,22 +2804,22 @@ function renderFolders() {
   state.folders.forEach(f => {
     const li = el('li');
     li.appendChild(el('div', 'grow name', f));
-    // 「自动记入记忆」：勾选后其中的文件自动记进记忆，默认不勾
+    // 「自动收录到知识库」：勾选后其中的文件自动收录到知识库；新添加的文件夹默认勾选（服务端添加时写入）
     const lab = el('label', 'auto-in'), cb = el('input');
     cb.type = 'checkbox';
     cb.checked = (state.auto_folders || []).includes(f);
     cb.disabled = !state.memory || !alive;
-    cb.setAttribute('aria-label', '自动记入记忆：' + f);
-    lab.title = state.memory ? '勾选后，这个文件夹里支持格式的文件自动记进记忆，详见「记忆设置」' : '记忆已关闭，请先在「记忆设置」里打开记忆';
+    cb.setAttribute('aria-label', '自动收录到知识库：' + f);
+    lab.title = state.memory ? '勾选后，这个文件夹里支持格式的文件自动收录到知识库，详见「知识库设置」' : '知识库已关闭，请先在「知识库设置」里打开知识库';
     lab.appendChild(cb);
-    lab.appendChild(document.createTextNode('自动记入记忆'));
+    lab.appendChild(document.createTextNode('自动收录到知识库'));
     cb.addEventListener('change', () => {
       const on = cb.checked;
       cb.disabled = true;
       post('/api/folders', {auto: f, on: on}).then(r => {
         state.auto_folders = r.auto_folders;
-        say('folderStatus', on ? '已打开自动记入：正在后台把这个文件夹里的文件记进记忆，进度见「记忆设置」。'
-                               : '已关闭自动记入：不再记入这个文件夹的文件，已记住的保留。', 'ok');
+        say('folderStatus', on ? '已打开自动收录：正在后台把这个文件夹里的文件收录到知识库，进度见「知识库设置」。'
+                               : '已关闭自动收录：不再收录这个文件夹的文件，已收录的保留。', 'ok');
         showIngest(r.ingest);
       }).catch(e => { cb.checked = !on; say('folderStatus', failText('保存', e.message, RETRY), 'bad'); })
         .then(() => { cb.disabled = !state.memory || !alive; });
@@ -2736,7 +2855,7 @@ $('addFolder').addEventListener('click', () => {
     renderFolders(); refreshFind();
     const m = r.merged || [];
     say('folderStatus', '已添加' + (m.length ? '，原有的 ' + m.length + ' 个子文件夹已合并进来：' + m.join('、') : '') +
-        '。正在后台扫描，扫描期间也能搜索。', 'ok');
+        '。正在后台扫描，扫描期间也能搜索。已打开自动收录，后台收录进度见「知识库设置」，不需要的去掉勾选。', 'ok');
   }).catch(e => say('folderStatus', failText('添加', e.message, '请检查路径后重试。'), 'bad'))
     .then(() => { $('addFolder').disabled = !alive; });
 });
@@ -2750,7 +2869,7 @@ function pickInto(input, b, statusId, title) {
   post('/api/pick-folder', {start: input.value, title: title, page: PAGE}).then(r => {
     if (!r.ok) { say(statusId, failText('选择', r.error, '请直接输入路径。'), 'bad'); return; }
     say(statusId, '');
-    if (r.path) { input.value = r.path; input.focus(); }
+    if (r.path) { input.value = r.path; input.focus(); updateDirty(); }
   }).catch(e => {
     if (e.status === 409) say(statusId, e.message + '。', 'warn');
     else say(statusId, failText('选择', e.message, '请直接输入路径。'), 'bad');
@@ -2790,15 +2909,17 @@ $('rebuild').addEventListener('click', () => {
 $('limit').addEventListener('keydown', ev => { if (ev.key === 'Enter') $('saveLimit').click(); });
 $('saveLimit').addEventListener('click', () => {
   post('/api/settings', {char_limit: $('limit').value}).then(r => {
-    charLimit = r.char_limit; renderPicked(); say('settingsStatus', '字数上限已保存。', 'ok');
+    charLimit = r.char_limit; fillSaved('limit', charLimit, true); updateDirty(); renderPicked(); say('settingsStatus', '字数上限已保存。', 'ok');
   }).catch(e => say('settingsStatus', failText('保存', e.message, '请检查输入后重试；仍失败时' + RETRY), 'bad'));
 });
 
 function saveCustom(clearKey) {
   const body = {custom: {base: $('cBase').value, model: $('cModel').value, key: $('cKey').value, clear_key: !!clearKey}};
   post('/api/settings', body).then(r => {
-    applyState(r);
+    fillSaved('cBase', r.custom.base, true);
+    fillSaved('cModel', r.custom.model, true);
     $('cKey').value = '';
+    applyState(r);
     const usable = r.models.some(m => m.id === 'custom');
     if (usable && !clearKey) {
       $('model').value = 'custom';
@@ -2828,16 +2949,16 @@ $('clearKey').addEventListener('click', () => {
 function applyState(s) {
   state = Object.assign(state || {}, s);
   charLimit = state.char_limit;
-  $('limit').value = charLimit;
-  $('cBase').value = state.custom.base;
-  $('cModel').value = state.custom.model;
+  fillSaved('limit', charLimit);
+  fillSaved('cBase', state.custom.base);
+  fillSaved('cModel', state.custom.model);
   $('cKey').placeholder = state.custom.has_key ? '已保存，留空则不改' : '';
   $('memoryOn').checked = state.memory;
   $('useMemory').checked = state.use_memory;
   $('useMemRow').hidden = !state.memory;
   $('memAuto').checked = state.memory_auto !== false;
   $('memUpdate').disabled = !state.memory || memUpd.running || !alive;
-  if (state.memory_mb && document.activeElement !== $('memMb')) $('memMb').value = state.memory_mb;
+  if (state.memory_mb) fillSaved('memMb', state.memory_mb);
   showMemStats(state.memory_stats);
   if (ingest) showIngest(ingest);
   renderModels();
@@ -2845,6 +2966,8 @@ function applyState(s) {
   $('noAiNote').hidden = !noAi();
   placeCards();
   renderPicked();
+  renderSetPanel();
+  updateDirty();
 }
 
 function unsaved() { return chat.length > 0 && chat.length !== savedLen; }
@@ -2956,12 +3079,12 @@ function quit(pages) {
   const parts = [], tabs = convStates(), open = tabs.filter(c => c.unsaved);
   if (pages > 1) parts.push('还有 ' + (pages - 1) + ' 个页面开着，退出会一起结束，那些页面里未保存的对话也会清空。');
   if (tabs.some(c => c.busy)) parts.push('回答正在生成，服务会等它结束后再退出。');
-  else if (memUpd.running && memUpd.mode === 'manual') parts.push('记忆正在更新，服务会等它结束后再退出。');
+  else if (memUpd.running && memUpd.mode === 'manual') parts.push('知识库正在更新，服务会等它结束后再退出。');
   const n = open.reduce((k, c) => k + c.rounds, 0);
   if (open.length && tabs.length > 1) parts.push(open.length + ' 个对话标签（' + open.map(convLabel).join('、') + '）共 ' + n + ' 轮问答未保存，退出后会清空，可先点「保存对话」。');
   else if (open.length) parts.push('当前 ' + n + ' 轮问答未保存，退出后会清空，可先点「保存对话」。');
   if (parts.length && !confirm(parts.join('\n') + '\n\n确定退出？')) return;
-  post('/api/quit').then(r => serviceGone(r.waiting ? '服务将在回答生成或记忆更新结束后退出，可关闭本页。需要再用时重新双击「双击运行」。' : undefined))
+  post('/api/quit').then(r => serviceGone(r.waiting ? '服务将在回答生成或知识库更新结束后退出，可关闭本页。需要再用时重新双击「双击运行」。' : undefined))
     .catch(() => serviceGone());
 }
 
@@ -2972,7 +3095,7 @@ $('copyUrl').addEventListener('click', () => copyText(pageUrl, $('copyUrl'), 'ur
 api('/api/state').then(s => {
   maxFiles = s.max_files;
   if (s.url) pageUrl = s.url;
-  $('ver').textContent = '找资料问 AI v' + s.version;
+  $('ver').textContent = '本机资料问答 v' + s.version;
   setDedup(s.dedup !== false);
   setRegex(s.regex === true);
   setIgnoreMd(s.ignore_md !== false);
@@ -2995,27 +3118,34 @@ api('/api/state').then(s => {
   if (miss.length) { $('banner').textContent = miss.join('；') + '。'; $('banner').hidden = false; }
   const notes = [], seen = {};
   if (s.memory && !s.memory_notice && !EMBED) {
-    notes.push('记忆已默认打开：提问时选过的文件和核对通过的结论会记在本机，之后提问时自动参考；可在「记忆设置」里查看、关闭或清空。');
+    notes.push('知识库已默认打开：提问时选过的文件和核对通过的结论会记在本机，之后提问时自动参考；可在「知识库设置」里查看、关闭或清空。');
     seen.memory_notice = true;
   }
   if (s.data.ok && !s.data.custom && !s.data_notice && !EMBED) {
-    notes.push('记忆与设置保存在家目录；家目录可能被清理时，可在「记忆设置」里改「保存位置」。');
+    notes.push('知识库与设置保存在家目录；家目录可能被清理时，可在设置的「通用」里改「保存位置」。');
     seen.data_notice = true;
   }
   // 保存位置不可用：页头下方常驻醒目提示（没有模型时问 AI 区的状态行不显示）
   if (!s.data.ok && !EMBED) {
     const b = $('dataBanner');
-    b.textContent = '保存位置不可用：' + s.data.path + '（' + s.data.error + '）。挂载或修复后重启本工具，或在「记忆设置」里重新选择；本次不记入也不参考记忆，设置改动不保存。';
-    const go = btn('记忆设置', 'link', () => openMemory(false));
-    go.setAttribute('aria-label', '打开记忆设置');
+    b.textContent = '保存位置不可用：' + s.data.path + '（' + s.data.error + '）。挂载或修复后重启本工具，或在设置的「通用」里重新选择；本次不收录也不参考知识库，设置改动不保存。';
+    const go = btn('通用设置', 'link', () => openSettings('general', go));
+    go.setAttribute('aria-label', '打开设置的「通用」标签');
     b.appendChild(go);
     b.hidden = false;
   }
   if (notes.length) {
     say('askStatus', notes.join(''), 'info');
-    const go = btn('记忆设置', 'link', () => openMemory(false));
-    go.setAttribute('aria-label', '打开记忆设置');
-    $('askStatus').appendChild(go);
+    if (seen.memory_notice) {
+      const go = btn('知识库设置', 'link', () => openMemory(false));
+      go.setAttribute('aria-label', '打开知识库设置');
+      $('askStatus').appendChild(go);
+    }
+    if (seen.data_notice) {
+      const go = btn('通用设置', 'link', () => openSettings('general', go));
+      go.setAttribute('aria-label', '打开设置的「通用」标签');
+      $('askStatus').appendChild(go);
+    }
   }
   if (Object.keys(seen).length) post('/api/settings', seen).catch(() => {});
   loadDirs().then(r => renderPlaces(r.places)).catch(() => {});

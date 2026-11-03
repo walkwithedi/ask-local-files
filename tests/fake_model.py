@@ -10,7 +10,7 @@
     cite      回答带两条摘句：一条在「季度总结.txt」原文里，一条不在
     notfound  回答「所选文件中未找到」
     supp      回答带一条核对得上的摘句，末尾「文件外补充（未核对）：」一段里另有一条编造的摘句
-    memo      回答带一条摘句「第一阶段在三月底完成验收」，引自文件 1（测记忆）；收到记忆更新时，
+    memo      回答带一条摘句「第一阶段在三月底完成验收」，引自文件 1（测知识库）；收到知识库更新时，
               把给出的结论（文件没改过的）整理成一页「验收安排」；收到从文件抽结论时，
               每段第一个以「。」结尾的句子作一条结论（原句即这句）
     err401 / err404 / err429 / err500   返回对应状态码
@@ -117,14 +117,14 @@ class FakeModel(BaseHTTPRequestHandler):
             pieces = [] if model == 'titlefail' else ['标题：「季度', '要点」']
         if model == 'memo':
             pieces = ['第一阶段三月底验收（文件 1：「第一阶段', '在三月底完成验收」）。']
-            if '你在维护使用者本机的一份「记忆」' in data['messages'][0]['content']:
-                # 记忆更新：把给出的结论整理成一页「验收安排」
+            if '你在维护使用者本机的一份「知识库」' in data['messages'][0]['content']:
+                # 知识库更新：把给出的结论整理成一页「验收安排」
                 work = json.loads(data['messages'][1]['content'])
                 points = [{'text': c['conclusion'], 'file': c['file'], 'quote': c['quote']}
                           for c in work['conclusions'] if not c.get('changed')]
                 text = json.dumps({'topics': [{'id': 'new', 'title': '验收安排', 'points': points}]}, ensure_ascii=False)
                 pieces = [text[i:i + 20] for i in range(0, len(text), 20)]
-            elif '你在帮使用者把本机的一份文件记进「记忆」' in data['messages'][0]['content']:
+            elif '你在帮使用者把本机的一份文件收录进「知识库」' in data['messages'][0]['content']:
                 # 从文件抽结论：每段里第一个以「。」结尾的句子作结论与原句（文件信息行不算）
                 work = json.loads(data['messages'][1]['content'])
                 found = []
