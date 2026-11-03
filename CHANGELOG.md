@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.12.0
+
+- The Chinese name is now 资料管家 ("file keeper"): page title and header, footer, help page, desktop entry, messages and saved file names (`资料管家-`). The English name, folder, program, repository and release names are unchanged.
+- The page header shows the tagline 用 AI 查找、整理、问答本机资料 ("find, organise and ask AI about your local files") next to the name, in the secondary text colour; on narrow screens it moves below the name and leaves the header buttons their room. The page title and desktop entry show only the name.
+
 ## 2.11.0
 
 - "Memory" is now called the knowledge base (知识库) throughout the page, messages, help page and READMEs: 参考知识库 ("use knowledge base"), 知识库设置, 更新知识库, 查看知识库, 清空知识库; recording is 收录 ("include") and forgetting is 移出 ("remove"). Saved Markdown packages are named `知识库-<date>-<time>.zip`. Endpoints, `ask_memory.py`, `memory.sqlite` and the settings fields keep their names, so existing data and settings work unchanged.

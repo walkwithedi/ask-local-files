@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-ask_local_files  --  本机资料问答
+ask_local_files  --  资料管家
 
 纯 Python 3 标准库实现。双击「双击运行」即启动本程序：只监听 127.0.0.1 的固定端口（默认 47821），
 网址带持久令牌（~/.config/ask-local-files/token，权限 600），用浏览器打开同目录的 ask_local_files.html；
@@ -75,7 +75,7 @@ from urllib.parse import parse_qs, urlsplit
 LOG_FORMAT = '%(asctime)s [%(levelname)s] %(name)s.%(funcName)s:%(lineno)d - %(message)s'
 log = logging.getLogger('ask_local_files')
 
-VERSION = '2.11'
+VERSION = '2.12'
 HERE = os.path.dirname(os.path.abspath(__file__))
 PAGE_FILE = os.path.join(HERE, 'ask_local_files.html')
 HELP_FILE = os.path.join(HERE, 'help.html')
@@ -3938,7 +3938,7 @@ def seconds_arg(text):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description='本机资料问答：快速找出文件，交给 AI 提问、改写、总结（双击运行即此程序）。')
+    ap = argparse.ArgumentParser(description='资料管家：快速找出文件，交给 AI 提问、改写、总结（双击运行即此程序）。')
     ap.add_argument('--no-browser', action='store_true', help='不自动打开浏览器，只打印网址')
     ap.add_argument('--no-app', action='store_true',
                     help='用默认浏览器的普通窗口打开，不用 Chromium 系浏览器的应用窗口模式')

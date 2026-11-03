@@ -420,7 +420,7 @@ test('「保存全部文字」存成 .md', async t => {
   const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#saveTexts')]);
   const body = fs.readFileSync(await dl.path(), 'utf8');
   assert.ok(body.includes('===== 文件 1：') && body.includes('甲'.repeat(100)));
-  await page.locator('#pickStatus').getByText(/^已保存为 本机资料问答-文字-\d{8}-\d{4}\.md（在浏览器的下载文件夹里）：1 个文件/).waitFor();
+  await page.locator('#pickStatus').getByText(/^已保存为 资料管家-文字-\d{8}-\d{4}\.md（在浏览器的下载文件夹里）：1 个文件/).waitFor();
 });
 
 test('路径输入补全与常用位置', async t => {
@@ -980,7 +980,36 @@ test('空状态区保持存在', async t => {
 
 test('读取状态失败时页脚仍有版本号', async t => {
   const {page} = await launch(t, {beforeGoto: p => p.route(u => u.pathname === '/api/state', r => r.abort())});
-  assert.match(await page.textContent('#ver'), /本机资料问答 v\d+\.\d+/);
+  assert.match(await page.textContent('#ver'), /资料管家 v\d+\.\d+/);
+});
+
+test('页头副标题：宽屏在标题旁，360px 换到标题下方，浅色深色都用次要文字色', async t => {
+  for (const width of [1280, 360]) {
+    const {page} = await launch(t, {width});
+    assert.strictEqual(await page.title(), '资料管家', '网页标题不带副标题');
+    for (const colorScheme of ['light', 'dark']) {
+      await page.emulateMedia({colorScheme});
+      const r = await page.evaluate(() => {
+        const h = document.querySelector('header h1'), s = document.getElementById('tagline');
+        const muted = getComputedStyle(document.documentElement).getPropertyValue('--muted').trim();
+        const probe = document.createElement('span');
+        probe.style.color = muted; document.body.appendChild(probe);
+        const mutedRgb = getComputedStyle(probe).color; probe.remove();
+        const hb = h.getBoundingClientRect(), sb = s.getBoundingClientRect();
+        const btns = ['help', 'newConv', 'quit'].map(id => document.getElementById(id).getBoundingClientRect());
+        return {text: s.textContent, color: getComputedStyle(s).color, mutedRgb,
+          hSize: parseFloat(getComputedStyle(h).fontSize), sSize: parseFloat(getComputedStyle(s).fontSize),
+          below: sb.top >= hb.bottom - 1, beside: Math.abs((sb.top + sb.bottom) / 2 - (hb.top + hb.bottom) / 2) < hb.height / 2,
+          btnRow: btns.every(b => Math.abs(b.top - btns[0].top) < 2 && b.width > 0), btnRight: btns[2].right <= window.innerWidth};
+      });
+      assert.strictEqual(r.text, '用 AI 查找、整理、问答本机资料');
+      assert.strictEqual(r.color, r.mutedRgb, `${width}px ${colorScheme}：副标题用 --muted`);
+      assert.ok(r.sSize < r.hSize, '副标题字号小于标题');
+      if (width === 360) assert.ok(r.below, '360px 时在标题下方'); else assert.ok(r.beside, '宽屏时在标题旁');
+      assert.ok(r.btnRow && r.btnRight, `${width}px：帮助、新对话、退出仍在一行且不出界`);
+      await noHorizontalScroll(page);
+    }
+  }
 });
 
 test('360px 下各面板展开、有对话与预览时都没有横向滚动', async t => {
@@ -1495,7 +1524,7 @@ test('保存为 Word：单条回答与整个对话', async t => {
   const one = page.locator('#chat .msg.assistant .who').getByRole('button', {name: '把这条回答保存为 Word'});
   const [d1] = await Promise.all([page.waitForEvent('download'), one.click()]);
   assert.strictEqual(fs.readFileSync(await d1.path()).subarray(0, 2).toString(), 'PK');
-  await page.locator('#chatStatus').getByText(/已保存为 本机资料问答-(总结一下|季度要点)-\d{8}-\d{4}\.docx/).waitFor();
+  await page.locator('#chatStatus').getByText(/已保存为 资料管家-(总结一下|季度要点)-\d{8}-\d{4}\.docx/).waitFor();
   const docxText = file => execFileSync(PYTHON, ['-c', 'import sys,zipfile;print(zipfile.ZipFile(sys.argv[1]).read("word/document.xml").decode())',
                                                  file]).toString();
   const single = docxText(await d1.path());
@@ -1505,7 +1534,7 @@ test('保存为 Word：单条回答与整个对话', async t => {
   assert.strictEqual(zip.subarray(0, 2).toString(), 'PK');
   const unzip = execFileSync(PYTHON, ['-c', 'import sys,zipfile;print(zipfile.ZipFile(sys.argv[1]).read("word/document.xml").decode())',
                                        await d2.path()]).toString();
-  assert.match(unzip, /本机资料问答 对话/);
+  assert.match(unzip, /资料管家 对话/);
   assert.match(unzip, /总结一下/);
   assert.match(unzip, /你好，世界[\s\S]*参考文件/, '参考文件在最后');
   assert.doesNotMatch(unzip, new RegExp(path.sep === '/' ? os.tmpdir() : '^$'), '不写上级路径');
@@ -2516,9 +2545,9 @@ test('保存对话：参考文件放在最后，路径从所添加文件夹的�
   await ask(page, '把这两份材料的要点列出来');
   await page.waitForFunction(() => convTitle().text === '季度要点');
   const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#save')]);
-  await page.locator('#chatStatus').getByText(/^已保存为 本机资料问答-季度要点-\d{8}-\d{4}\.md/).waitFor();
+  await page.locator('#chatStatus').getByText(/^已保存为 资料管家-季度要点-\d{8}-\d{4}\.md/).waitFor();
   const md = fs.readFileSync(await dl.path(), 'utf-8');
-  assert.match(md, /^# 本机资料问答 对话 \d{8}-\d{4}\n\n## 问\n/, '从第一问开始');
+  assert.match(md, /^# 资料管家 对话 \d{8}-\d{4}\n\n## 问\n/, '从第一问开始');
   assert.match(md, /核实后再用。\n\n## 参考文件\n\n1\. 资料\/季度总结\.txt\n2\. 资料\/子目录\/会议记录\.md\n$/);
   assert.ok(!md.includes(docs), '不写完整路径');
   // 复制全部文字同样只写相对路径
@@ -2579,11 +2608,11 @@ test('对话标题概括失败时保留第一问的前 12 字；只选 skill 没
   await page.waitForTimeout(300);
   assert.strictEqual(await page.evaluate(() => convTitle().text), '一二三四五六七八九十十一……');
   const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#save')]);
-  await page.locator('#chatStatus').getByText(/^已保存为 本机资料问答-一二三四五六七八九十十一……-\d{8}-\d{4}\.md/).waitFor();
+  await page.locator('#chatStatus').getByText(/^已保存为 资料管家-一二三四五六七八九十十一……-\d{8}-\d{4}\.md/).waitFor();
   assert.ok(dl);
   await page.click('#clear');
   assert.strictEqual(await page.evaluate(() => convTitle().text), '');
-  assert.strictEqual(await page.evaluate(() => saveStem('20260101-0000')), '本机资料问答-20260101-0000', '还没有标题时不带');
+  assert.strictEqual(await page.evaluate(() => saveStem('20260101-0000')), '资料管家-20260101-0000', '还没有标题时不带');
   await page.selectOption('#skillSel', 'summarize-meeting');
   await page.click('#send');
   await page.waitForFunction(() => !document.querySelector('#send').disabled && document.querySelector('#chat .msg.assistant'));
@@ -2826,8 +2855,8 @@ test('页头「帮助」在新标签打开帮助页：目录可跳转、可搜�
   assert.strictEqual(await link.getAttribute('target'), '_blank');
   const [help] = await Promise.all([page.context().waitForEvent('page'), link.click()]);
   await help.waitForLoadState();
-  assert.strictEqual(await help.title(), '本机资料问答 帮助');
-  assert.match(await help.textContent('#ver'), /本机资料问答 帮助 v\d+\.\d+/);
+  assert.strictEqual(await help.title(), '资料管家 帮助');
+  assert.match(await help.textContent('#ver'), /资料管家 帮助 v\d+\.\d+/);
   await noHorizontalScroll(help);
   await help.click('#toc a[href="#auto"]');
   assert.strictEqual(new URL(help.url()).hash, '#auto');

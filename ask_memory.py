@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-ask_memory  --  本机资料问答 的知识库
+ask_memory  --  资料管家 的知识库
 
 纯 Python 3 标准库实现，由 ask_local_files.py 导入使用。知识库是本机的一个 SQLite 文件
 （默认 ~/.local/share/ask-local-files/memory.sqlite，XDG_DATA_HOME 生效，权限 600），只当前用户可读：
