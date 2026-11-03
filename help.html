@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>找资料问 AI 帮助</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --text:#1f2328; --muted:#656d76; --line:#d0d7de; --accent:#0969da; --ok:#1a7f37; --warn:#9a6700; --bad:#cf222e; --pick:#ddf4ff; --bad-bg:#ffebe9; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0d1117; --card:#161b22; --text:#e6edf3; --muted:#8d96a0; --line:#30363d; --accent:#4493f8; --ok:#3fb950; --warn:#d29922; --bad:#f85149; --pick:#132a44; --bad-bg:#3d1d20; }
+  }
+  * { box-sizing:border-box; }
+  [hidden] { display:none !important; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.7 "Noto Sans CJK SC","WenQuanYi Micro Hei","PingFang SC","Microsoft YaHei",sans-serif; overflow-wrap:anywhere; }
+  code { font-family:"Noto Sans Mono CJK SC","DejaVu Sans Mono",monospace; font-size:13px; background:var(--pick); padding:0 4px; border-radius:4px; }
+  main { max-width:900px; margin:0 auto; padding:20px 16px 40px; }
+  header { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px 12px; }
+  h1 { font-size:22px; margin:0; }
+  h2 { font-size:18px; margin:0 0 8px; }
+  h3 { font-size:15px; margin:14px 0 4px; color:var(--accent); }
+  p { margin:6px 0; }
+  ul, ol { margin:6px 0; padding-left:1.4em; }
+  li { margin:2px 0; }
+  a { color:var(--accent); }
+  .sub { color:var(--muted); margin:6px 0 12px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:14px 16px; margin:12px 0; }
+  nav ol { columns:2; column-gap:24px; }
+  @media (max-width:600px) { nav ol { columns:1; } }
+  .search { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+  input[type=search] { flex:1 1 200px; min-width:0; padding:6px 10px; font:inherit; border:1px solid var(--line); border-radius:6px; background:var(--card); color:var(--text); }
+  button { padding:6px 12px; font:inherit; font-size:14px; border:1px solid var(--line); border-radius:6px; background:var(--card); color:var(--text); cursor:pointer; }
+  button:disabled { opacity:.5; cursor:default; }
+  :focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  .status { min-height:1.4em; font-size:14px; margin-top:6px; }
+  .status.ok { color:var(--ok); } .status.warn { color:var(--warn); } .status.bad { color:var(--bad); } .status.info { color:var(--muted); }
+  .note { color:var(--muted); font-size:14px; }
+  footer { color:var(--muted); font-size:13px; text-align:center; margin-top:24px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>找资料问 AI 帮助</h1>
+    <a href="#top-faq">常见问题</a>
+  </header>
+  <p class="sub">在自己添加的文件夹里找出文件，交给 AI 提问、改写、总结；回答里的每个结论都附原文摘句并核对；用过的文件和核对通过的结论记进本机的「记忆」，越问越准。下面按功能写「怎么用」和「原理」，最后是隐私说明和常见问题。</p>
+
+  <div class="card">
+    <div class="search">
+      <label for="q">在帮助里搜索</label>
+      <input id="q" type="search" placeholder="如：记忆、摘句、AK、退出" autocomplete="off">
+      <button id="clearQ" type="button">清空</button>
+    </div>
+    <div id="searchStatus" class="status info" aria-live="polite"></div>
+  </div>
+
+  <nav class="card" aria-label="目录">
+    <h2>目录</h2>
+    <ol id="toc">
+      <li><a href="#start">快速上手</a></li>
+      <li><a href="#find">找文件</a></li>
+      <li><a href="#ask">问 AI</a></li>
+      <li><a href="#quote">原文摘句与核对</a></li>
+      <li><a href="#memory">记忆</a></li>
+      <li><a href="#auto">自动记入记忆</a></li>
+      <li><a href="#topics">主题页与保存为 Markdown</a></li>
+      <li><a href="#skill">skill</a></li>
+      <li><a href="#model">配置模型</a></li>
+      <li><a href="#save">复制与保存</a></li>
+      <li><a href="#quit">网址与退出</a></li>
+      <li><a href="#privacy">隐私与会发送什么</a></li>
+      <li><a href="#top-faq">常见问题</a></li>
+    </ol>
+  </nav>
+
+  <section class="card" id="start">
+    <h2>快速上手</h2>
+    <ol>
+      <li>双击工具目录里的「双击运行」，浏览器打开页面。</li>
+      <li>第一次使用时会展开「管理文件夹」：填要用的文件夹路径（或点「选择……」）后点「添加」，可以添加多个。添加后在后台扫描，扫描期间就能搜索。</li>
+      <li>在「找文件」里逐层点开文件夹，或在搜索框里输入文件名里的字，找到要用的文件点「加入」，一次最多 50 个。</li>
+      <li>在「问 AI」里选模型，写下要 AI 做什么（如「总结这几份文件的要点」），按 Enter 发送。</li>
+      <li>读回答：每个结论后面的（文件 N：「原文摘句」）就是依据，核对不过的摘句会列在回答下方。</li>
+    </ol>
+    <p>没有模型接口时也能用：找文件、预览，在「已选」里复制或保存取出的文字，带到能用 AI 的地方提问。模型怎么配，见<a href="#model">配置模型</a>。</p>
+  </section>
+
+  <section class="card" id="find">
+    <h2>找文件</h2>
+    <h3>怎么用</h3>
+    <ul>
+      <li>路径导航「全部 › 资料 › 子目录」点哪一层就进入哪一层。搜索框和扩展名框都空时列出当前文件夹的内容，填了任一框就在当前文件夹及各层子文件夹里搜索。</li>
+      <li>搜索框里空格分开多个关键字，要全部命中；扩展名框填如 <code>docx pdf</code> 只看这几种。勾上「正则表达式」时整个搜索框按正则匹配。</li>
+      <li>「按文件名去重」（默认开）同名文件只列最新的一个；「忽略 Markdown 文件」（默认开）不列 .md。</li>
+      <li>每个文件旁的文件夹图标在文件管理器里打开所在文件夹并选中它；读不了的格式（如压缩包）直接给「打开文件夹」。</li>
+      <li>「全部加入」「加入前 10 个」等一次加入多个；名额不够时按钮不可点并写明还能加几个。</li>
+    </ul>
+    <h3>原理</h3>
+    <ul>
+      <li>只索引你添加的文件夹，按文件名和路径匹配，不看文件内容。全部路径放在内存里查找，几十万个文件也能很快返回。</li>
+      <li>索引缓存在本机，启动即可搜索；后台只重新扫描修改时间变了的文件夹。只改了内容的文件，列表里的大小和时间要等所在文件夹有增删改名才更新，取文字时总按文件当前内容读取。</li>
+      <li>支持 Word、Excel、PowerPoint（含旧版 doc、xls、ppt 与 wps、et、dps）、PDF（需要本机有 pdftotext）、邮件 eml、网页和纯文本、代码文件；扫描件取不出文字。</li>
+    </ul>
+  </section>
+
+  <section class="card" id="ask">
+    <h2>问 AI</h2>
+    <h3>怎么用</h3>
+    <ul>
+      <li>选好模型，写下问题，按 Enter 发送（Shift+Enter 换行）。可以接着追问，追问带着前面的问答和同一批文件。</li>
+      <li>输入框上方一直写着「将发送到」哪个接口、用哪个模型、几个文件和多少字。文件和对话合计超过「发送字数上限」时先不发送，可以移除文件、调高上限，或点「仍然发送」按比例截断文件。</li>
+      <li>回答不完整时可点「继续」或「重新生成」；生成中可点「停止」。</li>
+      <li>点「＋ 新对话」在同一窗口新开一个对话标签，已选和对话各自独立，适合并行处理另一批文件。</li>
+    </ul>
+    <h3>原理</h3>
+    <ul>
+      <li>把已选文件取出的文字和对话，按 OpenAI 兼容的接口格式发给所选模型，回答逐字显示。</li>
+      <li>系统消息先写回答规则（只依据文件回答、每个结论附原文摘句、找不到的写「所选文件中未找到」），再逐个附上文件全文，文件之后再重申一次规则，文件很长时模型也不容易忘。</li>
+      <li>勾选「参考记忆」时，还会按问题从记忆里找出相关的以前结论和原文段落一起发送，见<a href="#memory">记忆</a>。</li>
+    </ul>
+  </section>
+
+  <section class="card" id="quote">
+    <h2>原文摘句与核对</h2>
+    <h3>怎么用</h3>
+    <ul>
+      <li>回答里的（文件 N：「原文摘句」）对应「已选」或「参考了记忆」里的第 N 个文件。</li>
+      <li>回答结束后，核对不过的摘句列在回答下方，标明可能被改写或编造；一条摘句也没附时也会提示。</li>
+      <li>回答最后另起的「文件外补充（未核对）」一段是文件以外的知识，不核对、不记入记忆。</li>
+    </ul>
+    <h3>原理</h3>
+    <ul>
+      <li>逐条在对应文件的原文里查找摘句，忽略空白差异；摘句里有省略号时两侧分开查找。</li>
+      <li>核对通过的结论才会记进记忆，所以记忆里的每条结论都有原文依据。</li>
+    </ul>
+  </section>
+
+  <section class="card" id="memory">
+    <h2>记忆</h2>
+    <h3>怎么用</h3>
+    <ul>
+      <li>默认打开。提问时选过的文件按段落记下，回答里核对通过的结论连同原句记下；之后不选文件也能问以前用过的内容。</li>
+      <li>「问 AI」里的「参考记忆」决定这次提问是否参考；用到记忆的回答上方写明「参考了记忆：N 条结论、M 段原文」，可点开看来源。</li>
+      <li>记住了结论的回答旁有「不对」：点了立即忘掉这条回答记下的结论，之后不再记入同样的结论。</li>
+      <li>「记忆设置」里可以关掉记忆、「查看记忆」（主题页、结论、文件，都能搜索和删除）、「清空记忆」、调「容量上限」（默认 1 GB）、改「保存位置」。</li>
+      <li>「更新记忆」由模型把结论整理成主题页并体检；「空闲时自动更新」（默认开）在 10 分钟没有提问时自动处理，一提问就让路。最近 20 次更新可以从最近一次往回撤销。</li>
+    </ul>
+    <h3>原理</h3>
+    <ul>
+      <li>记忆是本机的一个 SQLite 文件，只存取出的文字和原路径，不存原文件，只有当前用户能读。</li>
+      <li>提问时把问题切成关键字，在记忆里找出相关的主题页要点、结论和原文段落，按相关程度和被得出的次数排序，只占发送字数上限里的余量，不会因为记忆而要求截断文件。</li>
+      <li>取用前按文件当前内容复核：文件改过、原句不在了的结论标为待复核，不拿去参考，等更新时由模型按新文字改写；文件不在了就忘掉它记下的内容。</li>
+      <li>更新时模型只能用给出的内容，它给出的每条要点和改写后的结论都要按文件原文核对原句，核对不过的不写入。</li>
+      <li>文字超过容量上限时，先忘掉最久没被选用或参考的文件。</li>
+    </ul>
+  </section>
+
+  <section class="card" id="auto">
+    <h2>自动记入记忆</h2>
+    <h3>怎么用</h3>
+    <ul>
+      <li>在「管理文件夹」里给文件夹勾选「自动记入记忆」（默认不勾），其中支持格式的文件就会自动记进记忆；勾选「忽略 Markdown 文件」时不含 .md。</li>
+      <li>「记忆设置」的「自动记入」一栏写着勾选的文件夹里共多少个文件、已记入几个、待记入几个、没有记入几个；点「没有记入的文件」看清单和原因；点「立即记入」马上查一遍。</li>
+      <li>文件删除后忘掉它记下的内容；取消勾选或移除文件夹只是不再记入，已记住的保留，可在「查看记忆」里按文件忘掉。在「查看记忆」里忘掉的文件，改过之后才会再记入。</li>
+      <li>记忆容量不够时，记不下的文件列为「容量不足」；调大容量上限后会重新记入。</li>
+    </ul>
+    <h3>原理</h3>
+    <ul>
+      <li>每次扫描文件夹后（启动、刷新、搜索时的定期检查），以及至多每 10 分钟，在后台对新增或大小、修改时间变了的文件取出文字，记进记忆的段落，马上能被提问参考。这一步只读原文件，不移动、不修改，不调用模型。</li>
+      <li>记入的文件同时排进「从文件抽结论」。在「更新记忆」或空闲时自动更新里，把文件按段落分批（每批不超过发送字数上限，且至多 12,000 字）发给所选模型，由它抽出带原文摘句的结论；每条摘句按原文核对通过才写入，之后照常整理进主题页。合并重复、以新代旧都自动进行，每次更新都可在「更新记录」里撤销。</li>
+      <li>自动记入的文件按「从没被选用过」算，容量满时先被忘掉；提问时被参考到之后，才算用过。</li>
+      <li>自动记入不算任务，不拖住退出；没做完的下次启动接着做。</li>
+    </ul>
+  </section>
+
+  <section class="card" id="topics">
+    <h2>主题页与保存为 Markdown</h2>
+    <h3>怎么用</h3>
+    <ul>
+      <li>「查看记忆」的「主题」列出模型整理出的主题页：标题、要点（带原句与出处文件）和相关主题。</li>
+      <li>点「保存为 Markdown」保存一个 zip，解压后用 Obsidian 的「打开文件夹作为库」打开，就能在主题与文件之间跳转，看关系图和反向链接。记忆里还没有主题页和结论时按钮不可点。</li>
+    </ul>
+    <h3>原理</h3>
+    <ul>
+      <li>zip 里有三部分：「主题」文件夹每页主题一个文件，写要点、原句、出处文件的链接和相关主题的链接；「文件」文件夹每个出处文件一个文件，写原路径、来自它的结论与原句，以及它出现在哪些主题里；「索引.md」列出全部主题和文件。不含段落全文。</li>
+      <li>相关主题由模型在更新时给出，只接受记忆里已有的主题；文件名里不能用的字符会去掉，重名的加序号。</li>
+    </ul>
+  </section>
+
+  <section class="card" id="skill">
+    <h2>skill</h2>
+    <h3>怎么用</h3>
+    <ul>
+      <li>「skill」下拉框选一个 skill，模型按它的说明处理：预装了会议纪要、文档对比、生成 Word 与 Excel、提示词优化、需求澄清、创建 skill。选了 skill 时可以不选文件、不写问题直接发送。</li>
+      <li>「管理 skill」里可以新建、安装 .zip 包或文件夹；也可以选「创建 skill」让 AI 写一个，写好后点回答下方的「安装」。</li>
+      <li>skill 脚本生成的文件列在回答下方，点「保存」或「全部保存」。</li>
+    </ul>
+    <h3>原理</h3>
+    <ul>
+      <li>skill 是一个带 SKILL.md 的文件夹，说明正文放在系统消息最前面。带参考文件或脚本的 skill，模型可以按需读取文件、运行脚本（每问最多 5 次，单次 60 秒）。</li>
+      <li>脚本以你的身份运行，能读写你能访问的文件，只装来源可信的 skill。</li>
+    </ul>
+  </section>
+
+  <section class="card" id="model">
+    <h2>配置模型</h2>
+    <h3>怎么用</h3>
+    <ul>
+      <li>「模型」下拉框列出所有可用的模型：本机 OpenCode 配置里的模型、本机运行中的 llama-server（端口 8080）或 Ollama（端口 11434）、以及「模型设置」里填的自定义接口。</li>
+      <li>「配置 OpenCode」：本机已有 OpenCode 配置时，在「模型设置」里选服务商、填自己的 AK，点「测试并写入」。测试通过才写入，写入后本工具和 OpenCode 用同一个模型；不满意时点「回滚」恢复原来的配置。本机没有 OpenCode 配置时，请填「自定义模型接口」。</li>
+      <li>「自定义模型接口」：填 OpenAI 兼容的接口地址、模型名和 AK（接口不需要鉴权时可不填），点「测试连接」看是否连通。</li>
+      <li>启动或停掉本机模型服务后，点模型旁的「重新查找」。</li>
+    </ul>
+    <h3>原理</h3>
+    <ul>
+      <li>「配置 OpenCode」只替换所选服务商的 AK，接口地址、模型、注释和其余设置原样保留；先用新 AK 发一条测试请求，不通过时配置文件不改；写入前把原文件备份在同一文件夹，「回滚」用这份备份恢复，恢复后备份删除。AK 不写日志，也不显示在页面上。</li>
+      <li>本机模型按其上下文长度折算发送字数上限（1 token 计 1 字，留四分之一给回答）。</li>
+    </ul>
+  </section>
+
+  <section class="card" id="save">
+    <h2>复制与保存</h2>
+    <h3>怎么用</h3>
+    <ul>
+      <li>每条回答有「复制」「保存为 Word」；「问 AI」标题旁的「保存对话」把全部问答和文件清单存成 Markdown，也可「保存为 Word」。文件名以「找资料问AI-」开头，存到浏览器的下载文件夹。</li>
+      <li>「已选」下方的「复制全部文字」「保存全部文字」带走取出的文字，不经过模型。</li>
+    </ul>
+    <h3>原理</h3>
+    <ul>
+      <li>对话只留在页面上，退出或刷新页面即清空，需要时先保存。保存的路径从所添加文件夹的名字起写，不写家目录等上级部分。</li>
+    </ul>
+  </section>
+
+
+  <section class="card" id="quit">
+    <h2>网址与退出</h2>
+    <h3>怎么用</h3>
+    <ul>
+      <li>网址固定不变，可收藏或用页脚的「复制网址」复制到别的浏览器打开。再次双击「双击运行」时，工具已在运行就只打开页面。</li>
+      <li>右上角「退出」立即结束工具，开着的页面一起结束。</li>
+    </ul>
+    <h3>原理</h3>
+    <ul>
+      <li>工具只监听本机 127.0.0.1，网址带令牌，别的电脑访问不到。</li>
+      <li>关掉页面后工具继续运行，没有页面也没有任务 30 分钟后自动退出。有回答正在生成或记忆正在手动更新时，等它结束再退出；自动记入与空闲时自动更新不拖住退出，正在处理的那一批不写入，下次启动接着做。</li>
+    </ul>
+  </section>
+
+  <section class="card" id="privacy">
+    <h2>隐私与会发送什么</h2>
+    <ul>
+      <li>本工具只访问你配置的模型接口，不访问其他网络。</li>
+      <li>提问时发送：已选文件取出的文字（含路径、文件名、修改时间、作者）、对话、所选 skill 的说明，以及勾选「参考记忆」时从记忆里找出的结论和段落。</li>
+      <li>更新记忆时发送：记忆里的结论、原句和相关主题页；改过的文件的新文字；自动记入的文件全文（按段落分批）。不想这样可以取消「空闲时自动更新」只在需要时手动更新，或不勾选「自动记入记忆」。</li>
+      <li>发给模型和保存的内容里，路径从所添加文件夹的名字起写，不写家目录、用户名、挂载点等上级部分。</li>
+      <li>存在本机的：设置、记忆、网址令牌（都只有当前用户能读），文件夹索引缓存，以及日志（不含 AK 和文件内容）。</li>
+      <li>「配置 OpenCode」会改写本机的 OpenCode 配置文件，写入前备份。</li>
+    </ul>
+  </section>
+
+  <section class="card" id="top-faq">
+    <h2>常见问题</h2>
+    <h3>刚放进文件夹的文件搜不到？</h3>
+    <p>点「找文件」里的「刷新」；还不行时在「管理文件夹」里点「重建索引」。</p>
+    <h3>某个文件加不进去，或提示取不出文字？</h3>
+    <p>压缩包要先解压；扫描件、图片型 PDF 没有文字；旧版或有密码的 Office 文件请另存为 docx、xlsx 或 pptx；读 PDF 需要本机安装 poppler-utils。</p>
+    <h3>提示「没有可用的模型」？</h3>
+    <p>在「模型设置」里填自定义接口；本机有 OpenCode 配置时可用「配置 OpenCode」换上自己的 AK；或启动本机的 llama-server、Ollama 后点「重新查找」。</p>
+    <h3>回答下方列出「摘句核对不过」？</h3>
+    <p>这些摘句在原文里找不到，可能被改写或编造，相应的结论请回原文确认；它们不会记进记忆。</p>
+    <h3>勾了「自动记入记忆」，结论却没变多？</h3>
+    <p>自动记入先只记下文字，抽结论要等「更新记忆」或空闲时自动更新（10 分钟没有提问）。需要立即整理时点「更新记忆」；也可在「记忆设置」里看「待更新」的数量。</p>
+    <h3>记忆占地方太大，或容量满了？</h3>
+    <p>在「记忆设置」里调整「容量上限」，或在「查看记忆」里忘掉不需要的文件；取消不必要的「自动记入记忆」勾选。</p>
+    <h3>模型整理出的主题页不对？</h3>
+    <p>在「更新记录」里撤销最近一次更新，或在「查看记忆」里删除这页主题页；具体某条结论不对时，在回答旁点「不对」。</p>
+    <h3>「配置 OpenCode」写坏了怎么办？</h3>
+    <p>点「回滚」恢复成替换 AK 之前的配置。测试不通过时配置文件本来就不会改动。</p>
+    <h3>家目录可能被清理，记忆会丢吗？</h3>
+    <p>在「记忆设置」的「保存位置」里改到不会被清理的文件夹，记忆、设置和网址令牌一起搬过去。</p>
+  </section>
+
+  <footer><span id="ver">找资料问 AI 帮助 v2.10</span>　本页不加载任何网络资源，也可以直接双击打开。</footer>
+</main>
+<script>
+// 页内搜索：只显示含关键字的章节；关键字只作文字比较，不写进页面结构
+const $ = id => document.getElementById(id);
+const sections = Array.from(document.querySelectorAll('main > section'));
+const tocLinks = Array.from(document.querySelectorAll('#toc a'));
+function say(msg, kind) { const s = $('searchStatus'); s.textContent = msg; s.className = 'status ' + (kind || 'info'); }
+function filter() {
+  const q = $('q').value.trim().toLowerCase();
+  let shown = 0;
+  sections.forEach(sec => {
+    const hit = !q || sec.textContent.toLowerCase().includes(q);
+    sec.hidden = !hit;
+    if (hit) shown++;
+  });
+  tocLinks.forEach(a => {
+    const sec = document.getElementById(a.getAttribute('href').slice(1));
+    a.parentElement.hidden = !!sec && sec.hidden;
+  });
+  if (!q) say('');
+  else if (shown) say('找到 ' + shown + ' 节含「' + $('q').value.trim() + '」。', 'ok');
+  else say('没有找到含「' + $('q').value.trim() + '」的内容，请换个说法。', 'warn');
+}
+$('q').addEventListener('input', filter);
+// 「清空」类操作直接清空，不弹确认
+$('clearQ').addEventListener('click', () => { $('q').value = ''; filter(); $('q').focus(); });
+</script>
+</body>
+</html>

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-ask_local_files  --  找文件问 AI
+ask_local_files  --  找资料问 AI
 
 纯 Python 3 标准库实现。双击「双击运行」即启动本程序：只监听 127.0.0.1 的固定端口（默认 47821），
 网址带持久令牌（~/.config/ask-local-files/token，权限 600），用浏览器打开同目录的 ask_local_files.html；
@@ -75,9 +75,10 @@ from urllib.parse import parse_qs, urlsplit
 LOG_FORMAT = '%(asctime)s [%(levelname)s] %(name)s.%(funcName)s:%(lineno)d - %(message)s'
 log = logging.getLogger('ask_local_files')
 
-VERSION = '2.9'
+VERSION = '2.10'
 HERE = os.path.dirname(os.path.abspath(__file__))
 PAGE_FILE = os.path.join(HERE, 'ask_local_files.html')
+HELP_FILE = os.path.join(HERE, 'help.html')
 LOG_NAME = 'ask_local_files.log'
 HOME = os.path.expanduser('~')
 XDG_CONFIG = os.environ.get('XDG_CONFIG_HOME') or os.path.join(HOME, '.config')
@@ -89,6 +90,9 @@ MEMORY_FILE = os.path.join(XDG_DATA, 'ask-local-files', 'memory.sqlite')
 TOKEN_FILE = os.path.join(XDG_CONFIG, 'ask-local-files', 'token')
 MEMORY_SHARE = 3        # 选了文件时，记忆至多占发送字数上限（扣除 skill 与对话后）的几分之一
 MEMORY_IDLE = 600       # 空闲时自动更新记忆：多少秒没有提问后开始
+MEMORY_MB = 1024        # 记忆容量上限的默认值（MB），可在「记忆设置」里改
+MEMORY_MB_RANGE = (50, 102400)
+INGEST_EVERY = 600      # 自动记入：至多每多少秒再查一遍勾选的文件夹（另在每次索引扫描后查）
 OPENCODE_DIR = os.path.join(XDG_CONFIG, 'opencode')
 USER_SKILLS = os.path.join(OPENCODE_DIR, 'skills')
 BUNDLED_SKILLS = os.path.join(HERE, 'skills')
@@ -178,7 +182,8 @@ COPY_NUM = r' ?(?:\([0-9]+\)|（[0-9]+）)'
 COPY_MARK_RE = re.compile(r'^(.+?)(?:' + COPY_NUM + r'|(?: - 副本|-副本|_副本| \(副本\)|副本| - copy| \(copy\)| copy)(?:'
                           + COPY_NUM + r')?)$')
 NO_MODEL = ('没有可用的模型：OpenCode 配置里找不到带接口地址和 AK 的模型，本机也没有运行中的 llama-server 或 Ollama；'
-            '请在「模型设置」里填写自定义接口，或启动本机模型服务后点「重新查找」')
+            '请在「模型设置」里填写自定义接口（本机有 OpenCode 配置时可用「配置 OpenCode」换上自己的 AK），'
+            '或启动本机模型服务后点「重新查找」')
 MISSING_FILE = '文件已不存在或不在已添加的文件夹里，请点「刷新」后重新搜索'
 # 能以应用窗口模式（--app=网址，不显示地址栏）打开的 Chromium 系浏览器，按顺序取第一个找得到的；
 # 国产浏览器（奇安信、360、统信）排在后面
@@ -248,6 +253,11 @@ class Config:
         self.use_memory = data.get('use_memory') is not False   # 「问 AI」里的「参考记忆」，默认开
         self.memory_notice = data.get('memory_notice') is True  # 已提示过记忆默认打开
         self.memory_auto = data.get('memory_auto') is not False     # 空闲时自动更新记忆，默认开
+        # 自动记入记忆的文件夹（须是已添加的文件夹），默认没有
+        self.auto_folders = [f for f in data.get('auto_folders', []) if isinstance(f, str) and f in self.folders]
+        mb = data.get('memory_mb')
+        self.memory_mb = mb if isinstance(mb, int) and not isinstance(mb, bool) and \
+            MEMORY_MB_RANGE[0] <= mb <= MEMORY_MB_RANGE[1] else MEMORY_MB
         self.data_notice = data.get('data_notice') is True      # 已提示过可改保存位置
         port = data.get('port')         # 只能手改设置文件，页面不提供
         self.port = port if isinstance(port, int) and not isinstance(port, bool) and 0 < port < 65536 else None
@@ -257,7 +267,7 @@ class Config:
                 'ignore_md': self.ignore_md,
                 'regex': self.regex, 'memory': self.memory, 'use_memory': self.use_memory,
                 'memory_notice': self.memory_notice, 'memory_auto': self.memory_auto,
-                'data_notice': self.data_notice,
+                'data_notice': self.data_notice, 'auto_folders': self.auto_folders, 'memory_mb': self.memory_mb,
                 'custom': self.custom, 'model': self.model}
         if self.port:
             data['port'] = self.port
@@ -271,6 +281,7 @@ class Config:
                 'regex': self.regex, 'memory': self.memory, 'use_memory': self.use_memory,
                 'memory_notice': self.memory_notice, 'memory_auto': self.memory_auto,
                 'data_notice': self.data_notice, 'data': data_public(),
+                'auto_folders': list(self.auto_folders), 'memory_mb': self.memory_mb,
                 'custom': {'base': self.custom['base'], 'model': self.custom['model'],
                            'has_key': bool(self.custom['key'])},
                 }
@@ -630,6 +641,7 @@ class FileIndex:
         self.unreadable = []        # 读不了的文件夹，最多列 UNREADABLE_SHOWN 个
         self.scanned_at = ''
         self.built_roots = None     # 当前 snap 对应的文件夹清单
+        self.on_done = None         # 每次扫描结束后调用（自动记入记忆）
         cache = load_json(cache_path, {})
         if cache.get('v') == 1 and isinstance(cache.get('dirs'), dict):
             self.dirs = cache['dirs']
@@ -720,6 +732,11 @@ class FileIndex:
         finally:
             with self.lock:
                 self.scanning = False
+            if self.on_done and not self.error.startswith('索引失败'):
+                try:
+                    self.on_done()
+                except Exception:       # 后台线程：自动记入出错不影响索引
+                    log.exception('after-scan hook failed')
 
     def set_unreadable(self, errors):
         self.unreadable = errors[:UNREADABLE_SHOWN]
@@ -1464,6 +1481,221 @@ def opencode_config():
     return {}
 
 
+# ---------------------------------------------------------------- 配置 OpenCode：只替换 AK
+
+OPENCODE_BACKUP = '.ask-local-files.bak'    # 写入前的备份：配置文件名后加这个，只留最近一份
+NO_OPENCODE = '本机没有 OpenCode 配置（~/.config/opencode/opencode.jsonc 或 opencode.json）：请在「模型设置」里填自定义接口'
+
+
+def opencode_file():
+    """本机 OpenCode 配置文件的路径（opencode.jsonc 优先），没有时为 None。"""
+    for name in ('opencode.jsonc', 'opencode.json'):
+        path = os.path.join(OPENCODE_DIR, name)
+        if os.path.isfile(path):
+            return path
+    return None
+
+
+def jsonc_span(text, keys):
+    """带注释的 JSON 文字里，按键名路径 keys 找到的值在 text 中的 (起, 止) 位置；找不到时返回 None。
+    只读取，不改动注释与格式；写错的 JSON 抛 ValueError。"""
+    n, pos = len(text), [0]
+
+    def skip():
+        i = pos[0]
+        while i < n:
+            if text[i] in ' \t\r\n\ufeff':
+                i += 1
+            elif text.startswith('//', i):
+                j = text.find('\n', i)
+                i = n if j < 0 else j
+            elif text.startswith('/*', i):
+                j = text.find('*/', i + 2)
+                if j < 0:
+                    raise ValueError('注释没有结束')
+                i = j + 2
+            else:
+                break
+        pos[0] = i
+
+    def string():
+        i = pos[0] + 1
+        while i < n and text[i] != '"':
+            i += 2 if text[i] == '\\' else 1
+        if i >= n:
+            raise ValueError('字符串没有结束')
+        start = pos[0]
+        pos[0] = i + 1
+        return json.loads(text[start:i + 1])
+
+    def value(path):
+        """读一个值；path 为空时返回它的位置，否则在对象里接着找。"""
+        skip()
+        start = pos[0]
+        if start >= n:
+            raise ValueError('内容不完整')
+        c = text[start]
+        found = None
+        if c == '{':
+            pos[0] += 1
+            while True:
+                skip()
+                if pos[0] < n and text[pos[0]] == '}':
+                    pos[0] += 1
+                    break
+                if pos[0] >= n or text[pos[0]] != '"':
+                    raise ValueError('对象里的键须是字符串')
+                key = string()
+                skip()
+                if pos[0] >= n or text[pos[0]] != ':':
+                    raise ValueError('缺少冒号')
+                pos[0] += 1
+                hit = value(path[1:]) if path and key == path[0] else value(None)
+                if hit is not None:
+                    found = hit
+                skip()
+                if pos[0] < n and text[pos[0]] == ',':
+                    pos[0] += 1
+                elif pos[0] < n and text[pos[0]] == '}':
+                    pos[0] += 1
+                    break
+                else:
+                    raise ValueError('对象里缺少逗号')
+        elif c == '[':
+            pos[0] += 1
+            while True:
+                skip()
+                if pos[0] < n and text[pos[0]] == ']':
+                    pos[0] += 1
+                    break
+                value(None)
+                skip()
+                if pos[0] < n and text[pos[0]] == ',':
+                    pos[0] += 1
+                elif pos[0] < n and text[pos[0]] == ']':
+                    pos[0] += 1
+                    break
+                else:
+                    raise ValueError('数组里缺少逗号')
+        elif c == '"':
+            string()
+        else:
+            m = re.compile(r'-?[0-9][0-9.eE+-]*|true|false|null').match(text, start)
+            if not m:
+                raise ValueError('看不懂的值')
+            pos[0] = m.end()
+        if path is not None and not path:
+            return (start, pos[0])
+        return found
+
+    out = value(list(keys))
+    skip()
+    if pos[0] != n:
+        raise ValueError('JSON 后面还有多余的内容')
+    return out
+
+
+def opencode_info():
+    """「配置 OpenCode」用：配置文件路径、各服务商（接口主机、模型个数、是否已有 AK、AK 是否写成 {env:} {file:}）、
+    是否有备份可回滚。不返回 AK。"""
+    path = opencode_file()
+    if not path:
+        return {'exists': False, 'error': NO_OPENCODE}
+    out = {'exists': True, 'path': path, 'backup': os.path.isfile(path + OPENCODE_BACKUP), 'providers': []}
+    try:
+        with open(path, encoding='utf-8') as f:
+            conf = json.loads(strip_jsonc(f.read()) or '{}')
+    except (OSError, ValueError) as e:
+        out['error'] = '读不了 OpenCode 配置：%s' % e
+        return out
+    provs = conf.get('provider') if isinstance(conf, dict) and isinstance(conf.get('provider'), dict) else {}
+    for pid, prov in provs.items():
+        if not isinstance(prov, dict):
+            continue
+        opts = prov.get('options') if isinstance(prov.get('options'), dict) else {}
+        base = opts.get('baseURL') if isinstance(opts.get('baseURL'), str) else ''
+        key = opts.get('apiKey')
+        models = prov.get('models') if isinstance(prov.get('models'), dict) else {}
+        out['providers'].append({'id': pid, 'host': host_of(base.strip()) if base.strip() else '',
+                                 'models': len(models), 'has_key_field': isinstance(key, str),
+                                 'key_ref': isinstance(key, str) and key.startswith(('{env:', '{file:'))})
+    if not out['providers']:
+        out['error'] = 'OpenCode 配置里没有服务商（provider），无法只替换 AK：请在「模型设置」里填自定义接口'
+    return out
+
+
+def opencode_set_key(pid, key, test=None):
+    """把 OpenCode 配置里服务商 pid 的 AK 换成 key：先用新 AK 向该服务商发一条测试请求，通过才写入；
+    写入前把原文件备份为「文件名 + OPENCODE_BACKUP」，只替换 apiKey 的值，注释与其余内容原样保留。
+    test(tg) 为测试函数（默认发一条极短的请求）。不通过时抛 ValueError（原因）或 ModelError（测试失败）。"""
+    if not isinstance(key, str) or not key.strip() or len(key) > 4096 or re.search(r'[\x00-\x1f\x7f]', key.strip()):
+        raise ValueError('请填写 AK（一行文字，不含换行）')
+    key = key.strip()
+    path = opencode_file()
+    if not path:
+        raise ValueError(NO_OPENCODE)
+    with open(path, encoding='utf-8') as f:
+        text = f.read()
+    try:
+        conf = json.loads(strip_jsonc(text) or '{}')
+        span = jsonc_span(text, ['provider', pid, 'options', 'apiKey'])
+    except ValueError as e:
+        raise ValueError('OpenCode 配置文件格式有误（%s），没有改动' % e)
+    prov = (conf.get('provider') or {}).get(pid) if isinstance(conf, dict) else None
+    if not isinstance(prov, dict):
+        raise ValueError('OpenCode 配置里没有服务商「%s」，请刷新后重选' % pid)
+    if not span or text[span[0]] != '"':
+        raise ValueError('服务商「%s」的 options 里没有 apiKey 一项：请先在配置文件里加上（值可填任意占位），再来替换' % pid)
+    opts = prov.get('options') if isinstance(prov.get('options'), dict) else {}
+    base = opts.get('baseURL') if isinstance(opts.get('baseURL'), str) else ''
+    models = list(prov['models']) if isinstance(prov.get('models'), dict) else []
+    if not base.strip() or not models:
+        raise ValueError('服务商「%s」缺少接口地址（baseURL）或模型，无法测试' % pid)
+    mid = conf.get('model') if isinstance(conf.get('model'), str) else ''
+    model = mid.split('/', 1)[1] if mid.startswith(pid + '/') and mid.split('/', 1)[1] in models else models[0]
+    headers = {str(k): str(v) for k, v in opts['headers'].items()} if isinstance(opts.get('headers'), dict) else {}
+    tg = {'base': base.strip().rstrip('/'), 'key': key, 'model': model, 'headers': headers,
+          'label': '%s（OpenCode：%s）' % (model, pid), 'host': host_of(base.strip())}
+    (test or test_target)(tg)
+    new = text[:span[0]] + json.dumps(key, ensure_ascii=False) + text[span[1]:]
+    if resolve_key(json.loads(strip_jsonc(new)).get('provider', {}).get(pid, {}).get('options', {}).get('apiKey')) != key:
+        raise ValueError('替换后核对不一致，没有改动')
+    real = os.path.realpath(path)
+    mode = stat.S_IMODE(os.stat(real).st_mode)
+    write_mode_file(path + OPENCODE_BACKUP, text, 0o600)
+    write_mode_file(real, new, mode)
+    log.info('opencode: key replaced for one provider, backup kept')
+    return {'provider': pid, 'model': tg['label'], 'backup': path + OPENCODE_BACKUP}
+
+
+def opencode_rollback():
+    """把 OpenCode 配置恢复成最近一次替换 AK 之前的样子，并删掉这份备份。没有备份时抛 ValueError。"""
+    path = opencode_file()
+    if not path or not os.path.isfile(path + OPENCODE_BACKUP):
+        raise ValueError('没有可回滚的备份')
+    with open(path + OPENCODE_BACKUP, encoding='utf-8') as f:
+        text = f.read()
+    real = os.path.realpath(path)
+    write_mode_file(real, text, stat.S_IMODE(os.stat(real).st_mode))
+    os.remove(path + OPENCODE_BACKUP)
+    log.info('opencode: config rolled back')
+
+
+def write_mode_file(path, text, mode):
+    """原子写入文字文件，权限为 mode。"""
+    tmp = '%s.%d.tmp' % (path, os.getpid())
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            f.write(text)
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except OSError:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
+
+
 def resolve_key(value):
     """OpenCode 的 apiKey 写法：{env:变量}、{file:路径} 或直接写值。"""
     if not isinstance(value, str):
@@ -1860,6 +2092,15 @@ def stream_chat(tg, msgs, timeout=None, tools=None):
         raise ModelError('连接中断：%s' % e)
 
 
+def test_target(tg):
+    """向模型接口发一条极短的请求，拿到第一段回答即算连通，返回这段回答；连不通时抛 ModelError。"""
+    # 本机模型第一次请求要先加载模型，测试连接也按普通接口的时限等
+    for piece in stream_chat(tg, [{'role': 'user', 'content': '请只回复「好」。'}],
+                             timeout=TIMEOUT if is_loopback(tg['base']) else TEST_TIMEOUT):
+        return piece if isinstance(piece, str) else ''
+    return ''
+
+
 # ---------------------------------------------------------------- 记忆更新
 
 class MemoryUpdater:
@@ -1927,9 +2168,13 @@ class MemoryUpdater:
             self.running = False
             self.result = {'kind': kind, 'text': text, 'time': time.time()}
 
+    STAGES = {'lint': '体检', 'extract': '从文件抽结论'}
+    ROUNDS = 5      # 一次更新里，新抽出、新改写的结论最多再整理几轮
+
     def _run(self, mode, tg):
         mem = self.st.memory
-        budget = model_limit(self.st.config, tg) - len(ask_memory.UPDATE_PROMPT) - 200
+        prompt = max(len(ask_memory.UPDATE_PROMPT), len(ask_memory.EXTRACT_PROMPT))
+        budget = model_limit(self.st.config, tg) - prompt - 200
         counts, run, unreadable = {}, None, 0
         try:
             units = mem.plan_update(full=mode == 'manual')
@@ -1942,18 +2187,21 @@ class MemoryUpdater:
         with self.lock:
             self.total = len(units)
         log.info('memory update (%s): %d batches, model %s', mode, len(units), tg['label'])
-        for i, unit in enumerate(units):
+        i, rounds = 0, 0
+        while i < len(units):
+            unit = units[i]
             with self.lock:
                 self.done = i
-                self.stage = '体检' if unit[0] == 'lint' else '处理待更新的内容'
+                self.stage = self.STAGES.get(unit[0], '处理待更新的内容')
             if self.halt.is_set():
                 break
+            i += 1
             try:
                 payload, ctx = mem.update_batch(unit, budget)
                 reply = None
                 if payload is not None:
                     pieces = []
-                    for piece in stream_chat(tg, ask_memory.update_messages(payload)):
+                    for piece in stream_chat(tg, ask_memory.update_messages(payload, unit[0])):
                         if self.halt.is_set():
                             break
                         if isinstance(piece, str):
@@ -1965,10 +2213,18 @@ class MemoryUpdater:
                     run, got, _ = mem.apply_update(ctx, reply, mode, run)
                 except ValueError:
                     unreadable += 1
-                    log.info('memory update: batch %d unreadable reply, left for next time', i + 1)
+                    log.info('memory update: batch %d unreadable reply, left for next time', i)
                     continue
                 for k, v in got.items():
                     counts[k] = counts.get(k, 0) + v
+                if i == len(units) and rounds < self.ROUNDS and not unreadable and not self.halt.is_set():
+                    # 这一轮抽出、改写的结论排进了队列：接着整理进主题页（有看不懂的回答时留到下次，免得反复重试）
+                    more = mem.plan_update()
+                    rounds += 1
+                    if more:
+                        units += more
+                        with self.lock:
+                            self.total = len(units)
             except ModelError as e:
                 self._finish('error', '更新记忆失败：%s。%s' % (e, '已写入的改动保留；' if counts else '') +
                              '请在「模型设置」里检查模型后再点「更新记忆」。')
@@ -2008,13 +2264,154 @@ class MemoryUpdater:
             log.warning('memory: auto update check failed: %s', e)
 
 
-def memory_timer(updater, interval=20):
+def memory_timer(updater, interval=20, ingest=None):
     while True:
         time.sleep(interval)
         try:
             updater.tick()
+            if ingest:
+                ingest.tick()
         except Exception:       # 定时线程不能因个别错误停掉
             log.exception('memory auto update failed to start')
+
+
+# ---------------------------------------------------------------- 自动记入记忆
+
+INGEST_EXT = TEXT_EXT | HTML_EXT | DOC2KB_EXT | set(OLD_OFFICE_AS)
+
+
+def under(path, roots):
+    return any(path == r or path.startswith(r.rstrip(os.sep) + os.sep) for r in roots)
+
+
+class AutoIngest:
+    """把勾选了「自动记入记忆」的文件夹里新增或改过的文件取文字记进记忆（只读原文件，不调模型），
+    并排进「从文件抽结论」，由记忆更新在空闲时交给模型。每次索引扫描后、点「立即记入」时、
+    以及至多每 INGEST_EVERY 秒查一遍；不算任务，不拖住退出，下次启动接着做。"""
+
+    def __init__(self, state):
+        self.st = state
+        self.lock = threading.Lock()
+        self.running = False
+        self.again = False
+        self.stage = ''
+        self.done = self.total = 0
+        self.result = None      # {'kind': done|error, 'text', 'time'}
+        self.summary = None     # 最近一次查过的记入情况（Memory.ingest_summary）
+        self.last = 0.0
+
+    def enabled(self):
+        cfg = self.st.config
+        return bool(cfg.memory and DATA['ok'] and [f for f in cfg.auto_folders if f in cfg.folders])
+
+    def status(self):
+        with self.lock:
+            return {'running': self.running, 'stage': self.stage, 'done': self.done, 'total': self.total,
+                    'result': self.result, 'summary': self.summary, 'folders': list(self.st.config.auto_folders)}
+
+    def start(self):
+        """查一遍；正在查时查完再来一遍。没有勾选的文件夹或记忆关闭时返回 False。"""
+        if not self.enabled():
+            with self.lock:
+                self.summary = None
+            return False
+        with self.lock:
+            self.last = time.monotonic()
+            if self.running:
+                self.again = True
+                return True
+            self.running, self.again = True, False
+            self.stage, self.done, self.total = '查找要记入的文件', 0, 0
+        threading.Thread(target=self._run, daemon=True).start()
+        return True
+
+    def tick(self):
+        if time.monotonic() - self.last >= INGEST_EVERY and not self.st.quit.is_set():
+            self.start()
+
+    def candidates(self):
+        """勾选的文件夹里本工具读得了的文件 [(路径, 大小, 修改时间纳秒)]；按「忽略 Markdown 文件」跳过 .md。"""
+        cfg = self.st.config
+        roots = [f for f in cfg.auto_folders if f in cfg.folders]
+        reasons, out = {}, []
+        for e in self.st.index.snap.entries:
+            path = e[0]
+            ext = os.path.splitext(path)[1].lower()
+            if ext not in INGEST_EXT or not under(path, roots) or (cfg.ignore_md and is_md(path)) or \
+                    reason_of(path, reasons):
+                continue
+            try:
+                st = os.stat(path)
+            except OSError:
+                continue
+            out.append((path, st.st_size, st.st_mtime_ns))
+        return out, roots
+
+    def _run(self):
+        while True:
+            try:
+                self._pass()
+            except (sqlite3.Error, OSError) as e:
+                log.warning('auto ingest failed: %s', e)
+                with self.lock:
+                    self.result = {'kind': 'error', 'text': '自动记入失败：记忆写不进去（%s）。' % e, 'time': time.time()}
+            except Exception as e:      # 后台线程不能静默卡在进行中
+                log.exception('auto ingest failed')
+                with self.lock:
+                    self.result = {'kind': 'error', 'text': '自动记入失败：%s。' % e, 'time': time.time()}
+            with self.lock:
+                if not self.again or self.st.quit.is_set():
+                    self.running, self.stage = False, ''
+                    return
+                self.again = False
+
+    def _pass(self):
+        mem, cfg = self.st.memory, self.st.config
+        cands, roots = self.candidates()
+        rows = mem.ingest_rows()
+        gone = [p for p in rows if under(p, roots) and not os.path.exists(p)]
+        if gone:
+            mem.ingest_gone(gone)
+            log.info('auto ingest: %d files gone, forgotten', len(gone))
+        todo = [c for c in cands if not rows.get(c[0]) or rows[c[0]][:2] != c[1:]]
+        with self.lock:
+            self.total, self.done = len(todo), 0
+        kept = failed = 0
+        for i, (path, _, _) in enumerate(todo):
+            if self.st.quit.is_set() or not self.enabled():
+                break
+            with self.lock:
+                self.done, self.stage = i, '正在记入第 %d / %d 个文件' % (i + 1, len(todo))
+            try:
+                st = os.stat(path)
+            except OSError:
+                continue
+            try:
+                text = extract(path)[0]
+                if not text.strip():
+                    raise ValueError('没有取出文字')
+            except OSError as e:
+                mem.ingest_failed(path, st, '读不了：%s' % (e.strerror or e))
+                failed += 1
+                continue
+            except Exception as e:      # 转换器对损坏文件可能抛出任何异常
+                mem.ingest_failed(path, st, str(e) or e.__class__.__name__)
+                failed += 1
+                continue
+            if mem.ingest_file(path, st, file_info(path, st) + text) == 'done':
+                kept += 1
+            else:
+                failed += 1
+        cands = self.candidates()[0]
+        summary = mem.ingest_summary(cands)
+        with self.lock:
+            self.done = self.total
+            self.summary = summary
+            if todo:
+                self.result = {'kind': 'done', 'time': time.time(),
+                               'text': '自动记入：新记入 %d 个文件%s。' % (kept, '，%d 个没有记入' % failed if failed else '')}
+        if todo:
+            log.info('auto ingest: %d recorded, %d not recorded', kept, failed)
 
 
 
@@ -2199,7 +2596,8 @@ class WebState:
         self.config = config
         self.index = index
         self.texts = TextCache()
-        self.memory = memory or ask_memory.Memory(MEMORY_FILE)     # 用到时才打开库文件
+        # 用到时才打开库文件
+        self.memory = memory or ask_memory.Memory(MEMORY_FILE, max_bytes=config.memory_mb * 1024 * 1024)
         self.started = time.monotonic()
         self.lock = threading.Lock()
         self.pages = {}         # 页面编号 -> (最近一次心跳时间, 所在窗口编号)
@@ -2211,6 +2609,8 @@ class WebState:
         self.picker = FolderPicker(detect_picker())
         self.local_models = LocalModels()
         self.updater = MemoryUpdater(self)
+        self.ingest = AutoIngest(self)
+        index.on_done = self.ingest.start
 
     def busy_reason(self):
         """不能更改保存位置的原因，可以改时返回空串。"""
@@ -2218,6 +2618,8 @@ class WebState:
             return '有回答正在生成，等它结束后再改'
         if self.updater.running:
             return '记忆正在更新，等它结束或点「停止」后再改'
+        if self.ingest.running:
+            return '正在自动记入记忆，等它结束后再改'
         return ''
 
     def apply_data_dir(self):
@@ -2226,7 +2628,7 @@ class WebState:
         with cfg.lock:
             cfg.path, cfg.readonly = CONFIG_FILE, False
             cfg.load()
-        self.memory = ask_memory.Memory(MEMORY_FILE)
+        self.memory = ask_memory.Memory(MEMORY_FILE, max_bytes=cfg.memory_mb * 1024 * 1024)
         token = load_token()
         with self.lock:
             self.token = token
@@ -2389,19 +2791,7 @@ class Handler(BaseHTTPRequestHandler):
         arg = lambda k: (q.get(k) or [''])[0]
         st = self.state
         if url.path in ('/', '/index.html'):
-            try:
-                with open(PAGE_FILE, 'rb') as f:
-                    body = f.read()
-            except OSError as e:
-                log.error('page missing: %s', e)
-                self.send_json(500, {'error': '找不到页面文件 ask_local_files.html'})
-                return
-            self.send_response(200)
-            self.send_header('Content-Type', 'text/html; charset=utf-8')
-            self.send_header('Content-Length', str(len(body)))
-            self.send_header('Cache-Control', 'no-store')
-            self.end_headers()
-            self.wfile.write(body)
+            self.send_page(PAGE_FILE, 'ask_local_files.html')
         elif url.path == '/api/hello':
             # 启动时探测端口上是否已是本工具在运行（令牌对得上）
             self.send_json(200, {'app': APP_ID, 'version': VERSION})
@@ -2427,6 +2817,14 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(200, out)
         elif url.path == '/api/memory-update':
             self.send_json(200, st.updater.status())
+        elif url.path == '/api/memory-ingest':
+            self.send_json(200, st.ingest.status())
+        elif url.path == '/api/opencode':
+            self.send_json(200, opencode_info())
+        elif url.path == '/api/memory-export':
+            self.get_memory_export()
+        elif url.path == '/help.html':
+            self.send_page(HELP_FILE, 'help.html')
         elif url.path == '/api/skills':
             skills, problems = load_skills()
             self.send_json(200, {'skills': skills_public(skills), 'problems': problems, 'user_dir': USER_SKILLS})
@@ -2511,8 +2909,17 @@ class Handler(BaseHTTPRequestHandler):
             self.post_memory(data)
         elif url.path == '/api/memory-update':
             self.post_memory_update(data)
+        elif url.path == '/api/memory-ingest':
+            if not st.config.memory:
+                self.send_json(400, {'error': '记忆已关闭，请先打开记忆'})
+            elif not st.ingest.start():
+                self.send_json(400, {'error': '还没有勾选「自动记入记忆」的文件夹：请在「管理文件夹」里勾选'})
+            else:
+                self.send_json(200, st.ingest.status())
         elif url.path == '/api/title':
             self.post_title(data)
+        elif url.path == '/api/opencode':
+            self.post_opencode(data)
         elif url.path == '/api/test-model':
             self.post_test_model(data)
         elif url.path == '/api/local-models':
@@ -2537,6 +2944,41 @@ class Handler(BaseHTTPRequestHandler):
             self.post_skill(data, 'install')
         else:
             self.send_json(404, {'error': '没有这个地址'})
+
+    def send_page(self, path, name):
+        try:
+            with open(path, 'rb') as f:
+                body = f.read()
+        except OSError as e:
+            log.error('page missing: %s', e)
+            self.send_json(404, {'error': '找不到页面文件 %s' % name})
+            return
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/html; charset=utf-8')
+        self.send_header('Content-Length', str(len(body)))
+        self.send_header('Cache-Control', 'no-store')
+        self.end_headers()
+        self.wfile.write(body)
+
+    def get_memory_export(self):
+        """「保存为 Markdown」：主题页与结论写成 Obsidian 可打开的一组 Markdown 文件，打成 zip 返回，不落盘。"""
+        try:
+            body = self.state.memory.export_markdown()
+        except (sqlite3.Error, OSError) as e:
+            log.warning('memory: export failed: %s', str(e).replace('\r', ' ').replace('\n', ' '))
+            self.send_json(500, {'error': '读不了记忆（%s）' % e})
+            return
+        if body is None:
+            self.send_json(400, {'error': '记忆里还没有主题页和结论'})
+            return
+        name = '记忆-%s.zip' % time.strftime('%Y%m%d-%H%M')
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/zip')
+        self.send_header('Content-Length', str(len(body)))
+        self.send_header('Content-Disposition', "attachment; filename*=UTF-8''" + urllib.parse.quote(name))
+        self.send_header('Cache-Control', 'no-store')
+        self.end_headers()
+        self.wfile.write(body)
 
     def skip_md(self, value):
         """页面传 md=1 为忽略 Markdown 文件、md=0 为不忽略；没传时按设置。"""
@@ -2656,8 +3098,28 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json(200, {'text': text, 'chars': len(text), 'files': len(got), 'skipped': len(files) - len(got)})
 
     def post_folders(self, data):
-        cfg, idx = self.state.config, self.state.index
+        """添加（add）、移除（remove）文件夹，或打开、关掉一个文件夹的「自动记入记忆」（auto 为文件夹，on 为是否打开）。"""
+        st = self.state
+        cfg, idx = st.config, st.index
         merged = []
+        if isinstance(data.get('auto'), str):
+            with cfg.lock:
+                if data['auto'] not in cfg.folders:
+                    self.send_json(400, {'error': '这个文件夹不在已添加的文件夹里，请刷新页面后再试'})
+                    return
+                on = data.get('on') is True
+                if on and not cfg.memory:
+                    self.send_json(400, {'error': '记忆已关闭，请先在「记忆设置」里打开记忆'})
+                    return
+                cfg.auto_folders = [f for f in cfg.auto_folders if f != data['auto']] + ([data['auto']] if on else [])
+                cfg.save()
+            if on:
+                st.ingest.start()
+            elif not st.ingest.enabled():
+                st.ingest.summary = None
+            self.send_json(200, {'folders': list(cfg.folders), 'auto_folders': list(cfg.auto_folders),
+                                 'ingest': st.ingest.status()})
+            return
         with cfg.lock:
             if data.get('add'):
                 try:
@@ -2674,9 +3136,12 @@ class Handler(BaseHTTPRequestHandler):
                 cfg.folders.append(folder)
             elif data.get('remove'):
                 cfg.folders = [f for f in cfg.folders if f != data['remove']]
+            # 移除或并入上级的文件夹不再自动记入；已记住的保留
+            cfg.auto_folders = [f for f in cfg.auto_folders if f in cfg.folders]
             cfg.save()
         idx.refresh()
-        self.send_json(200, {'folders': list(cfg.folders), 'merged': merged, 'index': idx.status()})
+        self.send_json(200, {'folders': list(cfg.folders), 'merged': merged, 'index': idx.status(),
+                             'auto_folders': list(cfg.auto_folders)})
 
     def post_settings(self, data):
         cfg = self.state.config
@@ -2710,6 +3175,16 @@ class Handler(BaseHTTPRequestHandler):
                 cfg.regex = bool(data['regex'])
             if 'ignore_md' in data:
                 cfg.ignore_md = bool(data['ignore_md'])
+            if 'memory_mb' in data:
+                mb = data['memory_mb']
+                if not isinstance(mb, int) or isinstance(mb, bool) or not MEMORY_MB_RANGE[0] <= mb <= MEMORY_MB_RANGE[1]:
+                    self.send_json(400, {'error': '容量上限须为 %d 到 %d 的整数（MB）' % MEMORY_MB_RANGE})
+                    return
+                cfg.memory_mb = mb
+                try:
+                    self.state.memory.set_max_bytes(mb * 1024 * 1024)
+                except (sqlite3.Error, OSError) as e:
+                    log.warning('memory: cannot apply capacity: %s', str(e).replace('\r', ' ').replace('\n', ' '))
             if not DATA['ok'] and any(data.get(k) for k in ('memory', 'use_memory', 'memory_auto')):
                 self.send_json(409, {'error': '保存位置不可用，本次不能打开记忆'})
                 return
@@ -2717,6 +3192,8 @@ class Handler(BaseHTTPRequestHandler):
                 if k in data:
                     setattr(cfg, k, bool(data[k]))
             cfg.save()
+        if any(k in data for k in ('memory', 'ignore_md', 'memory_mb')):
+            self.state.ingest.start()
         out = cfg.public()
         out.update(models_public(cfg, self.state.local_models))
         self.send_json(200, out)
@@ -2880,6 +3357,32 @@ class Handler(BaseHTTPRequestHandler):
         title = clean_title(''.join(pieces))
         self.send_json(200, {'ok': True, 'title': title} if title else {'ok': False})
 
+    def post_opencode(self, data):
+        """「配置 OpenCode」：替换一个服务商的 AK（set：provider、key，测试通过才写入），或回滚到上一份备份（rollback）。"""
+        action = data.get('action')
+        try:
+            if action == 'set':
+                out = opencode_set_key(str(data.get('provider') or ''), data.get('key'))
+            elif action == 'rollback':
+                opencode_rollback()
+                out = {}
+            else:
+                self.send_json(400, {'error': '不认识的操作'})
+                return
+        except ModelError as e:
+            self.send_json(400, {'error': '用新 AK 测试没有通过：%s。配置文件没有改动' % e, 'info': opencode_info()})
+            return
+        except ValueError as e:
+            self.send_json(400, {'error': str(e), 'info': opencode_info()})
+            return
+        except OSError as e:
+            log.warning('opencode: write failed: %s', str(e).replace('\r', ' ').replace('\n', ' '))
+            self.send_json(500, {'error': '写不进 OpenCode 配置（%s）' % (e.strerror or e), 'info': opencode_info()})
+            return
+        out['info'] = opencode_info()
+        out.update(models_public(self.state.config, self.state.local_models))
+        self.send_json(200, out)
+
     def post_test_model(self, data):
         """向所选模型发一条极短的请求，拿到第一段回答即算连通。"""
         targets, default = model_targets(self.state.config, self.state.local_models)
@@ -2887,13 +3390,8 @@ class Handler(BaseHTTPRequestHandler):
         if not tg:
             self.send_json(200, {'ok': False, 'error': NO_MODEL})
             return
-        reply = ''
         try:
-            # 本机模型第一次请求要先加载模型，测试连接也按普通接口的时限等
-            for piece in stream_chat(tg, [{'role': 'user', 'content': '请只回复「好」。'}],
-                                     timeout=TIMEOUT if is_loopback(tg['base']) else TEST_TIMEOUT):
-                reply = piece
-                break
+            reply = test_target(tg)
         except ModelError as e:
             self.send_json(200, {'ok': False, 'error': str(e)})
             return
@@ -3343,7 +3841,7 @@ def serve(open_browser=True, app=True, port=None, idle=IDLE_TIMEOUT):
     log.info('serving on %s, idle timeout %ss', st.origin, idle)
     print('网页界面：' + url, flush=True)
     threading.Thread(target=watchdog, args=(server, st), daemon=True).start()
-    threading.Thread(target=memory_timer, args=(st.updater,), daemon=True).start()
+    threading.Thread(target=memory_timer, args=(st.updater,), kwargs={'ingest': st.ingest}, daemon=True).start()
     if open_browser and not open_page(url, app):
         tell_user('未能自动打开浏览器，请在浏览器中打开：' + url)
     try:
@@ -3438,7 +3936,7 @@ def seconds_arg(text):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description='找文件问 AI：快速找出文件，交给 AI 提问、改写、总结（双击运行即此程序）。')
+    ap = argparse.ArgumentParser(description='找资料问 AI：快速找出文件，交给 AI 提问、改写、总结（双击运行即此程序）。')
     ap.add_argument('--no-browser', action='store_true', help='不自动打开浏览器，只打印网址')
     ap.add_argument('--no-app', action='store_true',
                     help='用默认浏览器的普通窗口打开，不用 Chromium 系浏览器的应用窗口模式')
