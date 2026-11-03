@@ -160,3 +160,7 @@ The tool's code is exported from the maintainer's master copy. Issues and pull r
 ## License
 
 MIT, see [LICENSE](LICENSE). `skills/summarize-meeting/` is third-party and used under the MIT licence in its folder.
+
+## Feedback
+
+Send suggestions and feedback to [hong.xie.me@outlook.com](mailto:hong.xie.me@outlook.com).

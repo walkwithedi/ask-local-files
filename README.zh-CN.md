@@ -168,3 +168,7 @@ skill 是一个文件夹，内有 `SKILL.md`：开头两行 `---` 之间写 `nam
 ## 许可证
 
 MIT，见 [LICENSE](LICENSE)。`skills/summarize-meeting/` 来自第三方，按其文件夹里的 LICENSE（MIT）使用。
+
+## 反馈
+
+意见和建议请发邮件到 [hong.xie.me@outlook.com](mailto:hong.xie.me@outlook.com)。
