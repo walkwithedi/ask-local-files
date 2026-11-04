@@ -12,7 +12,7 @@
     supp      回答带一条核对得上的摘句，末尾「文件外补充（未核对）：」一段里另有一条编造的摘句
     memo      回答带一条摘句「第一阶段在三月底完成验收」，引自文件 1（测知识库）；收到知识库更新时，
               把给出的结论（文件没改过的）整理成一页「验收安排」；收到从文件抽结论时，
-              每段第一个以「。」结尾的句子作一条结论（原句即这句）
+              每段第一个以「。」结尾的句子作一条结论（原句即这句）；收到提问前看目录挑页时，挑出目录里的全部页
     err401 / err404 / err429 / err500   返回对应状态码
     toolong   返回 400，内容含 context length exceeded
     call:<工具名>:<JSON 参数>   请求带 tools 且还没有工具结果时流式返回一次工具调用（参数分两段发），
@@ -21,7 +21,8 @@
     seq:<JSON 列表>   列表每项为 [工具名, 参数对象]，按已有工具结果数依次调用下一个；
               用完或请求不带 tools 时回答「结果：」加全部工具结果（以「|」分隔）
     notools   请求带 tools 时返回 400（tools not supported）
-GET /last 返回最近一次请求的 JSON 正文（不算概括对话标题的请求，那个记在 last_title；其他 GET 路径同样返回，除非设了 serving）。
+GET /last 返回最近一次请求的 JSON 正文（不算概括对话标题与看目录挑页的请求，分别记在 last_title、last_toc；
+GET /last_toc 返回 last_toc；其他 GET 路径同样返回 last，除非设了 serving）。
 FakeModel.auth 为最近一次请求的 Authorization 头（没有时为 None）。
 FakeModel.serving 设为 {'models': [...], 'props': {...}, 'ps': {...}} 时模拟本机模型服务：
     GET /v1/models 列出 models，/props（llama-server）与 /api/ps（Ollama）返回对应内容，没给的返回 404。
@@ -39,6 +40,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 class FakeModel(BaseHTTPRequestHandler):
     last = {}
     last_title = {}
+    last_toc = {}
     auth = None
     serving = None
 
@@ -56,7 +58,8 @@ class FakeModel(BaseHTTPRequestHandler):
             else:
                 self.error(404, '{"error":"not found"}')
             return
-        body = json.dumps(FakeModel.last, ensure_ascii=False).encode('utf-8')
+        body = json.dumps(FakeModel.last_toc if self.path == '/last_toc' else FakeModel.last,
+                          ensure_ascii=False).encode('utf-8')
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
         self.send_header('Content-Length', str(len(body)))
@@ -76,6 +79,8 @@ class FakeModel(BaseHTTPRequestHandler):
         data = json.loads(self.rfile.read(n).decode('utf-8'))
         if data['messages'][0]['content'].startswith('把下面这次问答概括成'):
             FakeModel.last_title = data
+        elif data['messages'][0]['content'].startswith('你在帮使用者从本机知识库里挑主题页'):
+            FakeModel.last_toc = data
         else:
             FakeModel.last = data
         FakeModel.auth = self.headers.get('Authorization')
@@ -124,6 +129,11 @@ class FakeModel(BaseHTTPRequestHandler):
                           for c in work['conclusions'] if not c.get('changed')]
                 text = json.dumps({'topics': [{'id': 'new', 'title': '验收安排', 'points': points}]}, ensure_ascii=False)
                 pieces = [text[i:i + 20] for i in range(0, len(text), 20)]
+            elif data['messages'][0]['content'].startswith('你在帮使用者从本机知识库里挑主题页'):
+                # 看目录挑页：目录里每行开头的 T 编号全部挑出
+                ids = [line.split(' ', 1)[0] for line in data['messages'][1]['content'].splitlines()
+                       if line.startswith('T') and line.split(' ', 1)[0][1:].isdigit()]
+                pieces = [json.dumps({'topics': ids})]
             elif '你在帮使用者把本机的一份文件收录进「知识库」' in data['messages'][0]['content']:
                 # 从文件抽结论：每段里第一个以「。」结尾的句子作结论与原句（文件信息行不算）
                 work = json.loads(data['messages'][1]['content'])

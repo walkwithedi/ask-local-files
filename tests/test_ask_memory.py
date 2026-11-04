@@ -157,8 +157,8 @@ class MemoryTest(MemoryCase):
         self.mem.remember_answer('a1', '问', ANSWER, {1: self.file})
         os.remove(self.file)
         self.assertEqual(self.recall('预算'), [])
-        self.assertEqual(self.mem.stats(), {'files': 0, 'facts': 0, 'topics': 0, 'queued': 0, 'extract': 0, 'bytes': 0,
-                                            'max_bytes': am.MAX_BYTES})
+        self.assertEqual(self.mem.stats(), {'files': 0, 'facts': 0, 'topics': 0, 'queued': 0, 'extract': 0,
+                                            'reextract': 0, 'bytes': 0, 'max_bytes': am.MAX_BYTES})
 
     def test_unreadable_changed_file_forgotten(self):
         self.remember()
@@ -418,6 +418,77 @@ class IngestTest(MemoryCase):
         joined = '\n\n'.join(p['text'] for p in sent)
         self.assertEqual(joined.split('\n\n'), text.split('\n\n'))     # 每段恰好一次
         self.assertEqual(self.mem.stats()['facts'], len(sent))
+        # 第 1 批不带文件开头，之后各批带，是文件开头的前缀，且不超过限度
+        self.assertNotIn('head', sent[0])
+        for p in sent[1:]:
+            self.assertTrue(p['head'])
+            self.assertTrue(text.startswith(p['head']))
+            self.assertLessEqual(len(p['head']), min(am.EXTRACT_HEAD, 300 // 5))
+
+    def test_prompt_examples(self):
+        # 提示词里的示例：每对「输入：」「输出：」都是合法 JSON，输出的每条摘句都能在对应输入的 text 里核对通过
+        lines = am.EXTRACT_PROMPT.splitlines()
+        ins = [json.loads(x[3:]) for x in lines if x.startswith('输入：')]
+        outs = [json.loads(x[3:]) for x in lines if x.startswith('输出：')]
+        self.assertEqual(len(ins), 3)
+        self.assertEqual(len(ins), len(outs))
+        for i, o in zip(ins, outs):
+            flat = am.norm(i['text'])
+            for c in o['conclusions']:
+                self.assertTrue(am.quote_in(c['quote'], flat), c['quote'])
+                self.assertLessEqual(len(c['quote']), 80)
+        self.assertEqual(outs[-1], {'conclusions': []})
+        self.assertIn('head', ins[0])
+
+    def test_update_prompt_language_rule(self):
+        self.assertIn('主题页的标题和要点用其中结论的语言写；一页里语言不一时用多数结论的语言。', am.UPDATE_PROMPT)
+        self.assertTrue(am.UPDATE_PROMPT.startswith('你在维护使用者本机的一份「知识库」'))
+
+    def test_reextract_with_new_rules(self):
+        self.ingest()
+        self.extract_all(5000, lambda p: [
+            {'conclusion': '第一阶段三月底验收', 'quote': '第一阶段在三月底完成验收'},
+            {'conclusion': '预算一百万', 'quote': '预算总额为一百万元'},
+            {'conclusion': '有项目计划', 'quote': '项目计划'},
+            {'conclusion': '财务部负责', 'quote': '由财务部负责'}])
+        self.assertEqual(self.mem.stats()['facts'], 4)
+        # 问答得来的结论
+        self.assertEqual(self.mem.remember_answer('a9', '谁管预算', '财务部管预算（文件 1：「一百万元，由财务部」）。',
+                                                  {1: self.file}), 1)
+        db = self.mem._conn()
+        db.execute("UPDATE facts SET count = 3 WHERE qkey = ?", (am.norm('第一阶段在三月底完成验收'),))
+        db.execute("UPDATE facts SET answers = '[\"a1\"]' WHERE qkey = ?", (am.norm('项目计划'),))
+        db.execute('INSERT INTO rejected (path, qkey, ckey) VALUES (?, ?, ?)',
+                   (self.file, am.norm('预算总额为一百万元'), am.norm('新预算结论')))
+        db.execute('UPDATE ingest SET ver = 1')
+        db.commit()
+        before = {f['quote']: f for f in self.mem.listing()['facts']}
+        self.assertEqual(self.mem.stats()['reextract'], 1)
+        self.assertEqual(self.mem.requeue_reextract(), 1)
+        self.assertEqual(self.mem.requeue_reextract(), 0)      # 已在队里，不重复排
+        self.assertEqual(self.mem.stats()['extract'], 1)
+        sent = self.extract_all(5000, lambda p: [
+            {'conclusion': '第一阶段于三月底完成验收（新写法）', 'quote': '第一阶段在三月底完成验收'},
+            {'conclusion': '新预算结论', 'quote': '预算总额为一百万元'}])
+        self.assertEqual(len(sent), 1)
+        after = {f['quote']: f for f in self.mem.listing()['facts']}
+        a = after['第一阶段在三月底完成验收']
+        self.assertEqual(a['conclusion'], '第一阶段于三月底完成验收（新写法）')       # 同一原句：改写
+        self.assertEqual(a['count'], 3)
+        self.assertEqual(a['id'], before['第一阶段在三月底完成验收']['id'])
+        self.assertEqual(after['预算总额为一百万元']['conclusion'], '预算一百万')    # 「不对」过的组合不写入，保留旧的
+        self.assertEqual(after['项目计划']['conclusion'], '有项目计划')               # 被回答引用过：不动
+        self.assertEqual(after['一百万元，由财务部']['conclusion'], '财务部管预算')    # 问答得来：不动
+        self.assertNotIn('由财务部负责', after)                                     # 没再抽出：删除
+        h = self.mem.history()[0]
+        self.assertEqual(h['counts'], {'rewritten': 1, 'deleted': 1})
+        self.assertIn('按新规则改写：第一阶段于三月底完成验收（新写法）', h['changes'])
+        self.assertIn('重抽后删除：财务部负责', h['changes'])
+        self.assertEqual(self.mem._conn().execute('SELECT ver FROM ingest').fetchone()[0], am.EXTRACT_VERSION)
+        self.assertEqual(self.mem.stats()['reextract'], 0)
+        self.assertTrue(self.mem.undo_update(h['id']))
+        undone = {f['quote']: (f['conclusion'], f['count']) for f in self.mem.listing()['facts']}
+        self.assertEqual(undone, {q: (f['conclusion'], f['count']) for q, f in before.items()})
 
     def test_changed_file_extracts_again(self):
         self.ingest()
@@ -568,6 +639,25 @@ class UpgradeFrom2Test(MemoryCase):
         self.assertTrue(self.mem.undo_update(self.mem.history()[0]['id']))     # 升级前的撤销记录照样能用
         with sqlite3.connect(self.mem.path) as db:
             self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], am.SCHEMA)
+
+
+class UpgradeFrom3Test(MemoryCase):
+    def test_schema_3_requeues_extracted_files(self):
+        self.mem.ingest_file(self.file, os.stat(self.file), read(self.file))
+        for unit in self.mem.plan_update():
+            payload, ctx = self.mem.update_batch(unit, 5000)
+            self.mem.apply_update(ctx, json.dumps({'conclusions': [
+                {'conclusion': '第一阶段三月底验收', 'quote': '第一阶段在三月底完成验收'}]}, ensure_ascii=False), 'auto')
+        self.assertEqual(self.mem.stats()['extract'], 0)
+        self.mem.close()
+        db = sqlite3.connect(self.mem.path)
+        db.executescript('ALTER TABLE ingest DROP COLUMN ver; PRAGMA user_version = 3;')
+        db.close()
+        st = self.mem.stats()
+        self.assertEqual((st['facts'], st['reextract'], st['extract']), (1, 1, 1))
+        db = self.mem._conn()
+        self.assertEqual(db.execute('SELECT ver, done_n FROM ingest').fetchone(), (1, 0))
+        self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], am.SCHEMA)
 
 
 class _NoFts:

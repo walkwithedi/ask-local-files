@@ -407,9 +407,10 @@ test('「复制全部文字」带提问要求与全部文件，没有模型也�
   await page.locator('#pickStatus', {hasText: '已复制：2 个文件'}).waitFor();
   assert.match(await page.getAttribute('#pickStatus', 'class'), /\bok\b/);
   const text = await page.evaluate(() => navigator.clipboard.readText());
-  assert.match(text, /^只依据下面这些文件/);
-  assert.ok(text.includes('===== 文件 1：资料/季度总结.txt ====='));
-  assert.ok(text.includes('===== 文件 2：资料/子目录/会议记录.md ====='));
+  assert.match(text, /^用使用者提问的语言回答/);
+  assert.ok(text.includes('<document index="1">\n<source>资料/季度总结.txt</source>'));
+  assert.ok(text.includes('<document index="2">\n<source>资料/子目录/会议记录.md</source>'));
+  assert.match(text, /先给结论，再分点。$/);
   assert.ok(!text.includes(docs), '路径从所添加文件夹的名字起写');
   assert.ok(text.includes('甲'.repeat(100)));
 });
@@ -419,7 +420,7 @@ test('「保存全部文字」存成 .md', async t => {
   await pickByName(page, '季度总结');
   const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#saveTexts')]);
   const body = fs.readFileSync(await dl.path(), 'utf8');
-  assert.ok(body.includes('===== 文件 1：') && body.includes('甲'.repeat(100)));
+  assert.ok(body.includes('<document index="1">') && body.includes('甲'.repeat(100)));
   await page.locator('#pickStatus').getByText(/^已保存为 资料管家-文字-\d{8}-\d{4}\.md（在浏览器的下载文件夹里）：1 个文件/).waitFor();
 });
 
@@ -1140,7 +1141,10 @@ test('清空对话不弹确认，之后的提问是新对话', async t => {
   assert.ok(!asked, '清空对话不应弹出确认');
   await ask(page, '第二个问题');
   const sent = await lastRequest();
-  assert.deepStrictEqual(sent.messages.slice(1).map(m => m.content), ['第二个问题']);
+  // 只有 system 与最新一问：清空前的问答不再发送
+  assert.strictEqual(sent.messages.length, 2);
+  assert.match(sent.messages[1].content, /使用者的问题：\n第二个问题$/);
+  assert.ok(!JSON.stringify(sent).includes('第一个问题'));
 });
 
 test('回答没附原文时标出', async t => {
@@ -1911,7 +1915,8 @@ test('「选择……」弹出选择框：期间禁用并提示，选好只填�
     FAKE_PICK_FROM: ctl, FAKE_PICK_SLEEP: '1'}});
   const b = page.getByRole('button', {name: '选择要添加的文件夹'});
   await b.click();
-  await page.locator('#folderStatus', {hasText: '请在弹出的窗口里选择文件夹……（窗口可能在浏览器后面）'}).waitFor();
+  await page.locator('#folderStatus', {hasText: /^正在打开选择窗口……已等 \d+ 秒$/}).waitFor();
+  assert.match(await page.getAttribute('#folderStatus', 'class'), /\bbusy\b/);
   assert.ok(await b.isDisabled());
   await page.waitForFunction(() => document.querySelector('#folder').value === '/选中的/文件夹');
   assert.strictEqual(await page.textContent('#folderStatus'), '');
@@ -1926,6 +1931,77 @@ test('「选择……」弹出选择框：期间禁用并提示，选好只填�
   await page.locator('#folderStatus', {hasText: '选择失败'}).waitFor();
   assert.strictEqual(await page.textContent('#folderStatus'), '选择失败：cannot open display。请直接输入路径。');
   await noHorizontalScroll(page);
+});
+
+test('「选择……」等待时显示秒数，10 秒后提示窗口可能在后面，点「取消」结束选择窗口、按钮恢复、状态清空', async t => {
+  const {bin, ctl} = fakePickerBin(t);
+  fs.writeFileSync(ctl, '/选中的/文件夹');
+  const {page} = await launch(t, {folders: false, width: 360, env: {PATH: bin + ':' + process.env.PATH, DISPLAY: ':99',
+    FAKE_PICK_FROM: ctl, FAKE_PICK_SLEEP: '60'}});
+  const b = page.getByRole('button', {name: '选择要添加的文件夹'});
+  await b.focus();
+  await page.keyboard.press('Enter');
+  const cancel = page.locator('#pickFolder + button', {hasText: '取消'});
+  await cancel.waitFor();
+  assert.ok(await cancel.evaluate(e => e === document.activeElement), '键盘操作时焦点移到「取消」');
+  await page.locator('#folderStatus', {hasText: '已等 1 秒'}).waitFor({timeout: 4000});
+  await noHorizontalScroll(page);
+  await page.locator('#folderStatus', {hasText: '窗口可能在浏览器后面；也可以点「取消」后直接输入路径'}).waitFor({timeout: 15000});
+  assert.match(await page.textContent('#folderStatus'), /已等 1\d 秒/);
+  await noHorizontalScroll(page);
+  await cancel.click();
+  await page.waitForFunction(() => !document.querySelector('#pickFolder').disabled, null, {timeout: 5000});
+  assert.strictEqual(await page.textContent('#folderStatus'), '');
+  assert.strictEqual(await page.locator('#pickFolder + button', {hasText: '取消'}).count(), 0);
+  assert.strictEqual(await page.inputValue('#folder'), '', '取消不改输入框');
+  // 服务端的选择窗口已结束：马上再点不会报「已有选择窗口打开」，再取消一次
+  await b.click();
+  await page.locator('#folderStatus', {hasText: '已等 1 秒'}).waitFor({timeout: 4000});
+  assert.match(await page.getAttribute('#folderStatus', 'class'), /\bbusy\b/);
+  await cancel.click();
+  await page.waitForFunction(() => !document.querySelector('#pickFolder').disabled, null, {timeout: 5000});
+  assert.strictEqual(await page.textContent('#folderStatus'), '');
+});
+
+test('进行中提示蓝底转圈，结果提示带同色底色条；减少动态效果时不转', async t => {
+  const {page} = await launch(t, {model: 'slow'});
+  await pickByName(page, '季度总结');
+  await page.fill('#ask', '总结');
+  await page.click('#send');
+  await page.locator('#askStatus', {hasText: '已等待'}).waitFor();
+  assert.match(await page.getAttribute('#askStatus', 'class'), /\bbusy\b/);
+  const busy = await page.$eval('#askStatus', e => {
+    const s = getComputedStyle(e), b = getComputedStyle(e, '::before');
+    return {bg: s.backgroundColor, anim: b.animationName, border: b.borderTopColor};
+  });
+  assert.strictEqual(busy.anim, 'spin');
+  assert.notStrictEqual(busy.bg, 'rgba(0, 0, 0, 0)');
+  await page.click('#stop');
+  await page.locator('#askStatus:not(.busy)').waitFor();
+  // 结果提示：ok、warn、bad 都有底色，且三种不同
+  const bgs = await page.evaluate(() => ['ok', 'warn', 'bad', 'info'].map(k => {
+    const d = document.createElement('div');
+    d.className = 'status ' + k;
+    d.textContent = '提示';
+    document.body.appendChild(d);
+    const c = getComputedStyle(d).backgroundColor;
+    d.remove();
+    return c;
+  }));
+  for (const c of bgs.slice(0, 3)) assert.notStrictEqual(c, 'rgba(0, 0, 0, 0)');
+  assert.strictEqual(new Set(bgs.slice(0, 3)).size, 3);
+  assert.strictEqual(bgs[3], 'rgba(0, 0, 0, 0)', '普通说明不加底色');
+  await page.emulateMedia({reducedMotion: 'reduce'});
+  const still = await page.evaluate(() => {
+    const d = document.createElement('div');
+    d.className = 'status info busy';
+    d.textContent = '正在……';
+    document.body.appendChild(d);
+    const a = getComputedStyle(d, '::before').animationName;
+    d.remove();
+    return a;
+  });
+  assert.strictEqual(still, 'none');
 });
 
 test('没有可用的选择窗口时不显示「选择……」', async t => {
@@ -2554,7 +2630,7 @@ test('保存对话：参考文件放在最后，路径从所添加文件夹的�
   await page.click('#copyTexts');
   await page.locator('#pickStatus', {hasText: '已复制'}).waitFor();
   const clip = await page.evaluate(() => navigator.clipboard.readText());
-  assert.match(clip, /===== 文件 1：资料\/季度总结\.txt =====\n路径：资料\/季度总结\.txt\n/);
+  assert.match(clip, /<source>资料\/季度总结\.txt<\/source>\n<document_content>\n路径：资料\/季度总结\.txt\n/);
   assert.ok(!clip.includes(docs));
 });
 
@@ -2868,6 +2944,45 @@ test('页头「帮助」在新标签打开帮助页：目录可跳转、可搜�
   await help.locator('#searchStatus.warn').getByText(/没有找到/).waitFor();
   await help.click('#clearQ');
   assert.strictEqual(await help.isVisible('#find'), true);
+});
+
+test('帮助页「原理与提示词」：目录可跳转，提示词全文展开后 360px 无横向滚动', async t => {
+  const {page} = await launch(t, {width: 360});
+  const [help] = await Promise.all([page.context().waitForEvent('page'), page.locator('#help').click()]);
+  await help.waitForLoadState();
+  await help.click('#toc a[href="#principles"]');
+  assert.strictEqual(new URL(help.url()).hash, '#principles');
+  assert.ok(await help.locator('#principles pre[data-prompt]').count() >= 18);
+  await help.locator('#principles summary').evaluateAll(els => els.forEach(e => e.click()));
+  assert.match(await help.textContent('pre[data-prompt="EXTRACT_PROMPT"]'), /只输出一个 JSON 对象/);
+  assert.ok(await help.isVisible('pre[data-prompt="UPDATE_PROMPT"]'));
+  await noHorizontalScroll(help);
+});
+
+test('知识库统计：有按旧规则抽的文件时写明还剩几个要按新规则重新抽取', async t => {
+  const {page} = await launch(t);
+  await openMemSettings(page);
+  await page.locator('#memStats', {hasText: '已收录'}).waitFor();
+  const base = {files: 3, facts: 5, topics: 1, queued: 2, extract: 2, bytes: 1000, max_bytes: 1 << 30};
+  await page.evaluate(st => showMemStats(st), Object.assign({reextract: 2}, base));
+  assert.match(await page.textContent('#memStats'), /（其中从文件抽结论 2 个文件），按新规则重新抽取：剩 2 个文件，约/);
+  await page.evaluate(st => showMemStats(st), Object.assign({reextract: 0}, base));
+  assert.doesNotMatch(await page.textContent('#memStats'), /按新规则/);
+});
+
+test('知识库设置：「提问前先让模型看主题页目录」默认勾选，改了即保存并提示，刷新后照旧', async t => {
+  const {page} = await launch(t);
+  await openMemSettings(page);
+  const box = page.getByRole('checkbox', {name: '提问前先让模型看主题页目录'});
+  assert.ok(await box.isChecked());
+  await box.uncheck();
+  await page.locator('#tocStatus', {hasText: '已关闭：提问时只按关键字检索知识库。'}).waitFor();
+  assert.match(await page.getAttribute('#tocStatus', 'class'), /\bok\b/);
+  await page.reload();
+  await openMemSettings(page);
+  assert.ok(!(await page.getByRole('checkbox', {name: '提问前先让模型看主题页目录'}).isChecked()));
+  await page.getByRole('checkbox', {name: '提问前先让模型看主题页目录'}).check();
+  await page.locator('#tocStatus', {hasText: '已打开'}).waitFor();
 });
 
 test('知识库设置与配置 OpenCode 在 360px 下没有横向滚动', async t => {

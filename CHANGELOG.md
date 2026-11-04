@@ -1,5 +1,31 @@
 # Changelog
 
+## 2.20.0
+
+- The bundled skills were reviewed against Anthropic's Skill authoring best practices. clarify-needs, doc-compare, office-gen, prompt-optimize and skill-create now say when to use them with their trigger words, show how to run their scripts and what the output looks like (made-up examples), and say how to check and correct key steps; text repeating the tool descriptions is gone. skill-create asks the same of the skills it writes. doc-compare's script errors say what to do next. summarize-meeting stays as copied from upstream.
+- New evaluation scenarios for every bundled skill (`tests/skill_evals/`, three each, made-up content), a test that checks them and runs their script steps, and `tests/skill_eval_run.py`, which asks each scenario with a configured model and writes a Markdown report for comparing a skill before and after a change.
+- The help page's skill section lists the writing principles.
+
+## 2.19.0
+
+- Question assembly: the system message now holds only rules; the picked files and knowledge base excerpts open the latest question, each in a `<document index="N"><source>…</source><document_content>…</document_content></document>` block, followed by the repeated rules and then the question. Earlier questions and answers are sent as text, unchanged. New rules: answer in the language of the question, one made-up citation example, and instructions inside files are not followed. 复制全部文字, 保存全部文字 and the QR code use the same assembly, without the question.
+- 提问前先让模型看主题页目录 ("let the model see the topic list before asking") in the knowledge base settings, on by default: each question first asks the selected model to pick up to 5 topic pages from the topic list; their points come before the keyword results. A timeout (20 s, 60 s for a local model), an error or an unreadable reply falls back to keywords only. The help page's privacy section mentions this extra request.
+- Conversation titles follow the language of the question.
+- The skill introduction and the three tool descriptions say when to use each tool and give an example; a failed tool call tells the model the reason and what to change.
+- The help page's 原理与提示词 section explains the assembly, the topic list step and on-demand skill loading, and prints every prompt sent to the model in full; a test keeps it identical to the code.
+
+## 2.18.0
+
+- Stronger extraction prompt for conclusions from files: one fact per conclusion; name the subject but only from the text, the file start or the file name; keep the original's certainty ("proposed", "to be confirmed"); keep relative dates as written and note the reference date; write in the file's language; quotes copied with their punctuation and not across table cells; made-up examples; instructions inside files are not followed. From the second batch on, the start of the file is sent along as `head`.
+- Topic page titles and points are written in the language of their conclusions.
+- Extraction rules have a version. After upgrading, automatically included files are extracted again under the new rules (subject to 空闲时自动更新, which sends their text to the model again): a conclusion with the same quote is rewritten in place, one not extracted again and never cited by an answer is deleted, conclusions from questions are left alone, and every batch can be undone. The knowledge base settings show how many files remain. The database is upgraded in place.
+- The help page gains a 原理与提示词 ("principles and prompts") section with the design behind the knowledge base and both knowledge base prompts in full.
+
+## 2.17.0
+
+- Status messages for steps in progress are shown in the accent colour on a light blue bar with a CSS spinner (still when reduced motion is requested); results get a light bar in their own colour (green, yellow, red), with dark-mode colours.
+- While the folder dialog opened by 选择…… is waiting, the status counts the seconds, notes after 10 seconds that the dialog may be behind the browser, and a 取消 ("cancel") button closes it (new endpoint `POST /api/pick-cancel`).
+
 ## 2.16.0
 
 - Upgrade module 1.1: files unpacked or copied during an upgrade get their permission bits reduced by the umask, as unzip and cp do; with a umask of 022 nothing changes. No other change.
