@@ -18,11 +18,13 @@ The page is in Chinese.
 
 | File | Role |
 | --- | --- |
-| `双击运行.desktop` | Desktop entry, shown as 资料管家 ("file keeper"). Double-click it to open the page. |
+| `资料管家.desktop` | Desktop entry, named after the tool (资料管家, "file keeper") so it can sit on the desktop next to other tools' entries. Double-click it to open the page. |
 | `ask_local_files.py` | Local server: file-name index, text extraction, calls to the model endpoint. Python 3.8+, standard library only. |
 | `ask_memory.py` | Knowledge base: keeps the paragraphs of files picked for questions and the checked conclusions in a local SQLite database, and looks them up for later questions; see [Knowledge base](#knowledge-base). Python 3.8+, standard library only. |
 | `ask_local_files.html` | The page, served by `ask_local_files.py`. |
 | `help.html` | The help page (in Chinese): quick start, how each feature works and why, privacy and common questions. 帮助 ("help") in the page header opens it in a new tab; it can also be opened directly. |
+| `tool_upgrade.py` | The upgrade module behind 升级 ("upgrade") and 退回上一版 ("roll back"), `--upgrade` and `--rollback`; see [Upgrade](#upgrade). |
+| `upgrade-keep.txt` | Files in the tool folder that an upgrade carries over to the new version, one relative path per line. |
 | `doc2kb_core.py` | Reads docx, xlsx, pptx, doc, xls, ppt, eml and pdf. An unchanged copy of a [walkwithedi/doc2kb](https://github.com/walkwithedi/doc2kb) release; `DOC2KB_VERSION` names which one. |
 | `skills/` | Bundled skills, see [Skills](#skills). |
 | `tests/` | Development only. `test_ask_local_files.py` holds the server tests, `test_ask_memory.py` the knowledge base tests and `test_skill_scripts.py` the tests of the bundled skill scripts (unittest), `ui.test.js` the page tests (needs Playwright and Chromium). `fake_model.py` is a stand-in model endpoint, `fake_opener.sh` and `fake_picker.sh` stand in for the system commands that open and pick folders, and `same_name_cases.json` holds the same-name examples that the server and the page are both tested against. |
@@ -35,7 +37,7 @@ The page is in Chinese.
 
 ## Use
 
-Download `ask-local-files-v<version>.zip` from Releases and unpack it. Double-click `双击运行.desktop`, or run `python3 ask_local_files.py`.
+Download `ask-local-files-v<version>.zip` from Releases and unpack it. Unpack it into a folder you will keep it in, because later versions replace it in place there (see [Upgrade](#upgrade)). Double-click `资料管家.desktop`, or run `python3 ask_local_files.py`.
 
 On a wide screen the page fills the browser window: finding files on the left, the conversation on the right. The tool's description under the title folds behind 说明 ▸ ("about"), closed by default. 找文件, 已选 and 问 AI fold to one line when you click their title, with a short summary beside it; the folding is remembered in the browser, and when one column is fully folded the other takes the width. On a narrow screen 找文件 folds itself once a conversation starts. ＋ 新对话 ("new conversation") opens another conversation tab in the same window, up to 8, each with its own files; its × closes it at once, without asking, stopping an answer in progress and discarding unsaved turns.
 
@@ -145,13 +147,32 @@ The bundled scripts use only the Python standard library and also run from a ter
 
 ## Server and exit
 
+On first double-click the file manager may ask whether to trust or run the entry; allow it, or tick "allow executing as program" under Properties → Permissions. To put it on the desktop, use the file manager's "send to desktop" action or `ln -s "$PWD/资料管家.desktop" ~/Desktop/`; do not copy it, because a copy cannot find the program and says so when double-clicked. Up to 2.12 the entry was called `双击运行.desktop`; a desktop link to that name stops working after upgrading and has to be made again from the tool folder.
+
 Double-clicking opens the page in an app window of a Chromium-family browser (`--app`, no address bar) when one is found, including Chinese Chromium-based browsers such as Qianxin, 360 and UOS, which are also located through their desktop files when not on PATH; otherwise in a normal window of the default browser.
 
-The server listens on 127.0.0.1 only, on port 47821 by default (change it with `--port` or `"port": <number>` in `~/.config/ask-local-files/config.json`). Its address carries a token that is created on first start and kept in `~/.config/ask-local-files/token` (mode 600), and Host and Origin are checked, so the address stays the same across restarts and can be bookmarked or pasted into any browser; 复制网址 ("copy address") in the footer copies it. `--new-token` replaces the token and invalidates the old address (refused while the tool is running). Starting the tool while it is already running only opens a page; if another program holds the port, it says so and suggests `--port`. Closing the page does not stop the server: it exits after 30 minutes with no page open and nothing running (`--idle-timeout`, 0 for never), or at once when you press 退出 ("quit"). If an answer is still streaming, a script is running or 更新知识库 is under way, it waits for it to finish; an idle-time knowledge base update does not hold it up. A page left in the background does not count as closed. The log is `ask_local_files.log` next to the program, or in `~/.cache/ask-local-files/` when that folder is not writable.
+The server listens on 127.0.0.1 only, on port 47821 by default (change it with `--port` or `"port": <number>` in `~/.config/ask-local-files/config.json`). Its address carries a token that is created on first start and kept in `~/.config/ask-local-files/token` (mode 600), and Host and Origin are checked, so the address stays the same across restarts and can be bookmarked or pasted into any browser; 复制网址 ("copy address") in the footer copies it. `--new-token` replaces the token and invalidates the old address (refused while the tool is running). Starting the tool while it is already running from the same folder and version only opens a page; when the port is held by this tool running from another folder or another version (for example after the tool folder was moved or replaced), that one is asked to quit and this start takes over once the port is free within 10 seconds, or a system dialog asks to try again later if it is busy; if another program holds the port, it says so and suggests `--port`. Closing the page does not stop the server: it exits after 30 minutes with no page open and nothing running (`--idle-timeout`, 0 for never), or at once when you press 退出 ("quit"). If an answer is still streaming, a script is running or 更新知识库 is under way, it waits for it to finish; an idle-time knowledge base update does not hold it up. A page left in the background does not count as closed. The log is `ask_local_files.log` next to the program, or in `~/.cache/ask-local-files/` when that folder is not writable.
 
-Command line: `python3 ask_local_files.py [--no-browser] [--no-app] [--port N] [--idle-timeout SECONDS] [--data-dir DIR] [--print-url] [--new-token] [--log-level DEBUG|INFO|WARNING|ERROR]`. `--no-browser` only prints the address, `--no-app` opens a normal window of the default browser, `--port` sets the port, `--idle-timeout` sets how long to wait with no page and nothing running before exiting (default 1800, 0 for never), `--print-url` prints the address without starting the server, `--new-token` replaces the token and prints the new address, and `--data-dir` changes the storage location (see Memory). Each prints one line `网页界面：<address>` on standard output. The default log level is WARNING, and `LOG_LEVEL` overrides it.
+Command line: `python3 ask_local_files.py [--no-browser] [--no-app] [--port N] [--idle-timeout SECONDS] [--data-dir DIR] [--print-url] [--new-token] [--upgrade ZIP_OR_FOLDER [--yes]] [--rollback [--yes]] [--version] [--log-level DEBUG|INFO|WARNING|ERROR]`. `--no-browser` only prints the address, `--no-app` opens a normal window of the default browser, `--port` sets the port, `--idle-timeout` sets how long to wait with no page and nothing running before exiting (default 1800, 0 for never), `--print-url` prints the address without starting the server, `--new-token` replaces the token and prints the new address, `--data-dir` changes the storage location (see Knowledge base), `--upgrade` and `--rollback` are described under [Upgrade](#upgrade), and `--version` prints the version. Each prints one line `网页界面：<address>` on standard output. The default log level is WARNING, and `LOG_LEVEL` overrides it.
 
 Tests: `python3 -m unittest discover -s tests`. With Playwright installed, also run `node --test tests/ui.test.js`.
+
+## Upgrade
+
+Unpack the first release into a folder you choose and will not move, and put the desktop link to `资料管家.desktop` there. Every later version replaces that folder's contents in place, so the path, the desktop link and the page address stay the same.
+
+1. Get the new zip (or unpack it and use the `ask-local-files` folder it contains).
+2. On the page, press 升级 ("upgrade") at the top right and pick or drop the zip or folder. The page shows current version → new version, the changelog entries between them, the files that will be kept and any extra files; a downgrade or reinstall is called out.
+3. Press 升级到 vX.Y ("upgrade to vX.Y"). Stage text is shown and the buttons are disabled meanwhile; an answer being written, a knowledge base update, inclusion or sync in progress is waited for. The server then restarts on the new version with the same port and token, and the page reconnects.
+
+From a terminal: `python3 ask_local_files.py --upgrade new.zip` shows the same check and asks for confirmation (`--yes` skips it); the tool must not be running.
+
+- Kept files: those listed in `upgrade-keep.txt`, namely `data-dir.txt` (only present after the storage location was changed) and `ask_local_files.log`. The knowledge base, settings and token live in the storage location, not in the tool folder, so an upgrade does not touch them.
+- Extra files: files in the tool folder that are neither in the keep list nor part of the new version are listed before upgrading; they are not deleted but stay with the previous version.
+- Previous version: the old folder becomes the hidden folder `.ask-local-files.上一版` next to it; only one is kept. 退回上一版 ("roll back") on the page or `python3 ask_local_files.py --rollback` swaps it with the current version; doing it again swaps back.
+- Nothing is changed, and the reason is shown, when the package is not this tool (its top folder is not `ask-local-files`), its version cannot be read, the program or desktop entry is missing, it contains `..`, absolute paths, symbolic links or device files, it unpacks to more than 200 MB or 5000 entries, or the folder holding the tool folder is not writable. A failure part-way restores the previous state.
+- A zip uploaded by the page is written only to the system temporary directory and removed afterwards; a picked folder is packed into a zip by the page first.
+- Upgrading from 2.14 or earlier, which has no upgrade function: unpack the new version elsewhere and run `python3 <unpacked folder>/tool_upgrade.py --tool-dir <current tool folder> --upgrade new.zip` once; later upgrades work as above.
 
 ## Contributing
 
