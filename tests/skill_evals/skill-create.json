@@ -1,0 +1,76 @@
+{
+  "skill": "skill-create",
+  "scenarios": [
+    {
+      "name": "要求清楚时先给草稿",
+      "files": {},
+      "question": "帮我做一个写周报的 skill：把本周的会议记录整理成「本周完成、下周计划、风险」三部分",
+      "expect": {
+        "tools": [],
+        "contains": [
+          "weekly"
+        ],
+        "not_contains": [],
+        "check": "先给出名称、用途和正文草稿请使用者确认，不直接写文件和打包；description 写清做什么和什么时候用"
+      }
+    },
+    {
+      "name": "确认后打包",
+      "files": {},
+      "question": "草稿可以，按这个打包",
+      "script": {
+        "run": "scripts/pack_skill.py",
+        "args": [
+          "skill"
+        ],
+        "work": {
+          "skill/SKILL.md": "---\nname: weekly-report\ndescription: 写周报：把本周已选文件整理成固定结构的周报。使用者说「写周报」「本周总结」时使用。\n---\n\n# 写周报\n\n## 步骤\n\n1. 读已选文件。\n2. 按示例结构输出。\n"
+        },
+        "output": [
+          "weekly-report"
+        ],
+        "files": [
+          "weekly-report.zip"
+        ]
+      },
+      "expect": {
+        "tools": [
+          "write_work_file",
+          "run_script"
+        ],
+        "contains": [
+          "安装"
+        ],
+        "not_contains": [],
+        "check": "写 skill/SKILL.md 后运行 pack_skill.py skill；提醒点「安装 weekly-report.zip」"
+      }
+    },
+    {
+      "name": "名称不合规时改正后重打",
+      "files": {},
+      "question": "打包这个 skill",
+      "script": {
+        "run": "scripts/pack_skill.py",
+        "args": [
+          "skill"
+        ],
+        "work": {
+          "skill/SKILL.md": "---\nname: Weekly Report\ndescription: 写周报：把本周已选文件整理成固定结构的周报。使用者说「写周报」「本周总结」时使用。\n---\n\n# 写周报\n\n## 步骤\n\n1. 读已选文件。\n2. 按示例结构输出。\n"
+        },
+        "output": [
+          "打包失败"
+        ],
+        "files": []
+      },
+      "expect": {
+        "tools": [
+          "write_work_file",
+          "run_script"
+        ],
+        "contains": [],
+        "not_contains": [],
+        "check": "按「打包失败」的原因改成小写连字符名称后重新写入、重新打包"
+      }
+    }
+  ]
+}

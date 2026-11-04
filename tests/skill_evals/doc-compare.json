@@ -1,0 +1,81 @@
+{
+  "skill": "doc-compare",
+  "scenarios": [
+    {
+      "name": "两个版本的计划",
+      "files": {
+        "计划-旧.txt": "项目计划\n\nProject Atlas 第一阶段在三月底完成验收。\n\n预算总额为一百万元，由财务部负责。\n",
+        "计划-新.txt": "项目计划\n\nProject Atlas 第一阶段在四月底完成验收。\n\n预算总额为一百二十万元，由财务部负责。\n\n新增：张三负责接口联调。\n"
+      },
+      "question": "对比这两个版本，改了什么",
+      "script": {
+        "run": "scripts/compare.py",
+        "args": [],
+        "output": [
+          "三月底",
+          "四月底",
+          "新增"
+        ]
+      },
+      "expect": {
+        "tools": [
+          "run_script"
+        ],
+        "contains": [
+          "四月底",
+          "（脚本输出）"
+        ],
+        "not_contains": [],
+        "check": "实质变化列出验收时间、预算金额、新增负责人，每条写旧说法和新说法"
+      }
+    },
+    {
+      "name": "两份完全相同",
+      "files": {
+        "甲.txt": "项目计划\n\nProject Atlas 第一阶段在三月底完成验收。\n\n预算总额为一百万元，由财务部负责。\n",
+        "乙.txt": "项目计划\n\nProject Atlas 第一阶段在三月底完成验收。\n\n预算总额为一百万元，由财务部负责。\n"
+      },
+      "question": "这两份有区别吗",
+      "script": {
+        "run": "scripts/compare.py",
+        "args": [],
+        "output": [
+          "相同"
+        ]
+      },
+      "expect": {
+        "tools": [
+          "run_script"
+        ],
+        "contains": [
+          "相同"
+        ],
+        "not_contains": [],
+        "check": "如实说明两份完全相同，不编造差异"
+      }
+    },
+    {
+      "name": "只选了一个文件",
+      "files": {
+        "计划-旧.txt": "项目计划\n\nProject Atlas 第一阶段在三月底完成验收。\n\n预算总额为一百万元，由财务部负责。\n"
+      },
+      "question": "对比一下版本差异",
+      "script": {
+        "run": "scripts/compare.py",
+        "args": [],
+        "output": [
+          "出错",
+          "已选"
+        ]
+      },
+      "expect": {
+        "tools": [
+          "run_script"
+        ],
+        "contains": [],
+        "not_contains": [],
+        "check": "告诉使用者要选两个文件，不凭印象比对"
+      }
+    }
+  ]
+}

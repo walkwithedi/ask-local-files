@@ -6,9 +6,9 @@
 <title>资料管家</title>
 <script>if (new URLSearchParams(location.search).get('embed') === '1') document.documentElement.classList.add('embed');</script>
 <style>
-  :root { --bg:#f6f7f9; --card:#fff; --text:#1f2328; --muted:#656d76; --line:#d0d7de; --accent:#0969da; --ok:#1a7f37; --warn:#9a6700; --bad:#cf222e; --pick:#ddf4ff; --bad-bg:#ffebe9; --folder:#9a5b00; }
+  :root { --bg:#f6f7f9; --card:#fff; --text:#1f2328; --muted:#656d76; --line:#d0d7de; --accent:#0969da; --ok:#1a7f37; --warn:#9a6700; --bad:#cf222e; --pick:#ddf4ff; --bad-bg:#ffebe9; --folder:#9a5b00; --busy:#0969da; --busy-bg:#ddf4ff; --ok-bg:#dafbe1; --warn-bg:#fff8c5; }
   @media (prefers-color-scheme: dark) {
-    :root { --bg:#0d1117; --card:#161b22; --text:#e6edf3; --muted:#8d96a0; --line:#30363d; --accent:#4493f8; --ok:#3fb950; --warn:#d29922; --bad:#f85149; --pick:#132a44; --bad-bg:#3d1d20; --folder:#e3b341; }
+    :root { --bg:#0d1117; --card:#161b22; --text:#e6edf3; --muted:#8d96a0; --line:#30363d; --accent:#4493f8; --ok:#3fb950; --warn:#d29922; --bad:#f85149; --pick:#132a44; --bad-bg:#3d1d20; --folder:#e3b341; --busy:#79c0ff; --busy-bg:#132a44; --ok-bg:#12261e; --warn-bg:#2e2410; }
   }
   * { box-sizing: border-box; }
   [hidden] { display:none !important; }
@@ -64,6 +64,17 @@
   .ok { color:var(--ok); } .warn { color:var(--warn); } .bad { color:var(--bad); } .info { color:var(--muted); }
   .status { margin:8px 0 0; font-size:14px; }
   .status:empty { margin:0; }
+  /* 结果提示 ok、warn、bad 成条显示同色浅底；进行中（busy）为蓝底加转圈，纯 CSS 转动，页面卡顿时照转 */
+  .status.ok:not(:empty), .status.warn:not(:empty), .status.bad:not(:empty), .status.busy:not(:empty),
+  .ustatus.ok:not(:empty), .ustatus.warn:not(:empty), .ustatus.bad:not(:empty), .ustatus.busy:not(:empty) { padding:4px 8px; border-radius:6px; border-left:3px solid currentColor; overflow-wrap:anywhere; }
+  .status.ok:not(:empty), .ustatus.ok:not(:empty) { background:var(--ok-bg); }
+  .status.warn:not(:empty), .ustatus.warn:not(:empty) { background:var(--warn-bg); }
+  .status.bad:not(:empty), .ustatus.bad:not(:empty) { background:var(--bad-bg); }
+  .status.busy, .ustatus.busy { color:var(--busy); }
+  .status.busy:not(:empty), .ustatus.busy:not(:empty) { background:var(--busy-bg); }
+  .status.busy:not(:empty)::before, .ustatus.busy:not(:empty)::before { content:''; display:inline-block; box-sizing:border-box; width:.9em; height:.9em; margin-right:6px; vertical-align:-.1em; border:2px solid currentColor; border-top-color:transparent; border-radius:50%; animation:spin 1s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .status.busy:not(:empty)::before, .ustatus.busy:not(:empty)::before { animation:none; } }
   ul.list { list-style:none; margin:8px 0 0; padding:0; }
   ul.list li { display:flex; gap:8px; align-items:flex-start; padding:5px 0; border-top:1px solid var(--line); }
   ul.list li:first-child { border-top:none; }
@@ -235,7 +246,7 @@
   .drop strong { color:var(--accent); }
   .row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:8px; }
   .ustatus { margin:8px 0; min-height:1.6em; }
-  .ustatus.ok { color:var(--ok); } .ustatus.warn { color:var(--warn); } .ustatus.bad { color:var(--bad); } .ustatus.info { color:var(--muted); }
+  .ustatus.ok { color:var(--ok); } .ustatus.warn { color:var(--warn); } .ustatus.bad { color:var(--bad); } .ustatus.info:not(.busy) { color:var(--muted); }
   .ureport h3 { font-size:15px; margin:12px 0 4px; }
   .ureport ul { margin:0; padding-left:1.4em; max-height:14em; overflow:auto; overflow-wrap:anywhere; }
   .ureport .ver { font-size:16px; font-weight:bold; }
@@ -477,6 +488,10 @@
         <label class="dedup" style="margin-top:0"><input id="memoryOn" type="checkbox" checked>收录提问时选过的文件和核对通过的结论</label>
         <p class="hint">勾选「参考知识库」时，提问会参考知识库里相关的以前结论和原文段落；关掉后不再收录、也不再参考，已收录的保留。</p>
         <details class="more"><summary>详细说明</summary><p class="hint">知识库存在「通用」里「保存位置」的 memory.sqlite（权限 600，只有你能读）。提问时按问题从知识库里找出相关的以前结论和原文段落，排在已选文件之后一起发给模型；文件改了按新内容复核，文件不在了就移出。已收录的可在「查看知识库」里清空。</p></details>
+        <label class="dedup"><input id="tocPick" type="checkbox" checked>提问前先让模型看主题页目录</label>
+        <p class="hint">有主题页时，每问先让所选模型从主题页目录里挑出相关的页，再与关键字检索的结果一起参考。</p>
+        <details class="more"><summary>详细说明</summary><p class="hint">勾选「参考知识库」时生效：把主题页目录（每页的标题与前两条要点，最近更新的在前）和问题发给所选模型，由它挑出至多 5 页，挑出的页排在关键字检索的结果之前。模型 20 秒（本机模型 60 秒）没有给出、出错或回答看不懂时只用关键字，不影响提问。关掉后只按关键字检索，每问少一次模型调用。</p></details>
+        <div id="tocStatus" class="status" aria-live="polite"></div>
         <p id="memStats" class="hint"></p>
         <h4 class="mem-h">更新知识库</h4>
         <div class="row" style="margin-top:6px">
@@ -556,7 +571,7 @@
   <div id="convFrames" hidden></div>
 
 
-  <footer><span id="ver">资料管家 v2.16</span>　<button id="copyUrl" type="button" class="small">复制网址</button>　网址固定不变，可收藏或复制到浏览器打开。关闭页面后服务继续运行，没有页面、也没有任务 30 分钟后自动退出；点「退出」立即结束，开着的页面一起结束。有回答正在生成（含 skill 脚本运行）或知识库正在手动更新时，服务等它结束再退出，升级也等它结束再进行；升级或退回后服务用新版重新启动，本页自动刷新；自动收录与空闲时自动更新不拖住退出，下次启动接着做。对话不自动保存，退出即清空；知识库存在本机，可在「知识库设置」里关闭或清空。<div id="urlStatus" class="status info" aria-live="polite"></div></footer>
+  <footer><span id="ver">资料管家 v2.20</span>　<button id="copyUrl" type="button" class="small">复制网址</button>　网址固定不变，可收藏或复制到浏览器打开。关闭页面后服务继续运行，没有页面、也没有任务 30 分钟后自动退出；点「退出」立即结束，开着的页面一起结束。有回答正在生成（含 skill 脚本运行）或知识库正在手动更新时，服务等它结束再退出，升级也等它结束再进行；升级或退回后服务用新版重新启动，本页自动刷新；自动收录与空闲时自动更新不拖住退出，下次启动接着做。对话不自动保存，退出即清空；知识库存在本机，可在「知识库设置」里关闭或清空。<div id="urlStatus" class="status info" aria-live="polite"></div></footer>
 </main>
 <script>
 'use strict';
@@ -636,7 +651,8 @@ const RETRY = '请确认服务仍在运行后重试。';
 function say(id, msg, kind) {
   const el = $(id);
   el.textContent = msg || '';
-  el.className = 'status ' + (kind || 'info');
+  // busy 为进行中：仍属 info 一类，另加蓝底转圈
+  el.className = 'status ' + (kind === 'busy' ? 'info busy' : (kind || 'info'));
 }
 function el(tag, cls, text) {
   const e = document.createElement(tag);
@@ -718,7 +734,7 @@ function search() {
       if (all.length < rawResults.length) s += '（去重后 ' + fmtNum(all.length) + ' 个）';
       if (results.length < all.length) s += '，已从列表移除 ' + (all.length - results.length) + ' 个';
     }
-    indexNote = [s, r.status.error ? 'warn' : 'info'];
+    indexNote = [s, r.status.error ? 'warn' : r.status.scanning ? 'busy' : 'info'];
     showFindStatus();
     watchScan(r.status.scanning);
   }).catch(e => {
@@ -770,7 +786,7 @@ function showFindStatus() {
   let [s, kind] = indexNote;
   if (full()) {
     s += '。已选满 ' + maxFiles + ' 个，请先在「已选」里移除几个再加入';
-    if (kind === 'info') kind = 'warn';
+    if (kind === 'info' || kind === 'busy') kind = 'warn';
   }
   say('findStatus', s, kind);
 }
@@ -1102,7 +1118,7 @@ $('refresh').addEventListener('click', () => {
   $('refresh').disabled = true;
   post('/api/refresh', {}).then(r => {
     if (r.started) return refreshFind();
-    say('findStatus', '正在扫描中，扫完会自动更新。', 'info');
+    say('findStatus', '正在扫描中，扫完会自动更新。', 'busy');
     watchScan(true);
   }).catch(e => { $('refresh').disabled = !alive; say('findStatus', failText('刷新', e.message, RETRY), 'bad'); });
 });
@@ -1158,7 +1174,7 @@ function loadBrowse(dir, quiet) {
         (listed > r.files.length ? '，已从列表移除 ' + (listed - r.files.length) + ' 个' : '')
         : '。已添加 ' + r.dirs.length + ' 个文件夹，点文件夹逐层查看';
     }
-    indexNote = [s, r.status.error ? 'warn' : 'info'];
+    indexNote = [s, r.status.error ? 'warn' : r.status.scanning ? 'busy' : 'info'];
     showFindStatus();
     watchScan(r.status.scanning);
   }).catch(e => { if (alive && findMode === 'browse') say('findStatus', failText('浏览', e.message, '请点「刷新」重试。'), 'bad'); });
@@ -1357,7 +1373,7 @@ function renderPicked() {
   renderExportButtons();
   if (!picked.length) say('pickStatus', '');
   else if (bad) say('pickStatus', '有 ' + bad + ' 个文件取不出文字：请点「移除取不出文字的文件」后再发送。', 'bad');
-  else if (loading) say('pickStatus', addedNote + '正在取文字' + (picked.length > 1 ? '（已完成 ' + (picked.length - loading) + ' / 共 ' + picked.length + ' 个）' : '') + '……', 'info');
+  else if (loading) say('pickStatus', addedNote + '正在取文字' + (picked.length > 1 ? '（已完成 ' + (picked.length - loading) + ' / 共 ' + picked.length + ' 个）' : '') + '……', 'busy');
   else say('pickStatus', addedNote, addedNote ? addedKind : 'info');
   noticeLimit();
   renderDest();
@@ -1421,7 +1437,7 @@ function exportText() {
 function exportRun(action, work) {
   exporting = true;
   renderExportButtons();
-  say('pickStatus', '正在整理取出的文字……', 'info');
+  say('pickStatus', '正在整理取出的文字……', 'busy');
   return work().catch(e => say('pickStatus', failText(action, e.message, RETRY), 'bad'))
     .finally(() => { exporting = false; renderExportButtons(); });
 }
@@ -1616,7 +1632,7 @@ function skillDone(r, statusId, what) {
 }
 function skillCall(path, body, b, statusId, what) {
   b.disabled = true;
-  say(statusId, '正在' + what + '……', 'info');
+  say(statusId, '正在' + what + '……', 'busy');
   const go = confirmed => post(path, Object.assign({}, body, confirmed ? {confirm: true} : {})).then(r => {
     if (r.ok) {
       // 新建或从文件夹安装成功后清空对应输入框，未保存圆点随之消失
@@ -1719,7 +1735,7 @@ function saveBlob(blob, name) {
 function saveDocx(markdown, title, b) {
   const name = saveStem(stampNow()) + '.docx';
   if (b) b.disabled = true;
-  say('chatStatus', '正在转换为 Word……', 'info');
+  say('chatStatus', '正在转换为 Word……', 'busy');
   return fetch('/api/docx', {method: 'POST', headers: {'X-Token': TOKEN, 'Content-Type': 'application/json'},
                              body: JSON.stringify({markdown: markdown, title: title})}).then(r => {
     if (!r.ok) return r.json().then(j => { throw new Error(j.error || ('HTTP ' + r.status)); }, () => { throw new Error('HTTP ' + r.status); });
@@ -1890,6 +1906,7 @@ function showMemStats(st) {
   $('memStats').textContent = st.error ? '读不了知识库：' + st.error : '已收录 ' + fmtNum(st.files) + ' 个文件、' + fmtNum(st.facts) +
     ' 条结论、' + fmtNum(st.topics || 0) + ' 页主题页' + (st.queued ? '，待更新 ' + fmtNum(st.queued) + ' 项' : '') +
     (st.extract ? '（其中从文件抽结论 ' + fmtNum(st.extract) + ' 个文件）' : '') +
+    (st.reextract ? '，按新规则重新抽取：剩 ' + fmtNum(st.reextract) + ' 个文件' : '') +
     '，约 ' + fmtSize(st.bytes) + '（上限 ' + fmtSize(st.max_bytes) + (full ? '，容量快满了，可调大上限' : '，超出时先移出最久没用的文件') + '）';
   $('memStats').className = full ? 'hint warn' : 'hint';
   $('memSaveMd').disabled = !alive || !(st.facts || st.topics);
@@ -2009,10 +2026,10 @@ $('setDataDir').addEventListener('click', () => {
   const v = $('dataDir').value.trim(), b = $('setDataDir');
   if (!v) { say('dataStatus', '请先填写或选择新的保存位置。', 'warn'); $('dataDir').focus(); return; }
   b.disabled = true;
-  say('dataStatus', '正在检查……', 'info');
+  say('dataStatus', '正在检查……', 'busy');
   post('/api/data-dir', {path: v}).then(r => {
     if (!confirm(dataConfirmText(r.plan))) { say('dataStatus', '没有更改保存位置。', 'info'); return; }
-    say('dataStatus', r.plan.mode === 'move' ? '正在移动……' : '正在改用……', 'info');
+    say('dataStatus', r.plan.mode === 'move' ? '正在移动……' : '正在改用……', 'busy');
     return post('/api/data-dir', {path: v, confirm: true}).then(d => {
       showDataDir(d.data);
       $('dataDir').value = '';
@@ -2044,9 +2061,9 @@ function showMemUpdate(st) {
   $('memUpdStop').hidden = !(st.running && st.mode === 'manual');
   $('memAuto').checked = st.auto;
   if (st.running && st.mode === 'manual') {
-    say('memUpdStatus', '正在更新知识库：' + (st.stage || '准备') + (st.total ? '，第 ' + Math.min(st.done + 1, st.total) + ' / ' + st.total + ' 批' : '') + '……', 'info');
+    say('memUpdStatus', '正在更新知识库：' + (st.stage || '准备') + (st.total ? '，第 ' + Math.min(st.done + 1, st.total) + ' / ' + st.total + ' 批' : '') + '……', 'busy');
   } else if (st.running) {
-    say('memUpdStatus', '正在空闲时自动更新知识库，提问时会让路……', 'info');
+    say('memUpdStatus', '正在空闲时自动更新知识库，提问时会让路……', 'busy');
   } else if (st.result && st.result.time !== memUpdShown && st.result.text) {
     memUpdShown = st.result.time;
     say('memUpdStatus', st.result.text, {done: 'ok', stopped: 'warn', yielded: 'info', error: 'bad'}[st.result.kind]);
@@ -2090,7 +2107,7 @@ function renderMemLog() {
 }
 $('memUpdate').addEventListener('click', () => {
   $('memUpdate').disabled = true;
-  say('memUpdStatus', '正在更新知识库：准备……', 'info');
+  say('memUpdStatus', '正在更新知识库：准备……', 'busy');
   post('/api/memory-update', {action: 'run'}).then(showMemUpdate)
     .catch(e => { $('memUpdate').disabled = !alive; say('memUpdStatus', failText('更新知识库', e.message, RETRY), 'bad'); });
 });
@@ -2107,6 +2124,13 @@ $('memAuto').addEventListener('change', () => {
   }).catch(e => { $('memAuto').checked = !on; say('memUpdStatus', failText('保存', e.message, RETRY), 'bad'); });
 });
 $('memLog').addEventListener('click', () => togglePanel($('memLog'), $('memLogPanel')));
+$('tocPick').addEventListener('change', () => {
+  const on = $('tocPick').checked;
+  post('/api/settings', {toc_pick: on}).then(() => {
+    state.toc_pick = on;
+    say('tocStatus', on ? '已打开：提问前先让模型看主题页目录。' : '已关闭：提问时只按关键字检索知识库。', 'ok');
+  }).catch(e => { $('tocPick').checked = !on; say('tocStatus', failText('保存', e.message, RETRY), 'bad'); });
+});
 
 // ---------------- 自动收录：勾选的文件夹里的文件自动收录到知识库
 
@@ -2142,7 +2166,7 @@ function showIngest(st) {
   });
   if (sum && sum.skipped_total > skipped.length) ul.appendChild(el('li', 'meta', '……另有 ' + fmtNum(sum.skipped_total - skipped.length) + ' 个'));
   if (!skipped.length && !$('ingestSkippedPanel').hidden) togglePanel($('ingestSkipped'), $('ingestSkippedPanel'), false);
-  if (st.running) say('ingestStatus', '正在自动收录：' + (st.stage || '准备') + '……', 'info');
+  if (st.running) say('ingestStatus', '正在自动收录：' + (st.stage || '准备') + '……', 'busy');
   else if (st.result && st.result.time !== ingestShown) {
     ingestShown = st.result.time;
     say('ingestStatus', st.result.text, st.result.kind === 'error' ? 'bad' : 'ok');
@@ -2154,7 +2178,7 @@ function showIngest(st) {
 function pollIngest() { return api('/api/memory-ingest').then(showIngest).catch(() => {}); }
 $('ingestRun').addEventListener('click', () => {
   $('ingestRun').disabled = true;
-  say('ingestStatus', '正在自动收录：查找要收录的文件……', 'info');
+  say('ingestStatus', '正在自动收录：查找要收录的文件……', 'busy');
   post('/api/memory-ingest', {action: 'run'}).then(showIngest)
     .catch(e => { $('ingestRun').disabled = !alive; say('ingestStatus', failText('收录', e.message, RETRY), 'bad'); });
 });
@@ -2183,7 +2207,7 @@ $('memMb').addEventListener('keydown', ev => { if (ev.key === 'Enter') $('saveMe
 $('memSaveMd').addEventListener('click', () => {
   const b = $('memSaveMd');
   b.disabled = true;
-  say('memStatus', '正在生成 Markdown……', 'info');
+  say('memStatus', '正在生成 Markdown……', 'busy');
   fetch('/api/memory-export', {headers: {'X-Token': TOKEN}}).then(r => {
     if (!r.ok) return r.json().then(j => { throw new Error(j.error || ('HTTP ' + r.status)); });
     return r.blob().then(blob => {
@@ -2229,7 +2253,7 @@ $('ocSave').addEventListener('click', () => {
   if (!key) { say('ocStatus', '请先填写新的 AK。', 'warn'); $('ocKey').focus(); return; }
   const b = $('ocSave');
   b.disabled = true;
-  say('ocStatus', '正在用新 AK 向「' + pid + '」发一条测试请求……', 'info');
+  say('ocStatus', '正在用新 AK 向「' + pid + '」发一条测试请求……', 'busy');
   post('/api/opencode', {action: 'set', provider: pid, key: key}).then(r => {
     $('ocKey').value = '';
     showOpencode(r.info);
@@ -2559,7 +2583,7 @@ $('setPanel').addEventListener('input', updateDirty);
 // 重新探测本机的 llama-server 与 Ollama；shout 为使用者点了「重新查找」，写明找到了什么
 function findLocal(shout) {
   $('findLocal').disabled = true;
-  if (shout) say('localStatus', '正在查找本机模型服务……', 'info');
+  if (shout) say('localStatus', '正在查找本机模型服务……', 'busy');
   return post('/api/local-models').then(r => {
     applyState(r);
     if (!shout) return;
@@ -2595,14 +2619,14 @@ function run(action, truncate) {
   setBusy(true);
   // 等待期间每秒更新已等待时间；phase 为当前阶段的文字
   const t0 = Date.now(), local = currentModel().loopback;
-  let phase = ['正在发送……', 'info'];
+  let phase = ['正在发送……', 'busy'];
   const tick = () => {
     const sec = Math.round((Date.now() - t0) / 1000);
     const slow = local ? '，本机模型正在读取文件，纯 CPU 可能要几分钟，不想等可点「停止」' : '，模型仍在处理，不想等可点「停止」';
     say('askStatus', phase[0] + '已等待 ' + sec + ' 秒' + (sec >= 30 ? slow : '') + '。', phase[1]);
   };
-  answer.onStart = cut => { phase = cut ? ['生成中（已按比例截断每个文件）……', 'warn'] : ['生成中……', 'info']; tick(); };
-  answer.onTool = t => { phase = t ? [({read: '正在读取 ', write: '正在写入 '}[t.kind] || '正在运行 ') + t.name + '……', 'info'] : ['生成中……', 'info']; tick(); };
+  answer.onStart = cut => { phase = cut ? ['生成中（已按比例截断每个文件）……', 'busy'] : ['生成中……', 'busy']; tick(); };
+  answer.onTool = t => { phase = t ? [({read: '正在读取 ', write: '正在写入 '}[t.kind] || '正在运行 ') + t.name + '……', 'busy'] : ['生成中……', 'busy']; tick(); };
   tick();
   const timer = setInterval(tick, 1000);
   answer.stopTimer = () => clearInterval(timer);
@@ -2899,17 +2923,43 @@ $('folder').addEventListener('keydown', ev => { if (ev.key === 'Enter') $('addFo
 
 // 「选择……」：由本机服务弹出系统的目录选择框，只把选中的路径填进输入框，仍由使用者点「添加」或「保存」；
 // 选择框里点取消时输入框不变，也不提示
+// 「选择……」：等待期间每秒更新已等秒数，10 秒后提示窗口可能在浏览器后面；旁边出现「取消」，点了结束选择窗口、状态清空，不设自动超时
 function pickInto(input, b, statusId, title) {
+  const hadFocus = document.activeElement === b;
   b.disabled = true;
-  say(statusId, '请在弹出的窗口里选择文件夹……（窗口可能在浏览器后面）', 'info');
+  const t0 = Date.now();
+  let cancelled = false;
+  const tick = () => {
+    const sec = Math.floor((Date.now() - t0) / 1000);
+    say(statusId, '正在打开选择窗口……已等 ' + sec + ' 秒' + (sec >= 10 ? '。窗口可能在浏览器后面；也可以点「取消」后直接输入路径' : ''), 'busy');
+  };
+  tick();
+  const timer = setInterval(tick, 1000);
+  const cancel = btn('取消', 'pick-cancel', () => {
+    cancelled = true;
+    cancel.disabled = true;
+    post('/api/pick-cancel', {page: PAGE}).catch(() => {});
+  });
+  b.after(cancel);
+  if (hadFocus) cancel.focus();
+  const finish = () => {
+    clearInterval(timer);
+    const back = document.activeElement === cancel;
+    cancel.remove();
+    b.disabled = !alive;
+    if (back) b.focus();
+    return cancelled;
+  };
   post('/api/pick-folder', {start: input.value, title: title, page: PAGE}).then(r => {
+    if (finish()) { say(statusId, ''); return; }
     if (!r.ok) { say(statusId, failText('选择', r.error, '请直接输入路径。'), 'bad'); return; }
     say(statusId, '');
     if (r.path) { input.value = r.path; input.focus(); updateDirty(); }
   }).catch(e => {
+    if (finish()) { say(statusId, ''); return; }
     if (e.status === 409) say(statusId, e.message + '。', 'warn');
     else say(statusId, failText('选择', e.message, '请直接输入路径。'), 'bad');
-  }).then(() => { b.disabled = !alive; });
+  });
 }
 $('pickFolder').addEventListener('click', () => pickInto($('folder'), $('pickFolder'), 'folderStatus', '选择要添加的文件夹'));
 
@@ -2938,7 +2988,7 @@ function renderPlaces(places) {
 
 $('rebuild').addEventListener('click', () => {
   if (!confirm('丢弃现有索引，重新扫描全部 ' + state.folders.length + ' 个文件夹？\n\n不会改动任何文件；文件多时要等一会儿。')) return;
-  post('/api/refresh', {full: true}).then(() => { say('folderStatus', '正在重建索引……', 'info'); refreshFind(); })
+  post('/api/refresh', {full: true}).then(() => { say('folderStatus', '正在重建索引……', 'busy'); refreshFind(); })
     .catch(e => say('folderStatus', failText('重建', e.message, RETRY), 'bad'));
 });
 
@@ -2970,7 +3020,7 @@ function saveCustom(clearKey) {
 $('saveCustom').addEventListener('click', () => saveCustom(false));
 $('testModel').addEventListener('click', () => {
   $('testModel').disabled = true;
-  say('settingsStatus', '正在测试连接……', 'info');
+  say('settingsStatus', '正在测试连接……', 'busy');
   post('/api/test-model', {model: $('model').value}).then(r => {
     if (r.ok) say('settingsStatus', '连接正常：' + r.model + ' 已回复。', 'ok');
     else say('settingsStatus', failText('测试连接', r.error, '请检查接口地址、模型名和 AK 后重试。'), 'bad');
@@ -2993,6 +3043,7 @@ function applyState(s) {
   $('useMemory').checked = state.use_memory;
   $('useMemRow').hidden = !state.memory;
   $('memAuto').checked = state.memory_auto !== false;
+  $('tocPick').checked = state.toc_pick !== false;
   $('memUpdate').disabled = !state.memory || memUpd.running || !alive;
   if (state.memory_mb) fillSaved('memMb', state.memory_mb);
   showMemStats(state.memory_stats);
@@ -3077,7 +3128,7 @@ async function walkEntry(entry, prefix, out) {
 }
 function upSay(cls, msg) {
   const s = $('up-status');
-  s.className = 'ustatus ' + cls;
+  s.className = 'ustatus ' + (cls === 'busy' ? 'info busy' : cls);
   s.textContent = msg;
 }
 function upButtons() {
@@ -3125,11 +3176,11 @@ async function upChoose(getBlob) {
   if (upBusy || upRestarting || !alive) return;
   upBusy = true; upButtons();
   $('up-report').textContent = ''; $('up-go').hidden = true;
-  upSay('info', '正在读取所选内容……');
+  upSay('busy', '正在读取所选内容……');
   try {
     const blob = await getBlob();
     if (blob.size > UP_MAX) throw new Error('文件超过 100 MB');
-    upSay('info', '正在上传并检查……');
+    upSay('busy', '正在上传并检查……');
     upShow(await api('/api/upgrade/check', {method: 'POST', headers: {'Content-Type': 'application/zip'}, body: blob}));
   } catch (err) {
     upSay('bad', '检查失败：' + upWhy(err) + '。请重新选择新版的 zip 或目录。');
@@ -3207,7 +3258,7 @@ function upWatch() {
       }
       upWatch();
     }, () => {
-      if (upRestarting) upSay('info', '正在等待新版启动……');
+      if (upRestarting) upSay('busy', '正在等待新版启动……');
       upWatch();
     });
   }, 600);
@@ -3221,7 +3272,7 @@ $('up-go').addEventListener('click', () => {
       (extras ? '有 ' + extras + ' 个多出来的文件不带到新版，会随旧目录留在「上一版」里。\n' : '') +
       (page ? page + '\n' : '') + '确定' + upCheck.confirm + '？')) return;
   upBusy = true; upButtons();
-  upSay('info', '正在开始升级……');
+  upSay('busy', '正在开始升级……');
   api('/api/upgrade/apply', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id: upCheck.id})})
     .then(() => { $('up-go').hidden = true; upWatch(); })
     .catch(err => { upBusy = false; upButtons(); upSay('bad', '升级失败：' + upWhy(err) + '。请重新选择新版后重试。'); });
@@ -3234,7 +3285,7 @@ $('up-rollback').addEventListener('click', () => {
       (page ? '\n' + page : '') + '\n确定退回？')) return;
   upBusy = true; upButtons();
   $('up-report').textContent = ''; $('up-go').hidden = true;
-  upSay('info', '正在退回上一版……');
+  upSay('busy', '正在退回上一版……');
   api('/api/upgrade/rollback', {method: 'POST'})
     .then(upWatch)
     .catch(err => { upBusy = false; upButtons(); upSay('bad', '退回失败：' + upWhy(err) + '。请稍后重试。'); });

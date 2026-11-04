@@ -8,6 +8,7 @@ import io
 import json
 import logging
 import os
+import re
 import shutil
 import sqlite3
 import sys
@@ -969,7 +970,9 @@ class ChatTest(ServerCase):
         self.assertEqual(''.join(m.get('t', '') for m in lines), '你好，世界')
         self.assertTrue(lines[-1].get('done'))
         sent = json.loads(urllib.request.urlopen(MODEL_BASE + '/last').read())
-        self.assertIn('甲' * 100, sent['messages'][0]['content'])
+        # system 只有规则，文件在最新一问里
+        self.assertNotIn('甲' * 100, sent['messages'][0]['content'])
+        self.assertIn('甲' * 100, sent['messages'][-1]['content'])
 
     def test_too_long(self):
         self.config.char_limit = 60
@@ -1087,11 +1090,15 @@ class ExportTest(ServerCase):
         code, r = self.call('/api/export', {'files': files})
         self.assertEqual(code, 200)
         self.assertEqual((r['files'], r['skipped'], r['chars']), (2, 0, len(r['text'])))
-        self.assertTrue(r['text'].startswith(fa.CITE_RULE))
+        # 与发给模型的一致：规则、文件、重申，没有问题
+        self.assertTrue(r['text'].startswith(fa.LANG_RULE + '\n\n' + fa.CITE_RULE))
         self.assertIn('使用者选了下面 2 个文件', r['text'])
+        self.assertTrue(r['text'].endswith(fa.CITE_REMINDER + '先给结论，再分点。'))
+        self.assertNotIn('使用者的问题', r['text'])
         # 路径从所添加文件夹的名字起写，不带上级部分
-        self.assertIn('===== 文件 1：资料/季度总结.txt =====\n路径：资料/季度总结.txt\n', r['text'])
-        self.assertIn('===== 文件 2：资料/子目录/会议记录.md =====', r['text'])
+        self.assertIn('<document index="1">\n<source>资料/季度总结.txt</source>\n<document_content>\n'
+                      '路径：资料/季度总结.txt\n', r['text'])
+        self.assertIn('<document index="2">\n<source>资料/子目录/会议记录.md</source>', r['text'])
         self.assertNotIn(self.root, r['text'])
         self.assertIn('甲' * 100, r['text'])
         self.assertNotIn('skill', r['text'])
@@ -1113,7 +1120,7 @@ class ExportTest(ServerCase):
         with mock.patch.object(self.st.texts, 'get', side_effect=get):
             code, r = self.call('/api/export', {'files': [bad, good]})
             self.assertEqual((code, r['files'], r['skipped']), (200, 1, 1))
-            self.assertIn('===== 文件 1：资料/季度总结.txt =====', r['text'])
+            self.assertIn('<document index="1">\n<source>资料/季度总结.txt</source>', r['text'])
             self.assertEqual(self.call('/api/export', {'files': [bad]})[0], 400)
 
     def test_only_indexed_paths(self):
@@ -1334,7 +1341,7 @@ class HistoryLimitTest(ServerCase):
         code, lines = self.chat(self.history, truncate=True)
         self.assertTrue(lines[0]['truncated'])
         sent = json.loads(urllib.request.urlopen(MODEL_BASE + '/last').read())
-        self.assertEqual(sent['messages'][0]['content'].count('甲'), 90)
+        self.assertEqual(sent['messages'][-1]['content'].count('甲'), 90)
 
     def test_history_alone_over_limit(self):
         self.config.char_limit = 1000
@@ -1407,13 +1414,21 @@ class CiteTest(ServerCase):
         self.assertEqual(lines[-1]['missing'], [])
 
     def test_rules_before_files_and_repeated_after(self):
-        self.chat([{'role': 'user', 'content': '总结'}])
-        system = json.loads(urllib.request.urlopen(MODEL_BASE + '/last').read())['messages'][0]['content']
+        self.chat([{'role': 'user', 'content': '先问'}, {'role': 'assistant', 'content': '先答'},
+                   {'role': 'user', 'content': '总结'}])
+        msgs = json.loads(urllib.request.urlopen(MODEL_BASE + '/last').read())['messages']
         self.assertIn('不超过 %d 字' % fa.QUOTE_MAX, fa.CITE_RULE)
-        rule, first, again = system.index(fa.CITE_RULE), system.index('===== 文件 1：'), system.index(fa.CITE_REMINDER)
-        self.assertTrue(rule < first < again)
-        self.assertIn(fa.FORMAT_RULE, system)
-        self.assertTrue(system.endswith(fa.CITE_REMINDER + '先给结论，再分点。'))
+        # system 只有规则；历史只有文字；最新一问依次为文件、重申、问题
+        self.assertEqual([m['role'] for m in msgs], ['system', 'user', 'assistant', 'user'])
+        system, last = msgs[0]['content'], msgs[-1]['content']
+        for part in (fa.LANG_RULE, fa.CITE_RULE, fa.FORMAT_RULE, fa.CITE_EXAMPLE, fa.DATA_NOTE):
+            self.assertIn(part, system)
+        self.assertNotIn('<document index', system)
+        self.assertEqual((msgs[1]['content'], msgs[2]['content']), ('先问', '先答'))
+        first, again, q = last.index('<document index="1">'), last.index(fa.CITE_REMINDER), last.index('使用者的问题：')
+        self.assertTrue(first < again < q)
+        self.assertTrue(last.endswith(fa.CITE_REMINDER + '先给结论，再分点。\n\n使用者的问题：\n总结'))
+        self.assertIn('<source>资料/季度总结.txt</source>', last)
 
     def test_supplement_not_checked(self):
         self.config.custom['model'] = 'supp'
@@ -1447,7 +1462,8 @@ class MemoryChatTest(ServerCase):
         return code, [json.loads(line) for line in raw.splitlines() if line.strip()]
 
     def sent(self):
-        return json.loads(urllib.request.urlopen(MODEL_BASE + '/last').read())['messages'][0]['content']
+        msgs = json.loads(urllib.request.urlopen(MODEL_BASE + '/last').read())['messages']
+        return '\n\n'.join(m['content'] for m in msgs)
 
     def test_remember_then_recall_without_files(self):
         code, lines = self.ask('第一阶段什么时候验收', [self.plan])
@@ -1477,7 +1493,7 @@ class MemoryChatTest(ServerCase):
         self.assertEqual(lines[0]['memory']['files'][0]['n'], 2)
         shown = os.path.relpath(self.plan, os.path.dirname(self.docs))
         self.assertEqual(lines[0]['memory']['files'][0]['shown'], shown)
-        self.assertIn('===== 文件 2：%s（来自知识库，节选）=====' % shown, self.sent())
+        self.assertIn('<document index="2">\n<source>%s（来自知识库，节选）</source>' % shown, self.sent())
         self.assertNotIn(self.root, self.sent())
 
     def test_no_files_and_nothing_found(self):
@@ -1585,6 +1601,56 @@ class MemoryUpdateTest(MemoryChatTest):
         self.assertEqual(self.call('/api/memory-update', {'action': 'undo', 'id': True})[0], 400)
         self.assertEqual(self.call('/api/memory', {'action': 'topic', 'id': 1})[1]['count'], 0)
 
+    def make_topic(self):
+        self.ask('第一阶段什么时候验收', [self.plan])
+        self.call('/api/memory-update', {'action': 'run'})
+        self.assertEqual(self.wait()['result']['kind'], 'done')
+        self.assertEqual(self.call('/api/state')[1]['toc_pick'], True)      # 默认开
+
+    def test_toc_pick_adds_pages_keywords_miss(self):
+        self.make_topic()
+        fake_model.FakeModel.last_toc = {}
+        # 关键字对不上任何内容：只靠目录挑页找到「验收安排」
+        code, lines = self.ask('那件事定在哪天')
+        self.assertEqual(code, 200)
+        self.assertIn('验收安排：第一阶段三月底验收（原文：「第一阶段在三月底完成验收」）', self.sent())
+        toc = fake_model.FakeModel.last_toc['messages']
+        self.assertEqual(toc[0]['content'], fa.TOC_PROMPT)
+        self.assertRegex(toc[1]['content'], r'主题页目录：\nT\d+ 验收安排：第一阶段三月底验收\n\n问题：那件事定在哪天$')
+        # 关掉开关：不再先看目录，关键字对不上时找不到
+        self.assertEqual(self.call('/api/settings', {'toc_pick': False})[1]['toc_pick'], False)
+        self.assertFalse(fa.Config(self.config.path).toc_pick)
+        fake_model.FakeModel.last_toc = {}
+        code, r = self.ask('那件事定在哪天')
+        self.assertEqual(code, 400)
+        self.assertEqual(fake_model.FakeModel.last_toc, {})
+
+    def test_toc_pick_failure_falls_back_to_keywords(self):
+        self.make_topic()
+        real = fa.stream_chat
+
+        def chat(tg, msgs, *a, **k):
+            if msgs[0]['content'] == fa.TOC_PROMPT:
+                raise fa.ModelError('timeout')
+            return real(tg, msgs, *a, **k)
+        with mock.patch.object(fa, 'stream_chat', side_effect=chat):
+            code, lines = self.ask('第一阶段验收')
+            self.assertEqual(code, 200)
+            self.assertIn('验收安排：第一阶段三月底验收', self.sent())
+            code, r = self.ask('那件事定在哪天')
+            self.assertEqual(code, 400)
+        # 看不懂的回答、不认识的编号同样退回只用关键字
+        with mock.patch.object(fa, 'stream_chat', return_value=iter(['{"topics": ["T999", "x"]}'])):
+            self.assertEqual(self.handler_pick('问题'), [])
+        with mock.patch.object(fa, 'stream_chat', return_value=iter(['看不懂'])):
+            self.assertEqual(self.handler_pick('问题'), [])
+
+    def handler_pick(self, question):
+        h = fa.Handler.__new__(fa.Handler)
+        h.state = self.st
+        targets, default = fa.model_targets(self.st.config, self.st.local_models)
+        return h.pick_topics(targets[default], question)
+
     def test_nothing_to_do_and_errors(self):
         self.call('/api/memory-update', {'action': 'run'})
         self.assertEqual(self.wait()['result']['text'], '没有要更新的内容。')
@@ -1661,6 +1727,13 @@ class TitleTest(ServerCase):
         self.assertEqual(self.call('/api/title', {'question': 1, 'answer': '答'})[1], {'ok': False})
         self.assertEqual(self.call('/api/title', {'question': '问', 'answer': '答'}, token='bad')[0], 403)
 
+    def test_title_prompt_follows_question_language(self):
+        self.call('/api/title', {'question': 'Summarize the plan', 'answer': 'ok'})
+        sent = fake_model.FakeModel.last_title['messages'][0]['content']
+        self.assertEqual(sent, fa.TITLE_PROMPT % (fa.TITLE_CHARS, 'Summarize the plan', 'ok'))
+        self.assertTrue(fa.TITLE_PROMPT.startswith('把下面这次问答概括成'))
+        self.assertIn('用提问的语言写', fa.TITLE_PROMPT)
+
     def test_clean_title(self):
         self.assertEqual(fa.clean_title('<think>想想</think>\n\n标题：《季度工作总结》。\n解释'), '季度工作总结')
         self.assertEqual(fa.clean_title('一二三四五六七八九十十一'), '一二三四五六七八九十')
@@ -1699,7 +1772,9 @@ class ClearStartsNewChatTest(ServerCase):
         self.chat([{'role': 'user', 'content': '旧问题'}])
         self.chat([{'role': 'user', 'content': '新问题'}])
         sent = json.loads(urllib.request.urlopen(MODEL_BASE + '/last').read())
-        self.assertEqual([m['content'] for m in sent['messages'][1:]], ['新问题'])
+        self.assertEqual(len(sent['messages']), 2)
+        self.assertTrue(sent['messages'][1]['content'].endswith('使用者的问题：\n新问题'))
+        self.assertNotIn('旧问题', json.dumps(sent, ensure_ascii=False))
 
 
 
@@ -1810,7 +1885,8 @@ class EmptyAskTest(SkillCase):
         code, lines = self.chat([{'role': 'user', 'content': '  '}], files=[], skill='plain')
         self.assertEqual(code, 200)
         sent = json.loads(urllib.request.urlopen(MODEL_BASE + '/last').read())
-        self.assertEqual(sent['messages'][-1], {'role': 'user', 'content': fa.EMPTY_ASK})
+        self.assertEqual(sent['messages'][-1]['role'], 'user')
+        self.assertTrue(sent['messages'][-1]['content'].endswith('使用者的问题：\n' + fa.EMPTY_ASK))
 
     def test_empty_question_without_skill_rejected(self):
         code, r = self.chat([{'role': 'user', 'content': ''}])
@@ -1843,7 +1919,7 @@ class SkillChatTest(SkillCase):
         self.assertLess(system.index('用一句话回答。'), system.index(fa.CITE_RULE))
         # 选了 skill 时格式按 skill 的说明
         self.assertNotIn(fa.FORMAT_RULE, system)
-        self.assertTrue(system.endswith(fa.CITE_REMINDER))
+        self.assertTrue(sent['messages'][-1]['content'].endswith(fa.CITE_REMINDER + '\n\n使用者的问题：\n做吧'))
 
     def test_no_files_needs_skill(self):
         code, r = self.call('/api/chat', {'files': [], 'messages': [{'role': 'user', 'content': '做吧'}],
@@ -1915,6 +1991,29 @@ class SkillChatTest(SkillCase):
         code, lines = self.ask('call:nope:{}')
         tool = next(m['tool'] for m in lines if 'tool' in m)
         self.assertIn('没有这个工具', tool['error'])
+
+    def test_errors_tell_model_how_to_fix(self):
+        # 交给模型的报错写明原因和怎么改；页面上的运行记录只写原因
+        cases = [('call:read_skill_file:{"path": "nope.md"}', ['skill 目录里没有这个文件：nope.md', '可读的文件：', 'ref.md']),
+                 ('call:run_script:{"script": "ref.md"}', ['只能运行 .py 或 .sh 脚本', '可运行的脚本：scripts/echo.py']),
+                 ('call:nope:{}', ['没有这个工具：nope', '只能用：read_skill_file、run_script、write_work_file']),
+                 ('call:read_skill_file:{bad', ['参数不是合法的 JSON', '请按工具说明给出一个 JSON 对象'])]
+        for model, want in cases:
+            code, lines = self.ask(model)
+            result = next(m['t'] for m in lines if m.get('t', '').startswith('结果：'))
+            for w in want:
+                self.assertIn(w, result, model)
+            tool = next(m['tool'] for m in lines if 'tool' in m)
+            self.assertNotIn('fix', tool)
+
+    def test_tool_descriptions(self):
+        tools = {t['function']['name']: t['function']['description'] for t in fa.skill_tools(
+            {'refs': ['ref.md'], 'scripts': ['scripts/echo.py']})}
+        self.assertEqual(tools['read_skill_file'], fa.READ_TOOL_DESC + 'ref.md')
+        self.assertEqual(tools['run_script'], fa.RUN_TOOL_DESC + 'scripts/echo.py')
+        self.assertEqual(tools[fa.WRITE_TOOL], fa.WRITE_TOOL_DESC)
+        for d in tools.values():
+            self.assertIn('{"', d)      # 每个工具都给了参数示例
 
     def test_tool_call_limit(self):
         code, lines = self.ask('loop:read_skill_file:{"path": "ref.md"}')
@@ -2251,6 +2350,24 @@ class PickerTest(ServerCase):
         self.assertLess(time.monotonic() - t0, 5)
         self.assertEqual(out['r'][1], {'ok': True, 'path': None})
 
+    def test_cancel_ends_picker(self):
+        # 没有选择窗口时取消也返回 ok
+        self.assertEqual(self.call('/api/pick-cancel', {'page': 'p1'}), (200, {'ok': True}))
+        t, out = self.start_slow(30)
+        # 令牌、Origin 不对时拒绝，选择窗口照旧开着
+        self.assertEqual(self.call('/api/pick-cancel', {'page': 'p1'}, token='bad')[0], 403)
+        self.assertEqual(self.call('/api/pick-cancel', {'page': 'p1'}, headers={'Origin': 'http://evil.example'})[0], 403)
+        # 别的页面取消不影响这个页面打开的窗口
+        self.assertEqual(self.call('/api/pick-cancel', {'page': 'p2'}), (200, {'ok': True}))
+        time.sleep(0.5)
+        self.assertTrue(self.st.picker.busy())
+        t0 = time.monotonic()
+        self.assertEqual(self.call('/api/pick-cancel', {'page': 'p1'}), (200, {'ok': True}))
+        t.join(10)
+        self.assertLess(time.monotonic() - t0, 5)
+        self.assertEqual(out['r'], (200, {'ok': True, 'path': None}))
+        self.assertFalse(self.st.picker.busy())
+
 
 class PageVersionTest(unittest.TestCase):
     def test_footer_default_matches_version(self):
@@ -2264,6 +2381,26 @@ class PageVersionTest(unittest.TestCase):
         self.assertIn('<span id="ver">资料管家 帮助 v%s</span>' % fa.VERSION, page)
         self.assertIn('<title>资料管家 帮助</title>', page)
         self.assertNotRegex(page, r'(?i)(src|href)=["\']https?://')      # 不加载网络资源
+
+    def test_help_prompts_match_code(self):
+        # 帮助页「原理与提示词」里的提示词全文与代码常量逐字一致
+        import html
+        with open(os.path.join(TOOL, 'help.html'), encoding='utf-8') as f:
+            page = f.read()
+        found = dict(re.findall(r'<pre data-prompt="(\w+)">(.*?)</pre>', page, re.S))
+        want = fa.prompt_texts()
+        self.assertEqual(sorted(found), sorted(want))
+        for name, text in found.items():
+            self.assertEqual(html.unescape(text), want[name], name)
+        # 一个不漏：发给模型的提示词常量都列在帮助页（SCRIPT_NOTE 只是 SKILL_CITE_NOTE 里的一个词）
+        consts = {k for k, v in vars(fa).items() if isinstance(v, str) and
+                  re.search(r'_(RULE|NOTE|PROMPT|INTRO|REMINDER|DESC|EXAMPLE)$', k)} - {'SCRIPT_NOTE'}
+        self.assertLessEqual(consts, set(want))
+        self.assertEqual(want['TITLE_PROMPT'], fa.TITLE_PROMPT % (fa.TITLE_CHARS, '〈问题〉', '〈回答节选〉'))
+        self.assertNotIn('%s', ''.join(want.values()))
+        self.assertNotIn('%d', ''.join(want.values()))
+        self.assertIn('id="principles"', page)
+        self.assertIn('href="#principles"', page)
 
     def test_desktop_name(self):
         with open(os.path.join(TOOL, '资料管家.desktop'), encoding='utf-8') as f:

@@ -1,0 +1,48 @@
+{
+  "skill": "clarify-needs",
+  "scenarios": [
+    {
+      "name": "笼统的任务先提一个问题",
+      "files": {
+        "项目计划.txt": "项目计划\n\nProject Atlas 第一阶段在三月底完成验收。\n\n预算总额为一百万元，由财务部负责。\n"
+      },
+      "question": "帮我把这个计划整理一下",
+      "expect": {
+        "tools": [],
+        "contains": [
+          "（推荐）"
+        ],
+        "not_contains": [],
+        "check": "只问一个问题；2-4 个选项加「其他」；第一个选项标（推荐）并给一句理由；不直接开始整理"
+      }
+    },
+    {
+      "name": "能从文件查到的不问",
+      "files": {
+        "项目计划.txt": "项目计划\n\nProject Atlas 第一阶段在三月底完成验收。\n\n预算总额为一百万元，由财务部负责。\n"
+      },
+      "question": "先问我问题，再帮我写一份给财务部的预算说明",
+      "expect": {
+        "tools": [],
+        "contains": [
+          "（推荐）"
+        ],
+        "not_contains": [
+          "预算总额是多少"
+        ],
+        "check": "不问文件里已有的预算金额、负责部门；先问会影响后续的关键决定（如用途、篇幅）"
+      }
+    },
+    {
+      "name": "没交代任务时先问要做什么",
+      "files": {},
+      "question": "需求澄清",
+      "expect": {
+        "tools": [],
+        "contains": [],
+        "not_contains": [],
+        "check": "用一句话问要做什么任务，不编造任务"
+      }
+    }
+  ]
+}

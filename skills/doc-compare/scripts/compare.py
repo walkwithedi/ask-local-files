@@ -31,7 +31,7 @@ def resolve(arg, files):
     if arg.isdigit():
         n = int(arg)
         if not 1 <= n <= len(files):
-            raise Fail('序号 %s 超出范围：已选 %d 个文件' % (arg, len(files)))
+            raise Fail('序号 %s 超出范围：已选 %d 个文件。请在「已选」里选两个文件（旧的在前），或写 compare.py 旧序号 新序号' % (arg, len(files)))
         return files[n - 1]
     return arg
 
@@ -40,7 +40,7 @@ def read_plain(path):
     with open(path, 'rb') as f:
         raw = f.read()
     if b'\0' in raw[:8192]:
-        raise Fail('%s 看起来不是文本文件' % path)
+        raise Fail('%s 看起来不是文本文件。请换成能取出文字的格式（docx、xlsx、pptx、pdf、txt 等）' % path)
     for enc in ('utf-8-sig', 'gb18030'):
         try:
             return raw.decode(enc)
@@ -65,7 +65,7 @@ def extract(path):
     with tempfile.TemporaryDirectory(prefix='doc-compare-') as tmp:
         md, _ = doc2kb_core.convert(path, ext, tmp, report, save_images=False)
     if not md.strip():
-        raise Fail('%s 没有取出文字（可能是扫描件）' % path)
+        raise Fail('%s 没有取出文字（可能是扫描件）。请告诉使用者先转成可选中文字的版本再比对' % path)
     return md
 
 
@@ -128,7 +128,7 @@ def report(old_path, new_path, a, b, diffs, context, only):
 def write_html(name, old_path, new_path, a, b):
     out_dir = os.environ.get('ASK_OUT')
     if not out_dir:
-        raise Fail('没有输出目录（ASK_OUT），不能生成报告')
+        raise Fail('没有输出目录（ASK_OUT），不能生成报告。请去掉 --html 只看文字结果')
     name = os.path.basename(name) or '对比报告.html'
     if not name.lower().endswith('.html'):
         name += '.html'
@@ -159,7 +159,7 @@ def main(argv=None):
     try:
         pair = args.files or ['1', '2']
         if len(pair) != 2:
-            raise Fail('要给两个文件：旧的在前，新的在后')
+            raise Fail('要给两个文件：旧的在前，新的在后。请写 compare.py 旧序号 新序号，或不带参数比对已选的第 1、2 个')
         old_path, new_path = (resolve(x, files) for x in pair)
         a, b = lines_of(extract(old_path)), lines_of(extract(new_path))
         diffs = changes(a, b)
@@ -170,7 +170,7 @@ def main(argv=None):
         print('出错：%s' % e)
         return 2
     except OSError as e:
-        print('出错：读写文件失败（%s）' % e)
+        print('出错：读写文件失败（%s）。请确认文件还在、可读后重试' % e)
         return 2
     return 0
 

@@ -1,0 +1,106 @@
+{
+  "skill": "office-gen",
+  "scenarios": [
+    {
+      "name": "整理成 Word",
+      "files": {
+        "会议记录.txt": "Project Atlas 周例会记录\n\n时间：2026年3月2日 10:00-11:00\n参会：张三（项目经理）、李四（开发）、王五（测试）\n\n张三：第一阶段验收定在三月底。\n李四：接口联调还差两个模块，下周三前完成。\n王五：测试环境下周一可用。\n张三：预算是否追加，待下次例会确定。\n"
+      },
+      "question": "把会议要点整理成 Word 文档",
+      "script": {
+        "run": "scripts/make_docx.py",
+        "args": [
+          "纪要.md",
+          "--out",
+          "会议纪要",
+          "--title",
+          "Project Atlas 周例会纪要"
+        ],
+        "work": {
+          "纪要.md": "# Project Atlas 周例会纪要\n\n## 决定\n\n- 第一阶段验收定在三月底\n\n## 待办\n\n| 负责人 | 事项 | 期限 |\n|---|---|---|\n| 李四 | 接口联调 | 下周三 |\n"
+        },
+        "output": [
+          "会议纪要.docx"
+        ],
+        "files": [
+          "会议纪要.docx"
+        ]
+      },
+      "expect": {
+        "tools": [
+          "write_work_file",
+          "run_script"
+        ],
+        "contains": [
+          "保存"
+        ],
+        "not_contains": [],
+        "check": "先写 .md 再运行 make_docx.py；回答说明文件名和主要章节，提醒点「保存」"
+      }
+    },
+    {
+      "name": "整理成 Excel",
+      "files": {
+        "会议记录.txt": "Project Atlas 周例会记录\n\n时间：2026年3月2日 10:00-11:00\n参会：张三（项目经理）、李四（开发）、王五（测试）\n\n张三：第一阶段验收定在三月底。\n李四：接口联调还差两个模块，下周三前完成。\n王五：测试环境下周一可用。\n张三：预算是否追加，待下次例会确定。\n"
+      },
+      "question": "把待办事项做成 Excel 表",
+      "script": {
+        "run": "scripts/make_xlsx.py",
+        "args": [
+          "待办.json",
+          "--out",
+          "待办事项"
+        ],
+        "work": {
+          "待办.json": "{\"sheets\": [{\"name\": \"待办\", \"rows\": [[\"负责人\", \"事项\", \"期限\"], [\"李四\", \"接口联调\", \"下周三\"], [\"王五\", \"准备测试环境\", \"下周一\"]]}]}"
+        },
+        "output": [
+          "待办事项.xlsx"
+        ],
+        "files": [
+          "待办事项.xlsx"
+        ]
+      },
+      "expect": {
+        "tools": [
+          "write_work_file",
+          "run_script"
+        ],
+        "contains": [
+          "保存"
+        ],
+        "not_contains": [],
+        "check": "JSON 合法，第一行为表头；回答说明工作表和行数"
+      }
+    },
+    {
+      "name": "JSON 写错时改正后重跑",
+      "files": {
+        "会议记录.txt": "Project Atlas 周例会记录\n\n时间：2026年3月2日 10:00-11:00\n参会：张三（项目经理）、李四（开发）、王五（测试）\n\n张三：第一阶段验收定在三月底。\n李四：接口联调还差两个模块，下周三前完成。\n王五：测试环境下周一可用。\n张三：预算是否追加，待下次例会确定。\n"
+      },
+      "question": "生成一个待办 Excel",
+      "script": {
+        "run": "scripts/make_xlsx.py",
+        "args": [
+          "坏.json"
+        ],
+        "work": {
+          "坏.json": "{\"sheets\": [}"
+        },
+        "output": [
+          "生成失败"
+        ],
+        "files": []
+      },
+      "expect": {
+        "tools": [
+          "write_work_file",
+          "run_script"
+        ],
+        "contains": [],
+        "not_contains": [],
+        "check": "脚本输出「生成失败」时按原因改正 JSON 后重新写入、重新运行，不在回答里贴整份内容代替文件"
+      }
+    }
+  ]
+}
