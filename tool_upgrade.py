@@ -8,6 +8,8 @@
 升级在原位置替换工具目录的内容，路径不变，桌面链接、菜单项与目录里保留的设置不受影响：
   1. 解压 zip（或复制解压好的目录）到工具目录旁的临时目录「.<目录名>.升级中」；
   2. 按保留清单 upgrade-keep.txt（一行一个相对路径，可为空，# 开头为注释）把文件从旧目录复制进来；
+     写成「move: 相对路径」的条目改为搬过来（同一文件系统内改名，不复制，旧目录里随之没有），用于很大的
+     数据目录；退回上一版时同样把它搬回换上的版本。
   3. 保留可执行权限（去掉 setuid 等特殊位），根目录的 .desktop 设为可执行；
   4. 旧目录改名为「.<目录名>.上一版」（原有的上一版在成功后删除，只留一份），新目录改名为原目录名。
 任一步失败都恢复原样并删除临时目录。退回上一版把「上一版」与当前目录对调。
@@ -42,7 +44,8 @@ import time
 import uuid
 import zipfile
 
-MODULE_VERSION = '1.1'
+MODULE_VERSION = '1.2'
+MOVE_PREFIX = 'move:'
 LOG_FORMAT = '%(asctime)s [%(levelname)s] %(name)s.%(funcName)s:%(lineno)d - %(message)s'
 log = logging.getLogger('tool_upgrade')
 
@@ -531,10 +534,23 @@ def read_keep(path):
     return out
 
 
+def split_move(s):
+    """(相对路径, 是否搬走)：「move: 路径」为搬走的条目。"""
+    s = s.strip()
+    if s.lower().startswith(MOVE_PREFIX):
+        return s[len(MOVE_PREFIX):].strip(), True
+    return s, False
+
+
+def moved_keep(items):
+    """保留清单里搬走的条目（规范化后的相对路径集合）。"""
+    return {norm_keep([s])[0] for s in items if split_move(s)[1]}
+
+
 def norm_keep(items):
     out = []
     for s in items:
-        parts = safe_parts(s.strip().replace(os.sep, '/'))
+        parts = safe_parts(split_move(s)[0].replace(os.sep, '/'))
         if parts is None:
             raise UpgradeError('keep_bad', name=s)
         rel = '/'.join(parts)
@@ -598,6 +614,7 @@ def inspect(tool_dir, source, main=(), lang=None, extra_keep=()):
         if src is not None:
             src.close()
     rep.pop('_keep', None)
+    rep.pop('_move', None)
     rep['ok'] = not rep['errors']
     return rep
 
@@ -643,7 +660,11 @@ def _inspect(tool_dir, source, main, lang, extra_keep, rep):
         if new_keep is not None:
             keep = norm_keep(keep + [s.strip() for s in new_keep.splitlines()
                                      if s.strip() and not s.strip().startswith('#')])
+        raw = read_keep(os.path.join(tool_dir, KEEP_FILE)) + list(extra_keep)
+        if new_keep is not None:
+            raw += [s.strip() for s in new_keep.splitlines() if s.strip() and not s.strip().startswith('#')]
         rep['_keep'] = keep
+        rep['_move'] = moved_keep(raw)
         tree = list_tree(tool_dir)
         kept = [r for r in tree if under_any(r, keep)]
         rep['keep'] = kept[:MAX_LISTED]
@@ -670,8 +691,37 @@ def _rmtree(path):
         os.unlink(path)
 
 
-def _copy_keep(old, new, keep):
+def _move_keep(old, new, rels, done):
+    """把 rels 从 old 改名搬到 new（同一文件系统，不复制）；搬好的记进 done 以便失败时搬回。"""
+    for rel in rels:
+        src = os.path.join(old, *rel.split('/'))
+        if not os.path.lexists(src) or not inside(old, os.path.dirname(src)):
+            continue
+        dst = os.path.join(new, *rel.split('/'))
+        if not inside(new, os.path.dirname(dst)):
+            raise UpgradeError('keep_bad', name=rel)
+        if os.path.lexists(dst):
+            _rmtree(dst)
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        os.rename(src, dst)
+        done.append((dst, src))
+        log.info('moved %s', rel)
+
+
+def _move_back(done):
+    for dst, src in reversed(done):
+        try:
+            os.makedirs(os.path.dirname(src), exist_ok=True)
+            os.rename(dst, src)
+        except OSError as e:
+            log.error('cannot move %s back: %s', src, e)
+    del done[:]
+
+
+def _copy_keep(old, new, keep, move=()):
     for rel in keep:
+        if rel in move:
+            continue
         src = os.path.join(old, *rel.split('/'))
         if not os.path.lexists(src):
             continue
@@ -740,6 +790,7 @@ def apply(tool_dir, source, main=(), lang=None, extra_keep=(), progress=None):
         src.close()
         raise UpgradeError('refused', why='；'.join(rep['errors']) if lang == 'zh' else '; '.join(rep['errors']))
     moved_old = moved_prev = False
+    moved = []
     try:
         for p in (staging, prev_old):
             if os.path.lexists(p):
@@ -748,7 +799,7 @@ def apply(tool_dir, source, main=(), lang=None, extra_keep=(), progress=None):
         stage('stage_unpack')
         src.extract(staging)
         stage('stage_keep')
-        _copy_keep(tool_dir, staging, rep['_keep'])
+        _copy_keep(tool_dir, staging, rep['_keep'], rep['_move'])
         for n in os.listdir(staging):
             p = os.path.join(staging, n)
             if n.endswith('.desktop') and os.path.isfile(p) and not os.path.islink(p):
@@ -758,6 +809,8 @@ def apply(tool_dir, source, main=(), lang=None, extra_keep=(), progress=None):
         if os.path.lexists(previous):
             _fail_rename(previous, prev_old)
             moved_prev = True
+        # 搬走的条目最后搬：之前任一步失败都不用搬回
+        _move_keep(tool_dir, staging, sorted(rep['_move']), moved)
         _fail_rename(tool_dir, previous)
         moved_old = True
         _fail_rename(staging, tool_dir)
@@ -766,6 +819,7 @@ def apply(tool_dir, source, main=(), lang=None, extra_keep=(), progress=None):
         try:
             if moved_old and not os.path.lexists(tool_dir):
                 os.rename(previous, tool_dir)
+            _move_back(moved)
             if moved_prev and not os.path.lexists(previous):
                 os.rename(prev_old, previous)
         except OSError as e2:
@@ -781,6 +835,7 @@ def apply(tool_dir, source, main=(), lang=None, extra_keep=(), progress=None):
     _gio_trust(previous, tool_dir)
     log.info('upgraded %s %s -> %s', name, rep['current'], rep['new'])
     rep.pop('_keep', None)
+    rep.pop('_move', None)
     rep['previous'] = previous
     rep['message'] = text(lang, 'done_upgrade', new=rep['new'], prev=previous)
     return rep
@@ -821,14 +876,20 @@ def rollback(tool_dir, lang=None, progress=None):
         raise UpgradeError('fail_rollback', why=text(lang, 'parent_ro', path=parent))
     if os.path.lexists(swapping):
         _rmtree(swapping)
-    step = 0
     try:
+        move = sorted(moved_keep(read_keep(os.path.join(tool_dir, KEEP_FILE))))
+    except UpgradeError as e:
+        raise UpgradeError('fail_rollback', why=e.message(lang))
+    step = 0
+    moved = []
+    try:
+        _move_keep(tool_dir, previous, move, moved)     # 搬走的数据跟着换上的版本走
         _fail_rename(tool_dir, swapping)
         step = 1
         _fail_rename(previous, tool_dir)
         step = 2
         _fail_rename(swapping, previous)
-    except OSError as e:
+    except (OSError, UpgradeError) as e:
         log.error('rollback failed at step %d: %s', step, e)
         try:
             if step == 2:
@@ -838,7 +899,9 @@ def rollback(tool_dir, lang=None, progress=None):
                 os.rename(swapping, tool_dir)
         except OSError as e2:
             log.error('restore failed: %s', e2)
-        raise UpgradeError('fail_rollback', why=e.strerror or str(e))
+        _move_back(moved)
+        why = e.message(lang) if isinstance(e, UpgradeError) else (e.strerror or str(e))
+        raise UpgradeError('fail_rollback', why=why)
     _gio_trust(previous, tool_dir)
     log.info('rolled back %s %s -> %s', name, info['current'], info['previous'])
     out = rollback_info(tool_dir)

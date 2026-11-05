@@ -65,7 +65,8 @@ def run_scenario(skill, sc, model):
         with open(os.path.join(conf, 'config.json'), 'w', encoding='utf-8') as f:
             json.dump({'folders': [docs], 'custom': model, 'model': 'custom', 'memory': False}, f, ensure_ascii=False)
         env = dict(os.environ, HOME=home, XDG_CONFIG_HOME=os.path.join(home, '.config'),
-                   XDG_CACHE_HOME=os.path.join(home, '.cache'), LOG_LEVEL='ERROR', DISPLAY='', WAYLAND_DISPLAY='')
+                   XDG_CACHE_HOME=os.path.join(home, '.cache'), LOG_LEVEL='ERROR', DISPLAY='', WAYLAND_DISPLAY='',
+                   ASK_LOCAL_FILES_DATA=os.path.join(home, 'data'))  # 不在工具目录里建「数据」、写 data-dir.txt
         port = free_port()
         proc = subprocess.Popen([sys.executable, os.path.join(TOOL, 'ask_local_files.py'), '--no-browser', '--port',
                                  str(port)], env=env, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)

@@ -1,4 +1,6 @@
-# 升级时带到新版的文件，一行一个相对路径（见 tool_upgrade.py）
-# data-dir.txt：保存位置文件（知识库、设置与令牌放在别处时才有）
+# 升级时带到新版的文件，一行一个相对路径（见 tool_upgrade.py）；「move: 路径」为整个搬过去，不复制
+# 数据：默认保存位置（知识库、设置与令牌），升级时整个搬到新版
+move: 数据
+# data-dir.txt：保存位置文件
 data-dir.txt
 ask_local_files.log
