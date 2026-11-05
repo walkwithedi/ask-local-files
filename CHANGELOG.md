@@ -1,5 +1,52 @@
 # Changelog
 
+## 2.30.0
+
+- 管理文件夹 ("manage folders") opens as a large modal dialog (full screen on narrow screens); the rest of the page cannot be used while it is open. 完成 ("done") or Esc closes it, returns focus to the button and refreshes the file list; rebuild progress shows inside it. With no folders, the 文件 tab no longer opens it by itself, and "no folders yet" is said once, in the list, with an 添加文件夹 ("add folders") button.
+- Storage location: a location recorded as the tool folder itself, or a folder inside it other than `数据/`, is moved into `数据/` on start, with a notice (nothing is merged when `数据/` already holds data; a failed move is undone and the old place used for this run). Changing the location to the tool folder itself counts as its `数据/`; any other folder inside it is refused, since it would not be carried to a new version.
+- 从上一版取回 ("restore from the previous version"): when the knowledge base is empty after an upgrade and the previous version holds one with content, a notice and this button appear. It only copies; the previous version is untouched and files of the same name are kept as `<name>.取回前`. New endpoint `/api/data-restore`; the storage location info gains `previous`.
+
+## 2.29.0
+
+- Automatic inclusion takes only the formats doc2kb reads (Word, Excel, PowerPoint, WPS, PDF, e-mail) plus txt and Markdown; web pages, code, tables and configuration files are listed as 格式不自动收录 ("format not included automatically"). Files of these formats included earlier count as outside the automatic inclusion scope: kept, no longer updated or extracted, and removable with 移出不在自动收录范围内的文件 ("remove files outside the automatic inclusion scope").
+- The three knowledge base tabs refresh by themselves: at most every 5 seconds while inclusion or organising runs, after each organising batch, every 15 seconds otherwise; only the visible tab, keeping search, expanded entries and scroll position. The status after 立即收录 no longer sticks at "including".
+- Every button has a tooltip; 概览 gains 收录、整理是什么 ("what inclusion and organising are"). The batch size boxes are wide enough for their largest values.
+- 保存位置 ("storage location") moved from the 通用 tab of the settings panel to the knowledge base settings, and the 通用 tab is gone. The default location is `数据/` in the tool folder; when the home folder is used instead, the reason is shown with 改存到安装目录…… ("store in the tool folder"). `/api/data-dir` accepts `tool`; the storage location info gains `tool`. Statistics' `outside` includes files in formats no longer included; the left-out list gains the reason `format`.
+
+## 2.28.0
+
+- Knowledge base and question prompts rewritten in numbered layers (input, task, rules, output); JSON fields and fixed phrases are unchanged. Organising: changing a topic must keep all its points; conclusions that fit an existing topic do not get a near-duplicate title; a newer statement replaces an older one only when it is clearly newer; certainty such as "proposed" or "to be decided" is kept. Extraction: numbers, units, amounts and dates are copied as written; extraction rules move to version 4 (no automatic re-extraction; use 按新办法重新整理全部). Questions: citation rules point at the files in `<documents>`; cited sentences must name their subject; no citations inside table cells. Replies are parsed with `<think>` sections removed. Topic picking may take 45 seconds instead of 20, title summaries 60 instead of 30 (local models unchanged).
+
+## 2.27.0
+
+- 关系图 ("graph") in 概览: a full-window, read-only view of topics, conclusions and files; click a node to expand one level, drag, zoom and search; the side panel offers 展开, 在主题与结论里查看 and adding the source files to 已选. A tree list with the same content works with the keyboard and screen readers; narrow screens show only the list. At most 300 nodes at a time. New endpoint `/api/graph`; the knowledge base gains an index, without a database version change.
+
+## 2.26.0
+
+- Conclusions are extracted and organised in batches of files: queued files grouped by folder, oldest first, small ones joined into one batch (by default at most 30,000 characters and 20 files, set in the knowledge base settings) and filed into topics right after each batch; large files go in several batches with the file start and earlier conclusions. A failing batch is retried and split; single files that still fail are skipped, listed and can be retried. Each round ends by checking the topics it touched. 概览 shows the batch plan and the latest batches. Changed files drop conclusions whose quote is gone and are extracted again from the start. Extraction rules version 3; rule changes no longer trigger re-extraction; 按新办法重新整理全部 ("reorganise everything the new way") added. New settings `xbatch_chars`, `xbatch_files`; `/api/memory-update` gains `plan` and `log`; `/api/memory` gains `reorganize` and `retry_xfail`; new `/api/memory-reorg`; statistics gain `xfailed`.
+
+## 2.25.0
+
+- The knowledge base, settings and token live in `数据/` in the tool folder by default. The first start moves the old data from the home folder there and writes `data-dir.txt`; when that fails or the tool folder is not writable, the home folder is used for this run with a notice. Upgrade and rollback move `数据/` as a whole (upgrade module 1.2, `move:` entries).
+- 清空知识库 stops answers, inclusion and organising first, then deletes and recreates the database file and the file index cache; the dialog lists counts and sizes and warns that an answer in progress will be stopped; automatic inclusion pauses until 立即收录 or the next start; questions are refused while clearing. 概览 gains 移出不在自动收录文件夹里的文件.
+- The server exits 5 seconds after the last page closes (instead of 30 minutes); 退出 stops at once and stops all background tasks. `/api/memory` gains `outside`; statistics gain `points`; inclusion status gains `paused`; `/api/quit` always returns `waiting: false`; the storage location info gains `home` and `notice`.
+
+## 2.24.0
+
+- Upgrade and rollback no longer wait forever: they wait only for answers being written (including skill scripts) and manual organising, not for automatic inclusion or idle-time organising, which stop and resume on the new version. The wait says what it is waiting for and can be cancelled with 取消等待, leaving the tool folder unchanged; reloading the page during the wait shows the progress again. `/api/upgrade` gains `wait_for`; new `POST /api/upgrade/cancel` (409 when not waiting).
+
+## 2.23.0
+
+- Unticking automatic inclusion or removing a folder takes its files out of the extraction and review queues; what is stored stays and is still consulted. Folders already removed or unticked are handled on the next inclusion check. The confirmation says how many files leave the queue; cancelling restores the tick. 概览 counts files outside the ticked folders. Re-ticking continues where extraction left off. `/api/folders` gains a read-only `count`; unticking and removing return `parked`; statistics gain `outside`.
+
+## 2.22.0
+
+- Leaner 文件 tab: sorting and the three tick boxes moved into 选项 ▸ ("options"), closed by default and remembered, reading 选项（N 项已改） when changed. The knowledge base settings gear is labelled 设置. Your own skills folder is no longer shown when no skill is chosen. The summary next to 发送 shows the endpoint address on hover only; unauthenticated endpoints are still named.
+
+## 2.21.0
+
+- The page is reorganised around the knowledge base, with the same two columns and file finding: 找文件 becomes the 知识库 card with the tabs 文件 (finding files, with an inclusion mark on each file), 概览 (progress, recent topics, empty states) and 主题与结论 (search, 50 at a time). The knowledge base settings moved to the card's gear, with five items. Citations above an answer jump to their place in the knowledge base, with 返回回答 to return; merged or removed entries say where they went. An empty knowledge base shows a three-step guide in 问 AI. 清空知识库 uses a dialog in the page. Terms: 收录 (inclusion) and 整理 (organising); 更新知识库 is now 现在整理, topic pages are topics, and 删除 next to a conclusion is now 这条不对. A line next to 发送 says what the question sends. A 跳到提问框 link and Ctrl+L focus the question box. Dark mode contrast raised to 4.5:1. New `/api/memory-locate`, paging and filters for `/api/memory`, settings `guide_skip` and `layout_notice`.
+
 ## 2.20.0
 
 - The bundled skills were reviewed against Anthropic's Skill authoring best practices. clarify-needs, doc-compare, office-gen, prompt-optimize and skill-create now say when to use them with their trigger words, show how to run their scripts and what the output looks like (made-up examples), and say how to check and correct key steps; text repeating the tool descriptions is gone. skill-create asks the same of the skills it writes. doc-compare's script errors say what to do next. summarize-meeting stays as copied from upstream.
