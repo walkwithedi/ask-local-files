@@ -134,6 +134,17 @@ class FakeModel(BaseHTTPRequestHandler):
                 ids = [line.split(' ', 1)[0] for line in data['messages'][1]['content'].splitlines()
                        if line.startswith('T') and line.split(' ', 1)[0][1:].isdigit()]
                 pieces = [json.dumps({'topics': ids})]
+            elif '你在帮使用者把本机的一批文件收录进「知识库」' in data['messages'][0]['content']:
+                # 一批文件一起抽结论：每份文件每段里第一个以「。」结尾的句子作结论与原句
+                work = json.loads(data['messages'][1]['content'])
+                found = []
+                for f in work['files']:
+                    for para in f['text'].split('\n\n'):
+                        head = para.split('。')[0]
+                        if '。' in para and '：' not in head:
+                            found.append({'file': f['file'], 'conclusion': head, 'quote': head + '。'})
+                text = json.dumps({'conclusions': found}, ensure_ascii=False)
+                pieces = [text[i:i + 20] for i in range(0, len(text), 20)]
             elif '你在帮使用者把本机的一份文件收录进「知识库」' in data['messages'][0]['content']:
                 # 从文件抽结论：每段里第一个以「。」结尾的句子作结论与原句（文件信息行不算）
                 work = json.loads(data['messages'][1]['content'])

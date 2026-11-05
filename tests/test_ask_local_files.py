@@ -36,6 +36,10 @@ sys.path.insert(0, TOOL)
 _spec = importlib.util.spec_from_file_location('ask_local_files', os.path.join(TOOL, 'ask_local_files.py'))
 fa = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(fa)
+# 默认保存位置与位置文件也指向临时目录，测试不在工具目录里建「数据」或写 data-dir.txt
+fa.DEFAULT_DATA_DIR = os.path.join(SANDBOX, 'tool', '数据')
+fa.DATA_DIR_FILE = os.path.join(SANDBOX, 'tool', 'data-dir.txt')
+os.makedirs(os.path.dirname(fa.DATA_DIR_FILE), exist_ok=True)
 
 logging.disable(logging.WARNING)     # 拒绝访问等预期内的告警不打到测试输出
 MODEL_SERVER, MODEL_BASE = fake_model.start()
@@ -77,6 +81,8 @@ class ServerCase(unittest.TestCase):
         self.server.shutdown()
         self.server.server_close()
         self.memory.close()
+        if self.st.memory is not self.memory:      # 清空知识库后换成了新库
+            self.st.memory.close()
         shutil.rmtree(self.root, ignore_errors=True)
 
     def call(self, path, body=None, token='tok', headers=None):
@@ -682,6 +688,26 @@ class DataDirTest(ServerCase):
     def api(self, body):
         return self.call('/api/data-dir', body, token=self.st.token)
 
+    def test_restore_from_previous_api(self):
+        self.assertEqual(self.call('/api/data-restore', {}, token=self.st.token)[0], 400)
+        prev = os.path.join(self.root, 'prev')
+        os.makedirs(prev)
+        old = fa.ask_memory.Memory(os.path.join(prev, 'memory.sqlite'))
+        path = os.path.join(self.docs, '季度总结.txt')
+        old.remember_file(path, os.stat(path), '乙' * 80)
+        old.close()
+        write(os.path.join(prev, 'token'), 'prev-token-prev-token-2\n')
+        fa.DATA['previous'] = {'path': prev, 'files': 1, 'items': []}
+        code, r = self.call('/api/data-restore', {}, token=self.st.token)
+        self.assertEqual((code, r['plan']['to']), (200, self.cur))
+        code, r = self.call('/api/data-restore', {'confirm': True}, token=self.st.token)
+        self.assertEqual(code, 200, r)
+        self.assertTrue(r['url_changed'])
+        self.assertIsNone(r['data']['previous'])
+        self.assertEqual(self.st.token, 'prev-token-prev-token-2')
+        self.assertTrue(os.path.isfile(os.path.join(self.cur, 'token.取回前')))
+        self.assertTrue(os.path.isfile(os.path.join(prev, 'memory.sqlite')))
+
     def test_state_shows_location(self):
         d = self.call('/api/state', token=self.TOKEN)[1]['data']
         self.assertEqual((d['path'], d['custom'], d['ok']), (self.cur, True, True))
@@ -704,6 +730,24 @@ class DataDirTest(ServerCase):
         self.assertEqual(self.st.memory.stats()['files'], 1)
         self.assertEqual(self.st.config.folders, [self.docs])
         self.assertEqual(self.call('/api/state', token=self.TOKEN)[1]['data']['path'], os.path.realpath(self.dest))
+
+    def test_move_to_tool_folder(self):
+        # 「改存到安装目录」：安装目录下的「数据」还没有时先建好，再照常移过去；建不了时写明原因
+        tool_data = os.path.join(self.root, 'tool', '数据')
+        with mock.patch.object(fa, 'DEFAULT_DATA_DIR', tool_data):
+            self.assertEqual(self.call('/api/state', token=self.TOKEN)[1]['data']['tool'], tool_data)
+            with mock.patch('os.makedirs', side_effect=OSError(13, 'Permission denied')):
+                code, r = self.api({'tool': True})
+            self.assertEqual(code, 400)
+            self.assertIn('在安装目录建「数据」文件夹失败（Permission denied）', r['error'])
+            code, r = self.api({'tool': True})
+            self.assertEqual((code, r['plan']['mode']), (200, 'move'))
+            self.assertTrue(os.path.isdir(tool_data))
+            code, r = self.api({'tool': True, 'confirm': True})
+            self.assertEqual(code, 200, r)
+            self.assertTrue(os.path.isfile(os.path.join(tool_data, 'memory.sqlite')))
+            self.assertFalse(r['data']['custom'])
+            self.assertEqual(fa.read_data_dir(self.pointer), os.path.realpath(tool_data))
 
     def test_use_existing_data(self):
         other = fa.Config(os.path.join(self.dest, 'config.json'))
@@ -838,53 +882,448 @@ class DataDirTest(ServerCase):
 
 
 class DataDirDefaultTest(unittest.TestCase):
-    def test_no_pointer_keeps_defaults(self):
-        root = tempfile.mkdtemp(dir=SANDBOX)
-        before = (fa.CONFIG_FILE, fa.MEMORY_FILE, fa.TOKEN_FILE)
-        with mock.patch.dict(fa.DATA):
-            fa.init_data_dir(os.path.join(root, 'none.txt'))
-            self.assertEqual((fa.DATA['dir'], fa.DATA['ok']), (None, True))
-            self.assertEqual((fa.CONFIG_FILE, fa.MEMORY_FILE, fa.TOKEN_FILE), before)
-            self.assertFalse(fa.data_public()['custom'])
-        write(os.path.join(root, 'blank.txt'), '\n')
-        self.assertIsNone(fa.read_data_dir(os.path.join(root, 'blank.txt')))
-        shutil.rmtree(root, ignore_errors=True)
+    """没有位置文件时：默认用工具目录下的「数据」，首次把家目录旧默认位置的数据搬进来。"""
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp(dir=SANDBOX)
+        self.addCleanup(shutil.rmtree, self.root, True)
+        self.legacy = {n: os.path.join(self.root, 'home', n) for n in fa.DATA_NAMES}
+        self.dest = os.path.join(self.root, 'tool', '数据')
+        self.pointer = os.path.join(self.root, 'tool', 'data-dir.txt')
+        os.makedirs(os.path.dirname(self.pointer))
+        for name in ('CONFIG_FILE', 'MEMORY_FILE', 'TOKEN_FILE'):
+            p = mock.patch.object(fa, name, getattr(fa, name))
+            p.start()
+            self.addCleanup(p.stop)
+        for p in (mock.patch.dict(fa.DATA), mock.patch.object(fa, 'data_paths', self.paths),
+                  mock.patch.object(fa, 'DEFAULT_DATA_DIR', self.dest)):
+            p.start()
+            self.addCleanup(p.stop)
+
+    @staticmethod
+    def rd(path):
+        with open(path, encoding='utf-8') as f:
+            return f.read()
+
+    def paths(self, d):
+        return dict(self.legacy) if d is None else {n: os.path.join(d, n) for n in fa.DATA_NAMES}
+
+    def test_fresh_start_uses_tool_folder(self):
+        fa.init_data_dir(self.pointer)
+        self.assertEqual(fa.DATA['dir'], self.dest)
+        self.assertTrue(os.path.isdir(self.dest))
+        self.assertEqual(fa.MEMORY_FILE, os.path.join(self.dest, 'memory.sqlite'))
+        self.assertEqual(fa.read_data_dir(self.pointer), self.dest)    # 退回旧版后也认得
+        pub = fa.data_public()
+        self.assertFalse(pub['custom'])
+        self.assertFalse(pub['home'])
+
+    def test_old_data_moved_in(self):
+        for n, p in self.legacy.items():
+            write(p, n)
+        write(self.legacy['memory.sqlite'] + '-wal', 'wal')
+        fa.init_data_dir(self.pointer)
+        for n in fa.DATA_NAMES:
+            self.assertEqual(self.rd(os.path.join(self.dest, n)), n)
+            self.assertFalse(os.path.exists(self.legacy[n]))
+        self.assertTrue(os.path.isfile(os.path.join(self.dest, 'memory.sqlite-wal')))
+
+    def test_cross_device_copies_then_removes(self):
+        write(self.legacy['config.json'], '{}')
+        real = os.rename
+
+        def exdev(a, b):
+            if a == self.legacy['config.json']:
+                raise OSError(18, 'Invalid cross-device link')
+            real(a, b)
+        with mock.patch('os.rename', exdev):
+            fa.init_data_dir(self.pointer)
+        self.assertTrue(os.path.isfile(os.path.join(self.dest, 'config.json')))
+        self.assertFalse(os.path.exists(self.legacy['config.json']))
+
+    def test_failed_move_keeps_old_place(self):
+        for n, p in self.legacy.items():
+            write(p, n)
+        real = fa.move_file
+        calls = []
+
+        def flaky(a, b):
+            calls.append(a)
+            if len(calls) == 2:
+                raise OSError(28, 'No space left on device')
+            real(a, b)
+        with mock.patch.object(fa, 'move_file', flaky):
+            fa.init_data_dir(self.pointer)
+        self.assertIsNone(fa.DATA['dir'])
+        self.assertIn('没能把家目录', fa.DATA['notice'])
+        self.assertTrue(fa.data_public()['home'])
+        for n, p in self.legacy.items():
+            self.assertTrue(os.path.isfile(p), n)
+        self.assertIsNone(fa.read_data_dir(self.pointer))
+
+    def test_existing_tool_data_not_overwritten(self):
+        write(os.path.join(self.dest, 'config.json'), 'new')
+        write(self.legacy['config.json'], 'old')
+        fa.init_data_dir(self.pointer)
+        self.assertEqual(self.rd(os.path.join(self.dest, 'config.json')), 'new')
+        self.assertTrue(os.path.isfile(self.legacy['config.json']))
+
+    def test_tool_folder_not_writable_uses_home(self):
+        with mock.patch('os.makedirs', side_effect=OSError(13, 'Permission denied')):
+            fa.init_data_dir(self.pointer)
+        self.assertIsNone(fa.DATA['dir'])
+        self.assertIn('安装目录不可写', fa.DATA['notice'])
+
+    def test_tool_folder_moved(self):
+        fa.write_data_dir(os.path.join(self.root, 'old-place', '数据'), self.pointer)
+        os.makedirs(self.dest)
+        fa.init_data_dir(self.pointer)
+        self.assertEqual(fa.DATA['dir'], self.dest)
+        self.assertTrue(fa.DATA['ok'])
+        self.assertEqual(fa.read_data_dir(self.pointer), self.dest)
+
+    def test_blank_pointer(self):
+        write(os.path.join(self.root, 'blank.txt'), '\n')
+        self.assertIsNone(fa.read_data_dir(os.path.join(self.root, 'blank.txt')))
+
+
+class DataDirToolTest(DataDirDefaultTest):
+    """位置文件指向程序目录本身或其中「数据」以外的文件夹时搬进「数据」；更改时不许放进程序目录；从上一版取回。"""
+
+    def setUp(self):
+        super().setUp()
+        self.tool = os.path.dirname(self.pointer)
+
+    def fill(self, d, names=fa.DATA_NAMES):
+        for n in names:
+            write(os.path.join(d, n), 'old ' + n)
+
+    def test_pointer_at_tool_folder_moved_into_data(self):
+        self.fill(self.tool)
+        write(os.path.join(self.tool, 'memory.sqlite-wal'), 'wal')
+        fa.write_data_dir(self.tool, self.pointer)
+        fa.init_data_dir(self.pointer, tool=self.tool)
+        self.assertEqual(fa.DATA['dir'], self.dest)
+        self.assertEqual(fa.read_data_dir(self.pointer), self.dest)
+        for n in fa.DATA_NAMES:
+            self.assertEqual(self.rd(os.path.join(self.dest, n)), 'old ' + n)
+            self.assertFalse(os.path.exists(os.path.join(self.tool, n)))
+        self.assertTrue(os.path.isfile(os.path.join(self.dest, 'memory.sqlite-wal')))
+        self.assertIn('已把知识库与设置从', fa.DATA['notice'])
+
+    def test_pointer_at_tool_subfolder_moved(self):
+        sub = os.path.join(self.tool, '库')
+        self.fill(sub, ('config.json',))
+        fa.write_data_dir(sub, self.pointer)
+        fa.init_data_dir(self.pointer, tool=self.tool)
+        self.assertEqual(fa.DATA['dir'], self.dest)
+        self.assertEqual(self.rd(os.path.join(self.dest, 'config.json')), 'old config.json')
+
+    def test_pointer_inside_data_left_alone(self):
+        inner = os.path.join(self.dest, '子')
+        os.makedirs(inner)
+        fa.write_data_dir(inner, self.pointer)
+        fa.init_data_dir(self.pointer, tool=self.tool)
+        self.assertEqual(fa.DATA['dir'], inner)
+        self.assertEqual(fa.DATA['notice'], '')
+
+    def test_both_have_data_not_merged(self):
+        self.fill(self.tool, ('config.json',))
+        self.fill(self.dest, ('token',))
+        fa.write_data_dir(self.tool, self.pointer)
+        fa.init_data_dir(self.pointer, tool=self.tool)
+        self.assertEqual(fa.DATA['dir'], self.tool)
+        self.assertIn('没有合并', fa.DATA['notice'])
+        self.assertTrue(os.path.isfile(os.path.join(self.tool, 'config.json')))
+        self.assertEqual(fa.read_data_dir(self.pointer), self.tool)
+
+    def test_failed_move_stays(self):
+        self.fill(self.tool)
+        fa.write_data_dir(self.tool, self.pointer)
+        real, calls = fa.move_file, []
+
+        def flaky(a, b):
+            calls.append(a)
+            if len(calls) == 2:
+                raise OSError(28, 'No space left on device')
+            real(a, b)
+        with mock.patch.object(fa, 'move_file', flaky):
+            fa.init_data_dir(self.pointer, tool=self.tool)
+        self.assertEqual(fa.DATA['dir'], self.tool)
+        self.assertIn('没能把程序目录里的知识库与设置移进', fa.DATA['notice'])
+        for n in fa.DATA_NAMES:
+            self.assertTrue(os.path.isfile(os.path.join(self.tool, n)), n)
+
+    def test_norm_rejects_tool_subfolder_and_maps_tool_itself(self):
+        with mock.patch.object(fa, 'HERE', self.tool):
+            self.assertEqual(fa.norm_data_dir(self.tool), os.path.realpath(self.dest))
+            self.assertTrue(os.path.isdir(self.dest))
+            os.makedirs(os.path.join(self.tool, '别处'))
+            with self.assertRaises(ValueError) as cm:
+                fa.norm_data_dir(os.path.join(self.tool, '别处'))
+            self.assertIn('升级时不会带到新版', str(cm.exception))
+            other = os.path.join(self.root, 'other')
+            os.makedirs(other)
+            self.assertEqual(fa.norm_data_dir(other), os.path.realpath(other))
+
+    def prev(self):
+        return os.path.join(self.root, '.tool.上一版')
+
+    def test_previous_data_found(self):
+        self.assertIsNone(fa.previous_data(self.tool))
+        self.fill(self.prev())
+        self.assertEqual(fa.previous_data(self.tool), self.prev())
+        self.fill(os.path.join(self.prev(), '数据'))
+        self.assertEqual(fa.previous_data(self.tool), os.path.join(self.prev(), '数据'))
+
+    def test_restore_previous_copies_and_keeps(self):
+        self.fill(self.prev())
+        os.makedirs(self.dest)
+        write(os.path.join(self.dest, 'token'), 'new token')
+        names = fa.restore_previous(self.prev(), self.dest)
+        self.assertEqual(sorted(names), sorted(fa.DATA_NAMES))
+        for n in fa.DATA_NAMES:
+            self.assertEqual(self.rd(os.path.join(self.dest, n)), 'old ' + n)
+            self.assertTrue(os.path.isfile(os.path.join(self.prev(), n)), '上一版不动')
+        self.assertEqual(self.rd(os.path.join(self.dest, 'token.取回前')), 'new token')
+
+    def test_restore_previous_rolls_back(self):
+        self.fill(self.prev())
+        os.makedirs(self.dest)
+        write(os.path.join(self.dest, 'token'), 'new token')
+        real, calls = fa.copy_private, []
+
+        def flaky(a, b):
+            calls.append(a)
+            if len(calls) == 2:
+                raise OSError(28, 'No space left on device')
+            real(a, b)
+        with mock.patch.object(fa, 'copy_private', flaky), self.assertRaises(OSError):
+            fa.restore_previous(self.prev(), self.dest)
+        self.assertEqual(sorted(os.listdir(self.dest)), ['token'])
+        self.assertEqual(self.rd(os.path.join(self.dest, 'token')), 'new token')
+
+    def test_previous_offer(self):
+        os.makedirs(os.path.join(self.prev(), '数据'))
+        old = fa.ask_memory.Memory(os.path.join(self.prev(), '数据', 'memory.sqlite'))
+        doc = os.path.join(self.root, 'a.txt')
+        write(doc, '甲')
+        old.remember_file(doc, os.stat(doc), '甲' * 50)
+        old.close()
+        fa.init_data_dir(self.pointer, tool=self.tool)
+        cur = fa.ask_memory.Memory(fa.MEMORY_FILE)
+        self.addCleanup(cur.close)
+        offer = fa.previous_offer(cur, tool=self.tool)
+        self.assertEqual((offer['path'], offer['files']), (os.path.join(self.prev(), '数据'), 1))
+        self.assertEqual([i['name'] for i in offer['items']], ['memory.sqlite'])
+        cur.remember_file(doc, os.stat(doc), '乙' * 50)
+        self.assertIsNone(fa.previous_offer(cur, tool=self.tool), '当前知识库不空时不提供')
+
+
+class BatchBase(ServerCase):
+    """勾选了自动收录、已收录几个文件、等着整理的知识库。"""
+
+    model = 'memo'
+
+    def setUp(self):
+        super().setUp()
+        for i in range(4):
+            write(os.path.join(self.docs, '批', '文件%d.txt' % i), '第%d份：说明。\n\n第%d项工作在三月底完成。' % (i, i))
+        self.index.refresh(full=True, wait=True)
+        self.call('/api/folders', {'auto': self.docs, 'on': True})
+        for _ in range(200):
+            if not self.st.ingest.running and self.st.memory.stats()['extract']:
+                break
+            time.sleep(0.05)
+
+    def run_update(self):
+        self.call('/api/memory-update', {'action': 'run'})
+        for _ in range(400):
+            st = self.call('/api/memory-update')[1]
+            if not st['running']:
+                return st
+            time.sleep(0.05)
+        raise AssertionError('整理没有结束')
+
+
+class BatchFlowTest(BatchBase):
+    """整理按批进行：每批抽完接着整理进主题；失败时重试、对半拆开、单个文件跳过；分批计划与记录；本轮体检。"""
+
+    def test_each_batch_then_topics_with_plan_and_log(self):
+        self.call('/api/settings', {'xbatch_files': 2})
+        st = self.run_update()
+        self.assertEqual(st['result']['kind'], 'done', st['result'])
+        self.assertGreaterEqual(st['plan']['batches'], 3)
+        self.assertTrue(st['log'])
+        self.assertTrue(all(x['files'] <= 2 for x in st['log']))
+        self.assertGreater(sum(x['facts'] for x in st['log']), 0)
+        self.assertGreater(sum(x['topics'] for x in st['log']), 0)      # 每批抽完紧接着整理进主题
+        self.assertEqual(st['pending'], 0)
+
+    def test_failed_batch_retry_split_skip(self):
+        bad = os.path.join(self.docs, '批', '文件2.txt')
+        real = fa.stream_chat
+        seen = []
+
+        def flaky(tg, msgs, **kw):
+            body = msgs[-1]['content']
+            if bad in body and '一批文件' in msgs[0]['content'] or bad in body and '一份文件' in msgs[0]['content']:
+                seen.append(len(json.loads(body).get('files') or [1]))
+                yield '看不懂'
+                return
+            yield from real(tg, msgs, **kw)
+        with mock.patch.object(fa, 'stream_chat', flaky):
+            st = self.run_update()
+        self.assertEqual(st['result']['kind'], 'done', st['result'])
+        self.assertIn('1 个文件抽结论失败', st['result']['text'])
+        self.assertEqual(seen[0], seen[1])          # 先重试同一批
+        self.assertEqual(seen[-1], 1)               # 拆到单个文件
+        stats = self.call('/api/memory?limit=1')[1]['stats']
+        self.assertEqual(stats['xfailed'], 1)
+        self.assertGreater(stats['facts'], 0)       # 其余文件照常抽出
+        self.assertEqual(self.call('/api/memory-reorg')[1]['xfail'], [bad])
+        code, r = self.call('/api/memory', {'action': 'retry_xfail'})
+        self.assertEqual((code, r['count']), (200, 1))
+        st = self.run_update()
+        self.assertEqual(self.call('/api/memory?limit=1')[1]['stats']['xfailed'], 0)
+
+    def test_connection_error_stops_round(self):
+        def down(tg, msgs, **kw):
+            raise fa.ModelError('连不上接口：拒绝连接')
+            yield ''
+        with mock.patch.object(fa, 'stream_chat', down):
+            st = self.run_update()
+        self.assertEqual(st['result']['kind'], 'error')
+        self.assertEqual(self.call('/api/memory?limit=1')[1]['stats']['xfailed'], 0)
+
+    def test_timeout_counts_as_batch_failure(self):
+        def slow(tg, msgs, **kw):
+            raise fa.ModelError('接口 120 秒没有新内容')
+            yield ''
+        with mock.patch.object(fa, 'stream_chat', slow):
+            st = self.run_update()
+        self.assertEqual(st['result']['kind'], 'done', st['result'])
+        self.assertGreater(self.call('/api/memory?limit=1')[1]['stats']['xfailed'], 0)
+
+    def test_reorganize_all(self):
+        self.run_update()
+        stats = self.call('/api/memory?limit=1')[1]['stats']
+        self.assertGreater(stats['facts'], 0)
+        r = self.call('/api/memory-reorg')[1]
+        self.assertEqual((r['facts'], r['topics']), (stats['facts'], stats['topics']))
+        self.assertGreaterEqual(r['batches'], 1)
+        code, r = self.call('/api/memory', {'action': 'reorganize'})
+        self.assertEqual(code, 200)
+        self.assertEqual((r['stats']['facts'], r['stats']['topics']), (0, 0))
+        self.assertGreater(r['stats']['files'], 0)          # 收录的原文保留
+        self.assertGreater(r['stats']['extract'], 0)
+
+    def test_batch_settings_validated(self):
+        self.assertEqual(self.call('/api/settings', {'xbatch_chars': 10})[0], 400)
+        self.assertEqual(self.call('/api/settings', {'xbatch_files': 0})[0], 400)
+        code, r = self.call('/api/settings', {'xbatch_chars': 8000, 'xbatch_files': 5})
+        self.assertEqual((code, r['xbatch_chars'], r['xbatch_files']), (200, 8000, 5))
+        self.assertEqual(fa.Config(self.config.path).xbatch_chars, 8000)
+
+
+class GraphTest(BatchBase):
+    """关系图：起始视图、以节点为中心的一层邻居、详情、搜索；按需返回、限量并给总数。"""
+
+    def test_empty_library(self):
+        r = self.call('/api/graph')[1]
+        self.assertEqual((r['nodes'], r['topics']), ([], 0))
+
+    def test_start_around_detail_search(self):
+        self.run_update()
+        r = self.call('/api/graph')[1]
+        self.assertGreater(r['topics'], 0)
+        t = r['nodes'][0]
+        self.assertEqual(t['kind'], 'topic')
+        around = self.call('/api/graph?node=' + q(t['id']))[1]
+        kinds = {n['kind'] for n in around['nodes']}
+        self.assertIn('fact', kinds)
+        self.assertIn('path', kinds)
+        self.assertTrue(all(e['a'] == t['id'] or e['b'] == t['id'] for e in around['edges']))
+        self.assertGreater(around['totals']['fact'], 0)
+        fact = next(n for n in around['nodes'] if n['kind'] == 'fact')
+        f_around = self.call('/api/graph?node=' + q(fact['id']))[1]
+        self.assertIn(t['id'], [n['id'] for n in f_around['nodes']])       # 结论与主题要点同一句原文：连回主题
+        path = next(n for n in around['nodes'] if n['kind'] == 'path')
+        p_around = self.call('/api/graph?node=' + q(path['id']))[1]
+        self.assertTrue(all(e['b'] == path['id'] for e in p_around['edges']))
+        d = self.call('/api/graph?detail=' + q(t['id']))[1]
+        self.assertEqual((d['kind'], d['title']), ('topic', t['label']))
+        self.assertTrue(d['points'][0]['quote'])
+        d = self.call('/api/graph?detail=' + q(fact['id']))[1]
+        self.assertEqual(d['kind'], 'fact')
+        d = self.call('/api/graph?detail=' + q(path['id']))[1]
+        self.assertEqual(d['path'], path['path'])
+        hits = self.call('/api/graph?q=' + q('第1项'))[1]['nodes']
+        self.assertTrue(hits and all(n['kind'] == 'fact' for n in hits))
+        self.assertEqual(self.call('/api/graph?node=t999999')[0], 404)
+        self.assertEqual(self.call('/api/graph?detail=f999999')[0], 404)
+        self.assertEqual(self.call('/api/graph?node=x1')[0], 404)
+        self.assertEqual(self.call('/api/graph?q=' + q('%_'))[1]['nodes'], [])     # 通配符照字面找
+
+    def test_limit_and_totals(self):
+        self.run_update()
+        t = self.call('/api/graph')[1]['nodes'][0]
+        with mock.patch.object(fa.ask_memory, 'GRAPH_EACH', 1):
+            around = self.st.memory.graph_around(t['id'], limit=1)
+        self.assertEqual(sum(1 for n in around['nodes'] if n['kind'] == 'fact'), 1)
+        self.assertGreater(around['totals']['fact'], 1)
 
 
 class ExitRuleTest(ServerCase):
-    def test_closing_pages_does_not_exit(self):
+    def test_closing_all_pages_exits_after_grace(self):
         self.st.idle = 100
         self.st.ping('p1')
         self.st.bye('p1')
         self.assertIsNone(self.st.should_exit())
-        self.st.empty_since -= 101
-        self.assertEqual(self.st.should_exit(), 'idle for 100 seconds')
+        self.st.empty_since -= fa.CLOSE_GRACE + 1
+        self.assertEqual(self.st.should_exit(), 'all pages closed')
+        self.assertTrue(self.st.quit.is_set())
 
-    def test_never_opened_counts_from_start(self):
-        self.st.idle = 100
-        self.assertIsNone(self.st.should_exit())
-        self.st.empty_since -= 101
-        self.assertEqual(self.st.should_exit(), 'idle for 100 seconds')
-
-    def test_open_page_or_task_keeps_running(self):
-        self.st.idle = 100
+    def test_refresh_does_not_exit(self):
         self.st.ping('p1')
-        self.assertIsNone(self.st.should_exit())
         self.st.bye('p1')
+        self.st.ping('p2')
+        self.st.empty_since = None
+        self.assertIsNone(self.st.should_exit())
+
+    def test_never_opened_waits_idle(self):
+        self.st.idle = 100
+        self.st.empty_since -= fa.CLOSE_GRACE + 1
+        self.assertIsNone(self.st.should_exit())
         self.st.empty_since -= 101
+        self.assertEqual(self.st.should_exit(), 'idle for 100 seconds')
+
+    def test_exit_stops_tasks_and_waits_briefly(self):
+        self.st.ping('p1')
         self.st.chat_begin()
-        self.assertIsNone(self.st.should_exit())
+        gen = self.st.chat_gen
+        self.st.quit.set()
+        self.assertIsNone(self.st.should_exit())        # 叫停后等回答停下
+        self.assertNotEqual(self.st.chat_gen, gen)
+        self.assertTrue(self.st.updater.halt.is_set())
         self.st.chat_end()
-        self.assertIsNone(self.st.should_exit())       # 空闲从任务结束时重新算起
+        self.assertEqual(self.st.should_exit(), 'quit requested')
 
-    def test_heartbeat_lost_starts_idle(self):
-        self.st.idle = 100
+    def test_stuck_task_does_not_block_exit_forever(self):
+        self.st.chat_begin()
+        self.st.quit.set()
+        self.assertIsNone(self.st.should_exit())
+        self.st.exit_at -= fa.EXIT_WAIT + 1
+        self.assertEqual(self.st.should_exit(), 'quit requested')
+        self.st.chat_end()
+
+    def test_heartbeat_lost_counts_as_closed(self):
         self.st.ping('p1')
         self.st.pages['p1'] = (time.monotonic() - fa.PING_TIMEOUT - 1, 'p1')
         self.assertIsNone(self.st.should_exit())
         self.assertNotIn('p1', self.st.pages)
-        self.st.empty_since -= 101
-        self.assertEqual(self.st.should_exit(), 'idle for 100 seconds')
+        self.st.empty_since -= fa.CLOSE_GRACE + 1
+        self.assertEqual(self.st.should_exit(), 'all pages closed')
 
     def test_zero_never_idles_out(self):
         self.st.idle = 0
@@ -892,6 +1331,202 @@ class ExitRuleTest(ServerCase):
         self.assertIsNone(self.st.should_exit())
         self.st.quit.set()
         self.assertEqual(self.st.should_exit(), 'quit requested')
+
+    def test_upgrade_in_progress_does_not_exit(self):
+        self.st.ping('p1')
+        self.st.bye('p1')
+        self.st.empty_since -= fa.CLOSE_GRACE + 1
+        self.st.upgrade.state = 'running'
+        try:
+            self.assertIsNone(self.st.should_exit())
+        finally:
+            self.st.upgrade.state = 'idle'
+
+
+class ClearMemoryTest(ServerCase):
+    """清空知识库：停下任务后删库重建，计数归零且不再涨回；移出不在自动收录文件夹里的文件。"""
+
+    model = 'memo'
+
+    def setUp(self):
+        super().setUp()
+        self.config.memory = True
+        self.config.auto_folders = [self.docs]
+        self.index.refresh(full=True, wait=True)
+
+    def tearDown(self):
+        self.wait_ingest()
+        super().tearDown()
+
+    def wait_ingest(self):
+        for _ in range(200):
+            if not self.st.ingest.running:
+                return
+            time.sleep(0.05)
+        raise AssertionError('收录没有结束')
+
+    def stats(self):
+        return self.call('/api/memory?limit=1')[1]['stats']
+
+    def test_clear_while_ingest_running_stays_empty(self):
+        self.st.ingest.start()
+        self.wait_ingest()
+        self.assertGreater(self.stats()['files'], 0)
+        path = self.st.memory.path
+        # 模拟收录与整理正在进行
+        real_pass = self.st.ingest._pass
+        gate = threading.Event()
+
+        def slow_pass():
+            gate.wait(5)
+            real_pass()
+        self.st.ingest._pass = slow_pass
+        self.st.ingest.start()
+        self.st.updater.running, self.st.updater.mode = True, 'auto'
+        threading.Timer(0.3, lambda: setattr(self.st.updater, 'running', False)).start()
+        threading.Timer(0.3, gate.set).start()
+        code, r = self.call('/api/memory', {'action': 'clear'})
+        self.assertEqual(code, 200, r)
+        st = r['stats']
+        self.assertEqual((st['files'], st['facts'], st['topics'], st['queued'], st['points']), (0, 0, 0, 0, 0))
+        self.assertTrue(self.st.updater.halt.is_set())
+        self.assertTrue(self.st.ingest.paused)
+        self.assertTrue(os.path.isfile(path))
+        # 之后的自动收录检查与索引扫描不再收录
+        self.wait_ingest()
+        self.st.ingest.last = 0.0
+        self.st.ingest.tick()
+        self.index.refresh(full=True, wait=True)
+        self.wait_ingest()
+        self.assertEqual(self.stats()['files'], 0)
+        self.assertTrue(self.call('/api/memory-ingest')[1]['paused'])
+        # 「立即收录」恢复
+        self.st.ingest.start()
+        self.wait_ingest()
+        self.assertFalse(self.st.ingest.paused)
+        self.assertGreater(self.stats()['files'], 0)
+
+    def test_old_library_cannot_be_written_after_clear(self):
+        old = self.st.memory
+        self.assertEqual(self.call('/api/memory', {'action': 'clear'})[0], 200)
+        with self.assertRaises(sqlite3.Error):
+            old.stats()
+        self.assertIsNot(self.st.memory, old)
+
+    def test_clear_without_spare_disk_space(self):
+        self.st.ingest.start()
+        self.wait_ingest()
+        with mock.patch.object(fa.ask_memory.Memory, 'clear', side_effect=sqlite3.OperationalError('database or disk is full')):
+            code, r = self.call('/api/memory', {'action': 'clear'})
+        self.assertEqual(code, 200, r)
+        self.assertEqual(r['stats']['files'], 0)
+
+    def test_settings_and_token_untouched(self):
+        self.config.save()
+        with open(self.config.path, encoding='utf-8') as f:
+            before = f.read()
+        self.call('/api/memory', {'action': 'clear'})
+        with open(self.config.path, encoding='utf-8') as f:
+            self.assertEqual(f.read(), before)
+        self.assertEqual(self.st.token, 'tok')
+
+    def test_chat_refused_while_clearing(self):
+        self.st.clearing.set()
+        try:
+            code, r = self.chat([{'role': 'user', 'content': '问'}])
+            self.assertEqual(code, 409)
+            self.assertIn('正在清空', r['error'])
+        finally:
+            self.st.clearing.clear()
+
+    def test_forget_outside(self):
+        self.st.ingest.start()
+        self.wait_ingest()
+        n = self.stats()['files']
+        self.assertGreater(n, 0)
+        chosen = os.path.join(self.docs, '季度总结.txt')
+        self.st.memory.remember_file(chosen, os.stat(chosen), '甲' * 100)    # 提问时选用过的不算自动收录
+        self.config.auto_folders = []
+        self.assertEqual(self.stats()['outside'], n)
+        code, r = self.call('/api/memory', {'action': 'outside'})
+        self.assertEqual(code, 200, r)
+        self.assertEqual(r['count'], n)
+        self.assertEqual(r['stats']['outside'], 0)
+
+
+class IngestFormatTest(ServerCase):
+    """v2.29：自动收录只收 doc2kb 格式与 txt、Markdown；其他格式归为「格式不自动收录」，已收录的保留、不再排队，可移出。"""
+
+    model = 'memo'
+
+    def setUp(self):
+        super().setUp()
+        for name in ('页面.html', '样式.css', '脚本.js', '数据.csv'):
+            write(os.path.join(self.docs, '原型', name), '丙' * 30)
+        write(os.path.join(self.docs, '报告.TXT'), '丁' * 30)
+        self.config.memory = True
+        self.config.auto_folders = [self.docs]
+        self.index.refresh(full=True, wait=True)
+
+    def tearDown(self):
+        self.wait_ingest()
+        super().tearDown()
+
+    def wait_ingest(self):
+        for _ in range(200):
+            if not self.st.ingest.running:
+                return
+            time.sleep(0.05)
+        raise AssertionError('收录没有结束')
+
+    def run_ingest(self):
+        self.wait_ingest()
+        self.st.ingest.start()
+        self.wait_ingest()
+        return self.call('/api/memory-ingest')[1]['summary']
+
+    def queued_refs(self):
+        rows = self.st.memory._conn().execute("SELECT ref FROM queue WHERE kind IN ('extract', 'file')").fetchall()
+        return {r[0] for r in rows}
+
+    def test_scope(self):
+        self.assertEqual(fa.INGEST_EXT, {'.docx', '.pptx', '.xlsx', '.xlsm', '.pdf', '.eml', '.doc', '.xls', '.ppt',
+                                         '.wps', '.et', '.dps', '.txt', '.md', '.markdown'})
+        sm = self.run_ingest()
+        # 季度总结.txt、会议记录.md、报告.TXT 收录；网页、样式、脚本、表格归为格式不自动收录；压缩包不算
+        self.assertEqual((sm['total'], sm['done'], sm['waiting'], sm['skipped_total']), (7, 3, 0, 4))
+        fmt = sorted(os.path.basename(x['path']) for x in sm['skipped'] if x['state'] == 'format')
+        self.assertEqual(fmt, ['数据.csv', '样式.css', '脚本.js', '页面.html'])
+        paths = {f['path'] for f in self.call('/api/memory')[1]['files']}
+        self.assertIn(os.path.join(self.docs, '报告.TXT'), paths)
+        self.assertNotIn(os.path.join(self.docs, '原型', '页面.html'), paths)
+        # 收录标记：格式不自动收录的不标「待收录」
+        r = self.call('/api/search?q=' + urllib.parse.quote('页面'))[1]
+        self.assertNotIn('kb', r['results'][0])
+        # 手动选用照常可用
+        code, _ = self.chat([{'role': 'user', 'content': '总结'}], files=[os.path.join(self.docs, '原型', '页面.html')])
+        self.assertEqual(code, 200)
+
+    def test_old_formats_kept_until_removed(self):
+        html = os.path.join(self.docs, '原型', '页面.html')
+        self.st.memory.ingest_file(html, os.stat(html), '丙' * 30)     # 旧版收录进来的网页
+        self.assertIn(html, self.queued_refs())
+        self.run_ingest()
+        # 保留、不再排队；统计算作不在自动收录范围内
+        paths = {f['path'] for f in self.call('/api/memory')[1]['files']}
+        self.assertIn(html, paths)
+        self.assertNotIn(html, self.queued_refs())
+        self.assertEqual(self.call('/api/memory?limit=1')[1]['stats']['outside'], 1)
+        # 文件改过也不再更新
+        write(html, '戊' * 40)
+        self.index.refresh(full=True, wait=True)
+        self.run_ingest()
+        self.assertNotIn(html, self.queued_refs())
+        code, r = self.call('/api/memory', {'action': 'outside'})
+        self.assertEqual((code, r['count'], r['stats']['outside']), (200, 1, 0))
+        paths = {f['path'] for f in self.call('/api/memory')[1]['files']}
+        self.assertNotIn(html, paths)
+        self.assertIn(os.path.join(self.docs, '季度总结.txt'), paths)
 
 
 class MaxFilesTest(ServerCase):
@@ -1540,8 +2175,8 @@ class MemoryChatTest(ServerCase):
         self.assertEqual(self.call('/api/memory', {'action': 'fact', 'id': r['facts'][0]['id']})[1]['count'], 1)
         self.assertEqual(self.call('/api/memory', {'action': 'file', 'path': self.plan})[1]['stats']['files'], 0)
         self.ask('第一阶段什么时候验收', [self.plan])
-        self.assertEqual(self.call('/api/memory', {'action': 'clear'})[1]['stats'], self.memory.stats())
-        self.assertEqual(self.memory.stats()['files'], 0)
+        self.assertEqual(self.call('/api/memory', {'action': 'clear'})[1]['stats'], self.st.memory.stats([]))
+        self.assertEqual(self.st.memory.stats()['files'], 0)
         self.assertEqual(self.call('/api/memory', {'action': 'nope'})[0], 400)
         self.assertEqual(self.call('/api/memory', {'action': 'fact', 'id': True})[0], 400)
 
@@ -1561,6 +2196,63 @@ class MemoryChatTest(ServerCase):
             code, lines = self.ask('第一阶段什么时候验收', [self.plan])
         self.assertEqual(code, 200)
         self.assertEqual(lines[-1]['remembered'], 0)
+
+
+class KbLayoutServerTest(MemoryChatTest):
+    """v2.21：文件列表的收录标记、回答引用的条目编号与跳转目标、记下的结论 id、新设置键。"""
+
+    def test_marks_in_browse_and_search(self):
+        self.ask('第一阶段什么时候验收', [self.plan])
+        files = {f['name']: f for f in self.call('/api/browse?dir=' + urllib.parse.quote(self.docs))[1]['files']}
+        self.assertEqual(files['项目计划.txt']['kb'], {'state': 'done', 'facts': 1})
+        self.assertNotIn('kb', files['季度总结.txt'])        # 没勾选自动收录、也没收录过：不加标记
+        found = self.call('/api/search?q=' + urllib.parse.quote('计划'))[1]['results']
+        self.assertEqual(found[0]['kb']['state'], 'done')
+        # 勾选了自动收录的文件夹：还没收录的标为待收录；读不了的格式不标
+        self.config.auto_folders = [self.docs]
+        files = {f['name']: f for f in self.call('/api/browse?dir=' + urllib.parse.quote(self.docs))[1]['files']}
+        self.assertEqual(files['季度总结.txt']['kb'], {'state': 'waiting'})
+        self.assertNotIn('kb', files['资料包.zip'])
+        # 知识库关闭时不带标记
+        self.call('/api/settings', {'memory': False})
+        files = self.call('/api/browse?dir=' + urllib.parse.quote(self.docs))[1]['files']
+        self.assertFalse(any('kb' in f for f in files))
+
+    def test_refs_remembered_ids_and_locate(self):
+        lines = self.ask('第一阶段什么时候验收', [self.plan])[1]
+        ids = lines[-1]['remembered_ids']
+        self.assertEqual(len(ids), lines[-1]['remembered'])
+        lines = self.ask('第一阶段验收')[1]
+        refs = lines[0]['memory']['refs']
+        self.assertEqual([r['kind'] for r in refs], ['fact', 'file'])
+        fact = refs[0]
+        self.assertEqual((fact['id'], fact['path'], fact['quote']), (ids[0], self.plan, '第一阶段在三月底完成验收'))
+        q = '/api/memory-locate?kind=fact&id=%d&path=%s&quote=%s' % (
+            fact['id'], urllib.parse.quote(fact['path']), urllib.parse.quote(fact['quote']))
+        self.assertEqual(self.call(q)[1], {'state': 'ok', 'kind': 'fact', 'id': ids[0], 'text': '第一阶段三月底验收'})
+        self.call('/api/memory', {'action': 'fact', 'id': ids[0], 'wrong': True})
+        self.assertEqual(self.call(q)[1]['state'], 'gone')
+        self.assertEqual(self.call('/api/memory-locate?kind=file&id=1')[0], 400)
+        self.assertEqual(self.call('/api/memory-locate?kind=fact&id=x')[0], 400)
+        # 「这条不对」过的不再记下
+        self.assertEqual(self.ask('第一阶段什么时候验收', [self.plan])[1][-1]['remembered'], 0)
+
+    def test_memory_listing_params(self):
+        self.ask('第一阶段什么时候验收', [self.plan])
+        r = self.call('/api/memory?limit=50&offset=0')[1]
+        self.assertEqual((r['facts_total'], r['topics_total']), (1, 0))
+        fid = r['facts'][0]['id']
+        self.assertEqual(len(self.call('/api/memory?ids=%d' % fid)[1]['facts']), 1)
+        self.assertEqual(self.call('/api/memory?ids=%d&offset=0' % (fid + 1))[1]['facts'], [])
+        self.assertEqual(self.call('/api/memory?path=' + urllib.parse.quote(self.plan))[1]['facts_total'], 1)
+        self.assertEqual(self.call('/api/memory?limit=x')[0], 200)
+
+    def test_new_settings_keys(self):
+        st = self.call('/api/state')[1]
+        self.assertEqual((st['guide_skip'], st['layout_notice']), (False, False))
+        self.call('/api/settings', {'guide_skip': True, 'layout_notice': True})
+        cfg = fa.Config(self.config.path)
+        self.assertEqual((cfg.guide_skip, cfg.layout_notice), (True, True))
 
 
 class MemoryUpdateTest(MemoryChatTest):
@@ -1583,10 +2275,10 @@ class MemoryUpdateTest(MemoryChatTest):
         self.assertEqual(code, 200)
         st = self.wait()
         self.assertEqual(st['result']['kind'], 'done')
-        self.assertEqual(st['result']['text'], '知识库已更新：新建主题页 1 页。')
+        self.assertEqual(st['result']['text'], '知识库已整理：新建主题 1 个。')
         self.assertEqual(st['pending'], 0)
         h = st['history'][0]
-        self.assertEqual((h['mode'], h['summary'], h['changes']), ('manual', '新建主题页 1 页', ['新建主题页：验收安排']))
+        self.assertEqual((h['mode'], h['summary'], h['changes']), ('manual', '新建主题 1 个', ['新建主题：验收安排']))
         self.assertIn('你在维护使用者本机的一份「知识库」', json.loads(
             urllib.request.urlopen(MODEL_BASE + '/last').read())['messages'][0]['content'])
         topics = self.call('/api/memory')[1]['topics']
@@ -1653,13 +2345,13 @@ class MemoryUpdateTest(MemoryChatTest):
 
     def test_nothing_to_do_and_errors(self):
         self.call('/api/memory-update', {'action': 'run'})
-        self.assertEqual(self.wait()['result']['text'], '没有要更新的内容。')
+        self.assertEqual(self.wait()['result']['text'], '没有要整理的内容。')
         self.ask('第一阶段什么时候验收', [self.plan])
         self.config.custom['model'] = 'err500'
         self.call('/api/memory-update', {'action': 'run'})
         st = self.wait()
         self.assertEqual(st['result']['kind'], 'error')
-        self.assertTrue(st['result']['text'].startswith('更新知识库失败：'))
+        self.assertTrue(st['result']['text'].startswith('整理知识库失败：'))
         self.assertEqual(st['pending'], 1)     # 没写入，留在队里
         self.config.custom['model'] = 'ok'     # 回答不是 JSON：这一批不写入，留待下次
         self.call('/api/memory-update', {'action': 'run'})
@@ -1699,15 +2391,14 @@ class MemoryUpdateTest(MemoryChatTest):
         st = self.wait()
         self.assertEqual((st['result']['kind'], st['pending'], st['history'][0]['mode']), ('done', 0, 'auto'))
 
-    def test_exit_waits_for_manual_only(self):
+    def test_exit_stops_tidy(self):
         self.st.quit.set()
         up = self.st.updater
         up.running, up.mode = True, 'manual'
-        self.assertIsNone(self.st.should_exit())
-        up.mode = 'auto'
-        self.assertEqual(self.st.should_exit(), 'quit requested')
-        self.assertTrue(up.halt.is_set())       # 自动更新随退出停下
+        self.assertIsNone(self.st.should_exit())        # 叫停后等它停下
+        self.assertTrue(up.halt.is_set())       # 手动整理也随退出停下
         up.running = False
+        self.assertEqual(self.st.should_exit(), 'quit requested')
 
 
 class TitleTest(ServerCase):
@@ -2518,6 +3209,53 @@ class AutoIngestTest(ServerCase):
         self.turn_on()
         code, r = self.call('/api/folders', {'remove': self.docs})
         self.assertEqual((code, r['auto_folders']), (200, []))
+        # 移除后排队撤出，已收录的保留
+        self.assertEqual(r['parked'], 3)
+        stats = self.call('/api/memory')[1]['stats']
+        self.assertEqual((stats['files'], stats['extract'], stats['outside']), (3, 0, 3))
+
+    def test_untick_parks_and_retick_resumes(self):
+        self.assertEqual(self.call('/api/folders', {'count': self.docs})[1], {'queued': 0})
+        self.turn_on()
+        self.assertEqual(self.call('/api/folders', {'count': self.docs})[1], {'queued': 3})
+        self.assertEqual(self.call('/api/folders', {'count': '/nope'})[0], 400)
+        # 一个文件抽到一半
+        db = self.memory._conn()
+        plan = os.path.join(self.docs, '计划.txt')
+        db.execute('UPDATE ingest SET done_n = 1 WHERE path = ?', (plan,))
+        db.commit()
+        code, r = self.call('/api/folders', {'auto': self.docs, 'on': False})
+        self.assertEqual((code, r['parked']), (200, 3))
+        stats = self.call('/api/memory')[1]['stats']
+        self.assertEqual((stats['files'], stats['queued'], stats['outside']), (3, 0, 3))
+        self.assertEqual(self.call('/api/folders', {'count': self.docs})[1], {'queued': 0})
+        # 重新勾选：排队恢复，抽到一半的接着抽
+        self.turn_on()
+        stats = self.call('/api/memory')[1]['stats']
+        self.assertEqual((stats['files'], stats['extract'], stats['outside']), (3, 3, 0))
+        self.assertEqual(db.execute('SELECT done_n FROM ingest WHERE path = ?', (plan,)).fetchone()[0], 1)
+        # 知识库关闭时计数为 0
+        self.call('/api/settings', {'memory': False})
+        self.assertEqual(self.call('/api/folders', {'count': self.docs})[1], {'queued': 0})
+
+    def test_stale_queue_parked_on_check(self):
+        # 存量：配置里已经没有勾选的文件夹（升级前移除或取消勾选的），收录检查时撤出排队
+        self.turn_on()
+        self.config.auto_folders = []
+        self.assertFalse(self.st.ingest.start())
+        self.assertEqual(self.call('/api/memory')[1]['stats']['extract'], 0)
+        # 另一文件夹仍勾选时：收录检查撤出不在勾选文件夹里的
+        self.turn_on()
+        other = os.path.join(self.root, '新资料')
+        os.makedirs(other)
+        write(os.path.join(other, '安排.txt'), '第二阶段在六月底完成。')
+        self.call('/api/folders', {'add': other})
+        self.wait()
+        self.config.auto_folders = [other]
+        self.assertTrue(self.st.ingest.start())
+        self.wait()
+        stats = self.call('/api/memory')[1]['stats']
+        self.assertEqual((stats['extract'], stats['outside']), (1, 3))
 
     def test_extract_then_topics_and_export(self):
         self.assertEqual(self.call('/api/memory-export')[0], 400)       # 还没有主题页和结论
@@ -2530,7 +3268,7 @@ class AutoIngestTest(ServerCase):
             time.sleep(0.05)
         self.assertEqual(st['result']['kind'], 'done')
         self.assertIn('从文件抽出结论', st['result']['text'])
-        self.assertIn('新建主题页 1 页', st['result']['text'])       # 抽出的结论接着整理进主题页
+        self.assertIn('新建主题 1 个', st['result']['text'])       # 抽出的结论接着整理进主题页
         facts = self.call('/api/memory')[1]['facts']
         self.assertIn('第一阶段在三月底完成验收。', [f['quote'] for f in facts])
         self.assertEqual(st['pending'], 0)
@@ -2553,11 +3291,13 @@ class AutoIngestTest(ServerCase):
         self.assertEqual(self.memory.max_bytes, 2048 * 1024 * 1024)
         self.assertEqual(fa.Config(os.path.join(self.root, 'none.json')).memory_mb, fa.MEMORY_MB)
 
-    def test_exit_not_held(self):
+    def test_exit_stops_ingest(self):
         self.st.quit.set()
         self.st.ingest.running = True
-        self.assertEqual(self.st.should_exit(), 'quit requested')     # 自动收录不拖住退出
+        self.assertIsNone(self.st.should_exit())        # 收录在检查点停下后再退出
+        self.assertTrue(self.st.stopping())
         self.st.ingest.running = False
+        self.assertEqual(self.st.should_exit(), 'quit requested')
 
 
 class OpencodeTest(ServerCase):
@@ -2757,6 +3497,78 @@ class SkillManageTest(SkillCase):
         self.assertIn('made', fa.load_skills()[0])
         self.assertIn('error', self.install(output='没有这个'))
 
+
+
+class UpgradeWaitTest(ServerCase):
+    """升级与退回的等待：只等回答与手动整理等不能中断的任务；等待时自动任务不开新一轮；「取消等待」。"""
+
+    def setUp(self):
+        super().setUp()
+        self.job = self.st.upgrade
+        self.assertIsNotNone(self.job)
+
+    def tearDown(self):
+        self.st.upgrade_cancel.set()        # 万一等待线程还在，让它结束，不碰工具目录
+        self.st.chats = 0
+        super().tearDown()
+
+    def test_auto_tasks_are_not_waited_for(self):
+        self.st.ingest.running = True
+        self.st.updater.running, self.st.updater.mode = True, 'auto'
+        self.assertEqual(self.st.upgrade_wait_reason(), '')
+        self.assertFalse(self.st.upgrade_hold())
+        self.assertTrue(self.st.updater.halt.is_set())      # 空闲时自动整理被叫停
+        self.st.ingest.running = self.st.updater.running = False
+
+    def test_waits_for_answers_and_manual_tidy(self):
+        self.st.chats = 1
+        self.assertEqual(self.st.upgrade_wait_reason(), '回答生成')
+        self.st.chats = 0
+        self.st.updater.running, self.st.updater.mode = True, 'manual'
+        self.assertEqual(self.st.upgrade_wait_reason(), '知识库手动整理')
+        self.assertTrue(self.st.upgrade_hold())
+        self.assertFalse(self.st.updater.halt.is_set())     # 手动整理不叫停
+        self.st.updater.running = False
+
+
+    def test_auto_rounds_held_while_upgrading(self):
+        self.config.memory, self.config.memory_auto = True, True
+        self.st.ingest.last = 0.0
+        self.st.updater.last_ask = self.st.updater.last_try = -10 ** 6
+        self.job.state = 'waiting'
+        try:
+            with mock.patch.object(self.st.ingest, 'start') as ing, \
+                    mock.patch.object(self.st.updater, 'start') as upd:
+                self.st.ingest.tick()
+                self.st.ingest.after_scan()
+                self.st.updater.tick()
+                ing.assert_not_called()
+                upd.assert_not_called()
+        finally:
+            self.job.state = 'idle'
+
+    def test_cancel_while_waiting(self):
+        self.assertEqual(self.call('/api/upgrade/cancel', {})[0], 409)
+        self.st.chats = 1
+        self.job.pending['x'] = ('path', os.path.join(self.root, '不存在的新版'))
+        self.assertEqual(self.call('/api/upgrade/apply', {'id': 'x'})[0], 200)
+        for _ in range(100):
+            st = self.call('/api/upgrade')[1]
+            if st['wait_for']:
+                break
+            time.sleep(0.05)
+        self.assertEqual(st['state'], 'waiting')
+        self.assertEqual(st['wait_for'], '回答生成')
+        self.assertEqual(self.call('/api/upgrade/cancel', {})[0], 200)
+        for _ in range(100):
+            st = self.call('/api/upgrade')[1]
+            if st['state'] != 'waiting':
+                break
+            time.sleep(0.05)
+        self.assertEqual(st['state'], 'failed')
+        self.assertIn('已取消等待', st['message'])
+        self.assertEqual(st['wait_for'], '')
+        self.assertFalse(self.job.restart.is_set())
 
 
 if __name__ == '__main__':

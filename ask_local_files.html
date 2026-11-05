@@ -6,9 +6,9 @@
 <title>资料管家</title>
 <script>if (new URLSearchParams(location.search).get('embed') === '1') document.documentElement.classList.add('embed');</script>
 <style>
-  :root { --bg:#f6f7f9; --card:#fff; --text:#1f2328; --muted:#656d76; --line:#d0d7de; --accent:#0969da; --ok:#1a7f37; --warn:#9a6700; --bad:#cf222e; --pick:#ddf4ff; --bad-bg:#ffebe9; --folder:#9a5b00; --busy:#0969da; --busy-bg:#ddf4ff; --ok-bg:#dafbe1; --warn-bg:#fff8c5; }
+  :root { --bg:#f6f7f9; --card:#fff; --text:#1f2328; --muted:#656d76; --line:#d0d7de; --accent:#0969da; --ok:#1a7f37; --warn:#9a6700; --bad:#cf222e; --pick:#ddf4ff; --bad-bg:#ffebe9; --folder:#9a5b00; --busy:#0969da; --busy-bg:#ddf4ff; --ok-bg:#dafbe1; --warn-bg:#fff8c5; --hl:#fff8c5; --hl-line:#bf8700; --backdrop:rgba(31,35,40,.4); --accent-fill:#0969da; --ok-fill:#1a7f37; --g-topic:#0969da; --g-fact:#9a6700; --g-file:#8250df; --g-edge:#6e7781; }
   @media (prefers-color-scheme: dark) {
-    :root { --bg:#0d1117; --card:#161b22; --text:#e6edf3; --muted:#8d96a0; --line:#30363d; --accent:#4493f8; --ok:#3fb950; --warn:#d29922; --bad:#f85149; --pick:#132a44; --bad-bg:#3d1d20; --folder:#e3b341; --busy:#79c0ff; --busy-bg:#132a44; --ok-bg:#12261e; --warn-bg:#2e2410; }
+    :root { --bg:#0d1117; --card:#161b22; --text:#e6edf3; --muted:#8d96a0; --line:#30363d; --accent:#4493f8; --ok:#3fb950; --warn:#d29922; --bad:#f85149; --pick:#132a44; --bad-bg:#3d1d20; --folder:#e3b341; --busy:#79c0ff; --busy-bg:#132a44; --ok-bg:#12261e; --warn-bg:#2e2410; --hl:#2e2508; --hl-line:#d29922; --backdrop:rgba(1,4,9,.6); --accent-fill:#1f6feb; --ok-fill:#238636; --g-topic:#4493f8; --g-fact:#d29922; --g-file:#a371f7; --g-edge:#6e7681; }
   }
   * { box-sizing: border-box; }
   [hidden] { display:none !important; }
@@ -19,7 +19,12 @@
   header .row { flex-wrap:nowrap; flex-shrink:0; }
   h1 { font-size:22px; margin:0; }
   .tagline { color:var(--muted); font-size:14px; }
-  @media (max-width:480px) { .tagline { flex-basis:100%; order:3; font-size:13px; } }
+  @media (max-width:480px) {
+    .tagline { flex-basis:100%; order:3; font-size:13px; }
+    header { flex-wrap:wrap; }
+    header .row { flex-wrap:wrap; flex-shrink:1; margin-top:0; }
+    h1 { white-space:nowrap; }
+  }
   h2 { font-size:17px; margin:0 0 10px; }
   .sub, .hint { color:var(--muted); }
   .sub { margin:4px 0 16px; }
@@ -30,13 +35,14 @@
   #q { flex:3 1 220px; font-size:15px; }
   #ext { flex:1 1 90px; }
   textarea { width:100%; min-height:5.5em; resize:vertical; }
+  ::placeholder { color:var(--muted); opacity:1; }
   .vh { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
   label.drop { display:block; border:1px dashed var(--line); border-radius:6px; padding:10px; text-align:center; cursor:pointer; color:var(--muted); font-size:13px; }
   label.drop.over { border-color:var(--accent); color:var(--text); }
   #skillPanel .row input[type=text] { flex:1 1 180px; }
   select { max-width:100%; }
   button { padding:6px 12px; font:inherit; font-size:14px; border:1px solid var(--line); border-radius:6px; background:var(--card); color:var(--text); cursor:pointer; }
-  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button.primary { background:var(--accent-fill); border-color:var(--accent-fill); color:#fff; }
   a.btn { display:inline-block; padding:6px 12px; font-size:14px; border:1px solid var(--line); border-radius:6px; background:var(--card); color:var(--text); text-decoration:none; }
   .auto-in { display:inline-flex; align-items:center; gap:4px; font-size:13px; white-space:nowrap; color:var(--muted); }
   button.small { padding:1px 8px; font-size:13px; white-space:nowrap; flex-shrink:0; }
@@ -100,7 +106,7 @@
   .qwrap { position:relative; display:flex; flex:1 1 200px; min-width:0; }
   .qwrap input { flex:1 1 auto; width:auto; min-width:0; padding-right:28px; }
   .qwrap button { position:absolute; right:2px; top:50%; transform:translateY(-50%); border:none; background:none; color:var(--muted); padding:2px 6px; font-size:15px; line-height:1; }
-  .sort-by { margin-left:auto; display:inline-flex; gap:4px; align-items:center; font-size:13px; color:var(--muted); }
+  .sort-by { display:inline-flex; gap:4px; align-items:center; font-size:13px; color:var(--muted); margin-top:6px; }
   .sort-by select { padding:2px 6px; font-size:13px; }
   #pickStatus { white-space:pre-wrap; overflow-wrap:anywhere; }
   #crumbs { display:flex; flex-wrap:wrap; align-items:center; gap:2px; font-size:14px; }
@@ -112,8 +118,114 @@
   ul.list ul.dups li { padding:3px 0; }
   .find-opts { display:flex; flex-wrap:wrap; gap:0 12px; }
   .mem-row { display:inline-flex; gap:8px; align-items:center; }
-  #memView { color:var(--accent); border-color:var(--accent); background:var(--pick); }
-  #memView .arrow { color:var(--accent); }
+  /* 知识库卡片：徽标、跳到提问框、齿轮、标签、概览、主题与结论、引导、跳转高亮、清空确认框 */
+  .badge { font-size:13px; font-weight:bold; color:var(--accent); border:1px solid var(--accent); border-radius:999px; padding:0 10px; white-space:nowrap; }
+  .skip { position:absolute; left:16px; top:-48px; z-index:10; background:var(--accent-fill); color:#fff; padding:4px 12px; border-radius:6px; text-decoration:none; font-size:14px; }
+  .skip:focus { top:8px; }
+  .embed .skip { display:none; }
+  button.gear { display:inline-flex; align-items:center; justify-content:center; gap:4px; min-height:28px; padding:2px 8px; color:var(--muted); }
+  button.gear[aria-expanded=true] { color:var(--accent); border-color:var(--accent); }
+  #kbTabs { display:flex; gap:2px 4px; border-bottom:1px solid var(--line); margin:0 0 6px; overflow-x:auto; }
+  #kbTabs [role=tab] { border:none; border-bottom:2px solid transparent; border-radius:0; background:none; color:var(--muted); padding:3px 12px; min-height:28px; white-space:nowrap; }
+  #kbTabs [role=tab][aria-selected=true] { color:var(--text); border-bottom-color:var(--accent); font-weight:bold; }
+  .kb-panel h3, #kbSetPanel h3 { font-size:14px; margin:12px 0 4px; }
+  #kbSetPanel h3 { margin-top:2px; }
+  #kbSetPanel h3.kb-sep { margin-top:14px; }
+  #kbSetPanel .dedup { display:flex; min-height:26px; }
+  .lead { margin:0; font-size:14px; }
+  .busy { border:1px solid var(--line); border-radius:6px; padding:6px 10px; margin-top:8px; font-size:13px; }
+  .busy .tidy { margin-top:2px; color:var(--muted); }
+  .busy .tidy.paused { color:var(--warn); }
+  .bar { height:6px; background:var(--line); border-radius:3px; overflow:hidden; margin-top:4px; }
+  .bar i { display:block; height:100%; width:0; background:var(--accent); }
+  .strip { display:flex; flex-wrap:wrap; gap:0 10px; align-items:center; font-size:13px; padding:0 8px; border:1px solid var(--line); border-radius:6px; background:var(--bg); margin:0 0 6px; }
+  .strip button { min-height:24px; }
+  ul.list.rows li { padding:0; }
+  ul.list li > button.rowbtn { flex:1 1 auto; min-width:0; min-height:36px; border:none; border-radius:0; background:none; padding:6px 4px; text-align:left; word-break:break-word; }
+  ul.list li > button.rowbtn:hover { background:var(--bg); }
+  ul.list li.hl { background:var(--hl); outline:2px solid var(--hl-line); outline-offset:-2px; padding:6px 8px; }
+  ul.list li.hl:focus { outline-width:3px; }
+  .kb-empty { margin-top:8px; }
+  .kb-empty p { margin:0 0 6px; }
+  details.more-kb { margin-top:12px; font-size:13px; }
+  details.more-kb > summary { color:var(--muted); font-weight:normal; min-height:24px; width:max-content; max-width:100%; }
+  ul.reasons { margin:4px 0 0; padding-left:1.2em; color:var(--muted); }
+  #memQ { width:100%; }
+  .more-btn { margin-top:6px; }
+  .points { margin:2px 0 4px; padding-left:1.2em; font-size:13px; }
+  .points li { display:list-item !important; border:none !important; padding:1px 0 !important; }
+  .tag { display:inline-block; font-size:12px; border-radius:4px; padding:0 6px; white-space:nowrap; line-height:20px; }
+  button.tag { border:none; min-height:24px; }
+  .tag.in { background:var(--ok-bg); color:var(--ok); }
+  .tag.wait { background:var(--busy-bg); color:var(--busy); }
+  .tag.no { background:var(--bg); color:var(--muted); border:1px solid var(--line); }
+  .meta .tagline-kb { display:block; margin-top:2px; }
+  .guide { border:1px solid var(--line); border-radius:8px; padding:10px 12px; margin:0 0 8px; background:var(--bg); }
+  .guide h3 { margin:0 0 4px; font-size:15px; }
+  .guide ol { margin:0; padding:0; list-style:none; counter-reset:step; }
+  .guide li { counter-increment:step; display:flex; gap:10px; align-items:flex-start; padding:6px 0; border-top:1px solid var(--line); }
+  .guide li:first-child { border-top:none; }
+  .guide li::before { content:counter(step); flex:0 0 26px; height:26px; border-radius:50%; border:1px solid var(--accent); color:var(--accent); text-align:center; line-height:24px; font-size:13px; }
+  .guide li.done::before { content:"✓"; background:var(--ok-fill); border-color:var(--ok-fill); color:#fff; }
+  .guide li > div { flex:1 1 auto; min-width:0; }
+  .guide li:not(.done) .done-note { display:none; }
+  .guide .hint { margin:2px 0 0; }
+  .guide button.link { min-height:24px; padding-left:0; }
+  .examples { display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
+  .examples button { border-radius:999px; background:var(--pick); font-size:13px; padding:2px 10px; min-height:28px; text-align:left; }
+  .off-note { margin:0 0 8px; }
+  .off-note p { margin:0 0 4px; }
+  .send-sum { font-size:13px; color:var(--muted); min-width:0; overflow-wrap:anywhere; flex:1 1 220px; }
+  .send-sum.warn { color:var(--warn); }
+  .memo li button.link { padding:0 2px; text-align:left; min-height:24px; word-break:break-word; }
+  .jump-bar { display:flex; flex-wrap:wrap; gap:4px 10px; align-items:center; font-size:13px; padding:4px 8px; margin:0 0 6px; border-left:3px solid var(--hl-line); background:var(--hl); border-radius:6px; overflow-wrap:anywhere; }
+  #kbJumpText { flex:1 1 12em; min-width:0; }
+  dialog { border:1px solid var(--line); border-radius:8px; background:var(--card); color:var(--text); max-width:min(440px, calc(100vw - 32px)); padding:14px 16px; }
+  dialog::backdrop { background:var(--backdrop); }
+  /* 关系图：全窗口；窄屏只显示列表与详情 */
+  dialog.graph-dlg { width:calc(100vw - 16px); max-width:none; height:calc(100vh - 16px); max-height:none; padding:10px; box-sizing:border-box; }
+  dialog.graph-dlg[open] { display:flex; flex-direction:column; gap:6px; }
+  /* 管理文件夹：大窗口，打开期间页面其他部分不能操作；窄屏占满 */
+  dialog.folder-dlg { width:min(960px, calc(100vw - 16px)); max-width:none; height:calc(100vh - 16px); max-height:none; padding:12px 14px; box-sizing:border-box; }
+  dialog.folder-dlg[open] { display:flex; flex-direction:column; gap:8px; }
+  dialog.folder-dlg > * { flex:0 0 auto; min-width:0; }
+  .folder-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+  .folder-head h3 { margin:0; }
+  dialog.folder-dlg #folders { flex:1 1 auto; min-height:80px; max-height:none; overflow-y:auto; margin:0; }
+  dialog.folder-dlg .row { margin:0; }
+  @media (max-width: 600px) { dialog.folder-dlg { width:100vw; height:100vh; border-radius:0; border:0; } }
+  .graph-head { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+  .graph-head h3 { margin:0 8px 0 0; }
+  .graph-head input { flex:1 1 160px; min-width:0; }
+  .graph-legend { margin:0; font-size:12px; }
+  .graph-legend .lg { display:inline-block; width:10px; height:10px; margin:0 4px 0 8px; vertical-align:-1px; }
+  .lg.topic { background:var(--g-topic); border-radius:50%; } .lg.fact { background:var(--g-fact); border-radius:2px; } .lg.file { background:var(--g-file); transform:rotate(45deg); }
+  .graph-body { flex:1 1 auto; display:flex; gap:8px; min-height:0; }
+  #graphSvg { flex:1 1 auto; min-width:0; height:100%; border:1px solid var(--line); border-radius:6px; background:var(--bg); touch-action:none; cursor:grab; }
+  #graphSvg .gn { cursor:pointer; }
+  #graphSvg .gn text { font-size:11px; fill:var(--text); pointer-events:none; }
+  #graphSvg .gn.topic .shape { fill:var(--g-topic); } #graphSvg .gn.fact .shape { fill:var(--g-fact); } #graphSvg .gn.path .shape { fill:var(--g-file); }
+  #graphSvg .gn.sel .shape { stroke:var(--hl-line); stroke-width:3; }
+  #graphSvg .ge { stroke:var(--g-edge); stroke-width:1.2; }
+  #graphSvg .ge.related { stroke:var(--g-topic); stroke-opacity:.6; stroke-dasharray:4 3; }
+  #graphSvg .ge.same { stroke:var(--g-fact); stroke-opacity:.7; }
+  .graph-side { flex:0 0 320px; display:flex; flex-direction:column; gap:8px; min-height:0; }
+  #graphTree { flex:1 1 50%; overflow:auto; margin:0; padding:0; list-style:none; border:1px solid var(--line); border-radius:6px; }
+  #graphTree ul { list-style:none; margin:0; padding:0 0 0 18px; }
+  #graphTree [role=treeitem] > .gi { display:block; padding:3px 6px; border-radius:4px; overflow-wrap:anywhere; cursor:pointer; }
+  #graphTree [role=treeitem][aria-selected=true] > .gi { background:var(--pick); }
+  #graphTree [role=treeitem]:focus-visible { outline:none; } #graphTree [role=treeitem]:focus-visible > .gi { outline:2px solid var(--accent); outline-offset:-2px; }
+  #graphTree .k { color:var(--muted); font-size:12px; margin-right:4px; }
+  #graphDetail { flex:0 1 auto; max-height:50%; overflow:auto; border:1px solid var(--line); border-radius:6px; padding:6px 8px; font-size:13px; overflow-wrap:anywhere; }
+  #graphDetail:empty { display:none; }
+  #graphDetail .row { margin-top:6px; }
+  @media (max-width: 640px) {
+    #graphSvg, .graph-legend, #graphFit, #graphRelayout, #graphZoomIn, #graphZoomOut { display:none; }
+    .graph-side { flex:1 1 auto; }
+  }
+  dialog h3 { margin:0 0 6px; font-size:16px; }
+  dialog p { margin:0; font-size:14px; }
+  button.link { min-height:24px; }
   .dedup { display:inline-flex; gap:4px; align-items:center; font-size:13px; color:var(--muted); margin-top:6px; }
   .pickrow { flex-wrap:nowrap; }
   .pickrow input { flex:1 1 auto; width:auto; min-width:0; }
@@ -127,7 +239,7 @@
   button.link { border:none; background:none; color:var(--accent); padding:2px 4px; font-size:13px; }
   .panel { border:1px solid var(--line); border-radius:6px; padding:8px 10px; margin:8px 0; }
   .panel h3 { font-size:15px; margin:4px 0 6px; }
-  /* 设置面板：模型、skill、知识库、通用四个标签，一次只显示一页 */
+  /* 设置面板：模型、skill 两个标签，一次只显示一页 */
   .set-head { display:flex; flex-wrap:wrap; align-items:flex-end; gap:4px 8px; border-bottom:1px solid var(--line); margin:0 0 8px; }
   #setTabs { display:flex; flex-wrap:wrap; gap:2px 4px; min-width:0; }
   #setTabs [role=tab] { border:none; border-bottom:2px solid transparent; border-radius:0; background:none; color:var(--muted); padding:4px 10px; }
@@ -150,9 +262,9 @@
   .tools { margin:0 0 6px; font-size:13px; }
   .tools details { border-left:3px solid var(--line); padding:2px 0 2px 8px; margin:4px 0; }
   .memo { border-left:3px solid var(--accent); padding:2px 0 2px 8px; margin:4px 0; font-size:13px; }
-  .memo summary { cursor:pointer; color:var(--muted); font-weight:normal; }
+  .memo summary { cursor:pointer; color:var(--muted); font-weight:normal; min-height:24px; }
   .memo ul { margin:4px 0; padding-left:1.2em; }
-  .memo li, #memPanel li .grow { word-break:break-word; }
+  .memo li, #kbTopics li .grow { word-break:break-word; }
   .mem-h { margin:10px 0 0; font-size:14px; }
   .tools summary { cursor:pointer; color:var(--muted); word-break:break-all; }
   .tools .bad { color:var(--bad); }
@@ -179,8 +291,11 @@
     .layout.right-folded { grid-template-rows:minmax(0,1fr) auto; }
     .layout.left-folded.right-folded { grid-template-rows:auto auto; }
     .layout.left-folded .col-left, .layout.right-folded .col-right { padding-right:0; }
-    #findBody > #folderPanel { flex:0 1 auto; min-height:60px; overflow-y:auto; }
-    #findBody > #searchPane, #findBody > #browsePane { flex:1 1 auto; min-height:0; display:flex; flex-direction:column; }
+    #findBody > .kb-panel { flex:1 1 auto; min-height:0; display:flex; flex-direction:column; }
+    #findBody > #kbOverview, #findBody > #kbTopics { display:block; overflow-y:auto; }
+    #findBody > #kbSetPanel { flex:0 1 auto; min-height:60px; max-height:55%; overflow-y:auto; }
+    #kbFiles > * { flex:0 0 auto; }
+    #kbFiles > #searchPane, #kbFiles > #browsePane { flex:1 1 auto; min-height:0; display:flex; flex-direction:column; }
     #searchPane > *, #browsePane > * { flex:0 0 auto; }
     #results, #browseList { flex:1 1 auto; min-height:60px; max-height:none; }
     #pickedCard:not(.fill) { max-height:40%; }
@@ -189,7 +304,8 @@
     #askCard { overflow-y:auto; }
     #askCard:not(.fill) { max-height:50%; }
     #pickedCard.folded, #askCard.folded { max-height:none; }
-    #chatWrap { flex:1 1 auto; min-height:160px; display:flex; flex-direction:column; }
+    #chatWrap { flex:1 1 auto; min-height:160px; display:flex; flex-direction:column; overflow-y:auto; }
+    #chatWrap > .guide, #chatWrap > .off-note { flex:0 0 auto; }
     #chat { flex:1 1 auto; min-height:0; max-height:none; }
     #chatWrap #chat:empty { display:block; }
     #askCard textarea { min-height:calc(6.4em + 16px); }
@@ -232,7 +348,7 @@
   .msg .cite { color:var(--warn); font-size:13px; white-space:pre-wrap; word-break:break-word; }
   #chat:empty { display:none; }
   #dest { font-size:13px; color:var(--muted); word-break:break-all; }
-  details summary { cursor:pointer; font-weight:bold; }
+  details summary { cursor:pointer; font-weight:bold; min-height:24px; }
   .grid { display:grid; grid-template-columns:7em minmax(0,1fr); gap:8px 10px; align-items:center; margin-top:8px; }
   .grid input { width:100%; }
   footer { color:var(--muted); font-size:13px; margin-top:24px; border-top:1px solid var(--line); padding-top:10px; }
@@ -257,21 +373,22 @@
 </style>
 </head>
 <body>
+<a id="skipAsk" class="skip" href="#ask">跳到提问框（Ctrl+L）</a>
 <main>
   <header>
     <div class="head-title">
       <h1>资料管家</h1>
-      <span id="tagline" class="tagline">用 AI 查找、整理、问答本机资料</span>
-      <button id="foldSub" class="toggle" type="button" aria-expanded="false" aria-controls="sub">说明<span class="arrow" aria-hidden="true">▸</span></button>
+      <span class="badge">本机知识库</span>
+      <span id="tagline" class="tagline">把本机文件收录到知识库，用 AI 查找与问答</span>
     </div>
     <div class="row">
       <a id="help" class="btn" href="/help.html" target="_blank" rel="noopener" title="在新标签里打开帮助：怎么用、原理与常见问题">帮助</a>
       <button id="newConv" type="button" title="在本窗口新开一个对话标签，已选和对话各自独立">＋ 新对话</button>
       <button id="up-open" type="button" aria-expanded="false" aria-controls="upgrade" title="原地升级到新版，或退回上一版">升级</button>
-      <button id="quit" type="button">退出</button>
+      <button id="quit" type="button" title="结束资料管家：停下正在进行的回答与后台任务，关闭服务；开着的页面一起结束">退出</button>
     </div>
   </header>
-  <p id="sub" class="sub" hidden>逐层浏览或按文件名找出文件交给 AI，或选用 skill 让 AI 运行脚本处理；点「＋ 新对话」可在新标签里并行。支持 Word（docx）、Excel（xlsx、xlsm）、PowerPoint（pptx）、旧版 doc、xls、ppt（wps、et、dps 按同类格式试读）、PDF、邮件（eml）、网页（html、htm）、纯文本与代码文件；压缩包等读不了的文件可点「打开文件夹」自己处理。勾选「参考知识库」时参考本机收录的文件和结论，可在「知识库设置」里查看或清空；在「管理文件夹」里给文件夹勾选「自动收录到知识库」（新添加的文件夹默认勾选），其中的文件会自动收录到知识库。怎么用、原理与常见问题见右上角「帮助」。</p>
+  <p id="sub" class="sub">添加文件夹后其中的文件自动收录；提问时参考知识库，回答附出处。</p>
   <section id="upgrade" class="card" aria-labelledby="upgrade-title">
     <h2 id="upgrade-title">升级</h2>
     <p class="hint">选新版的 zip，或解压好的目录（目录名须与本工具目录同名）。升级在原位置替换，桌面链接不变；会保留的文件照 upgrade-keep.txt 带到新版（知识库、设置与令牌在保存位置，不在工具目录里，不受影响），旧版留作上一版，可随时退回。</p>
@@ -283,11 +400,11 @@
       <label class="drop" id="up-dir-label" tabindex="0" role="button" style="margin:0;padding:6px 12px;">
         <input type="file" id="up-dir" class="vh" webkitdirectory multiple tabindex="-1">选择解压好的目录……
       </label>
-      <button id="up-rollback" type="button" disabled>退回上一版</button>
+      <button id="up-rollback" type="button" disabled title="换回升级前的版本，知识库与设置保留">退回上一版</button>
     </div>
     <div id="up-status" class="ustatus info" aria-live="polite"></div>
     <div id="up-report" class="ureport"></div>
-    <div class="row"><button id="up-go" class="primary" type="button" hidden></button></div>
+    <div class="row"><button id="up-go" class="primary" type="button" hidden title="按上面的检查结果开始升级或退回，完成后服务用新版重新启动"></button><button id="up-cancel" type="button" hidden title="不再等待正在进行的任务结束，这次不升级">取消等待</button></div>
   </section>
   <div id="closed">服务已退出，可关闭本页。需要再用时重新双击「资料管家」。</div>
   <div id="banner" class="banner" role="status" hidden></div>
@@ -301,18 +418,126 @@
   <div class="col-left">
   <section class="card" id="findCard" aria-labelledby="h-find">
     <div class="card-head">
-      <h2 id="h-find"><button id="foldFind" class="fold" type="button" aria-expanded="true" aria-controls="findBody"><span class="arrow" aria-hidden="true">▾</span>找文件</button></h2>
+      <h2 id="h-find"><button id="foldFind" class="fold" type="button" aria-expanded="true" aria-controls="findBody" title="收起或展开「知识库」"><span class="arrow" aria-hidden="true">▾</span>知识库</button></h2>
       <span id="findSummary" class="fold-sum hint"></span>
+      <button id="memSettings" class="small push gear" type="button" aria-label="知识库设置" title="知识库设置" aria-expanded="false" aria-controls="kbSetPanel"><svg class="icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false"><g fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="8" cy="8" r="2.2"/><circle cx="8" cy="8" r="4.6"/><path d="M8 1.2v2.2M8 12.6v2.2M1.2 8h2.2M12.6 8h2.2M3.2 3.2l1.5 1.5M11.3 11.3l1.5 1.5M3.2 12.8l1.5-1.5M11.3 4.7l1.5-1.5"/></g></svg>设置</button>
     </div>
     <div id="findBody" class="fold-body">
+      <div id="kbSetPanel" class="panel" role="region" aria-labelledby="kbSetTitle" hidden>
+        <h3 id="kbSetTitle">知识库设置</h3>
+        <label class="dedup"><input id="memoryOn" type="checkbox" checked>打开知识库（收录并在提问时参考）</label>
+        <p class="hint">关闭后不收录，提问时也不参考，已收录的保留。</p>
+        <label class="dedup"><input id="tocPick" type="checkbox" checked>提问前先让模型看主题目录</label>
+        <div id="tocStatus" class="status" aria-live="polite"></div>
+        <label class="dedup"><input id="memAuto" type="checkbox" checked>空闲时自动整理</label>
+        <p class="hint">10 分钟没有提问后，由所选模型把待整理的内容整理成主题；一提问就让路。</p>
+        <div class="row" style="gap:4px 6px">
+          <label for="xbChars" class="hint" style="margin:0">每批至多</label>
+          <input id="xbChars" type="number" min="5000" max="200000" step="1000" style="width:calc(6ch + 44px)" aria-label="每批至多多少字">
+          <span class="hint">字</span>
+          <input id="xbFiles" type="number" min="1" max="100" style="width:calc(3ch + 44px)" aria-label="每批至多几个文件">
+          <span class="hint">个文件</span>
+          <button id="saveXb" type="button" aria-label="保存每批大小" title="保存每批交给模型抽结论的字数与文件数上限">保存</button>
+        </div>
+        <p class="hint">从文件抽结论时，同一文件夹的文件按修改时间从旧到新拼成一批交给模型，抽完紧接着整理进主题；默认每批至多 30,000 字、20 个文件，另受发送字数上限限制。</p>
+        <div class="row">
+          <label for="memMb" class="hint" style="margin:0">容量上限（MB）</label>
+          <input id="memMb" type="number" min="50" max="102400" step="50" style="width:7em">
+          <button id="saveMemMb" type="button" aria-label="保存容量上限" title="保存知识库容量上限；超过时先移出最久没用的文件">保存</button>
+        </div>
+        <p class="hint">范围 50 到 102,400，默认 1,024（1 GB），回车即保存；超过上限时先移出最久没用的文件。</p>
+        <p id="memCap" class="hint"></p>
+        <h3 id="dataH" class="kb-sep">保存位置</h3>
+        <p id="dataDirNow" class="hint name"></p>
+        <p id="dataWhy" class="hint warn" hidden></p>
+        <p id="dataPrev" class="hint warn" hidden></p>
+        <div class="row" id="dataPrevRow" hidden><button id="dataRestore" type="button" title="把上一版里的知识库、设置和网址令牌复制过来，上一版的文件不动；会先弹出确认框">从上一版取回……</button></div>
+        <div class="row" id="dataToolRow" hidden><button id="dataToTool" type="button" title="把知识库、设置和网址令牌搬到程序安装目录下的「数据」文件夹，会先弹出确认框">改存到安装目录……</button></div>
+        <div class="row">
+          <input id="dataDir" type="text" placeholder="不会被清理的文件夹的完整路径" autocomplete="off" aria-label="新的保存位置" style="flex:1 1 200px">
+          <button id="pickDataDir" type="button" hidden title="用系统对话框选择新的保存位置">选择……</button>
+          <button id="setDataDir" type="button" title="把知识库、设置等数据改存到填写的文件夹，会先弹出确认框">更改</button>
+        </div>
+        <p class="hint">知识库、设置（已添加的文件夹、模型设置等）和网址令牌一起存在这里，默认是程序安装目录下的「数据」文件夹，升级时整个带到新版。</p>
+        <details class="more"><summary>详细说明</summary><p class="hint">例如数据盘上的文件夹。新位置是空文件夹时，把现有的移过去，原处不保留；新位置已有本工具的数据时直接改用那一份，不合并，当前的保留不动。有回答在生成、知识库在更新等任务进行时不能改。位置记在工具目录的 data-dir.txt，升级时带到新版。</p></details>
+        <div id="dataStatus" class="status" aria-live="polite"></div>
+        <div class="row"><button id="memClear" class="small danger" type="button" title="删除知识库里全部收录的文字、结论和主题，会先弹出确认框，不能恢复">清空知识库……</button></div>
+        <div id="memStatus" class="status" aria-live="polite"></div>
+      </div>
+      <div id="kbTabs" role="tablist" aria-label="知识库">
+        <button id="kbtab-files" type="button" role="tab" aria-selected="false" aria-controls="kbFiles" tabindex="-1" title="按文件夹浏览、搜索文件，管理要收录的文件夹，把文件加入「已选」">文件</button>
+        <button id="kbtab-overview" type="button" role="tab" aria-selected="true" aria-controls="kbOverview" title="看知识库的数字、收录与整理进度和整理记录">概览</button>
+        <button id="kbtab-topics" type="button" role="tab" aria-selected="false" aria-controls="kbTopics" tabindex="-1" title="查看、搜索整理出的主题和结论，可移出不对的">主题与结论</button>
+      </div>
+      <div id="kbJumpBar" class="jump-bar" hidden><span id="kbJumpText" aria-live="polite"></span><button id="kbJumpBack" class="small" type="button" aria-label="返回回答里的引用" hidden title="回到回答里刚才点的引用处">返回回答</button></div>
+      <div id="kbOverview" class="kb-panel" role="tabpanel" aria-labelledby="kbtab-overview">
+        <p id="memStats" class="lead"></p>
+        <details id="kbTerms" class="more"><summary>收录、整理是什么</summary>
+          <p class="hint">收录：把勾选的文件夹里 Word、Excel、PPT、WPS、PDF、邮件、txt 和 Markdown 文件的文字读出来，按段落存进本机的知识库，不用模型，收录完提问时马上能参考。</p>
+          <p class="hint">整理：由所选模型从收录的文字里抽出带原句的结论，再把结论归进主题、合并重复、以新代旧；10 分钟没有提问时自动进行，也可点「现在整理」，每次都记进「整理记录」，可以撤销。</p>
+          <p class="hint">网页、代码等其他格式不自动收录，要用时在「文件」标签里加入「已选」再提问。<a href="/help.html#kb" target="_blank" rel="noopener">在帮助里看详细说明</a></p>
+        </details>
+        <div class="row" id="memOutsideRow" hidden><button id="memOutside" class="small" type="button" title="删除不在自动收录范围内的已收录文件及其结论，会先弹出确认框写明数量">移出不在自动收录范围内的文件……</button></div>
+        <div id="outStatus" class="status" aria-live="polite"></div>
+        <div class="row"><button id="kbGraph" class="small" type="button" aria-haspopup="dialog" title="用图查看主题、结论与文件之间的关系，只读">关系图</button><span class="hint">交互查看主题、结论与文件之间的关系</span></div>
+        <div id="kbBusy" class="busy" hidden>
+          <div id="kbIngestBusy" hidden><span id="kbIngestText"></span><div class="bar" aria-hidden="true"><i id="kbIngestBar"></i></div></div>
+          <div id="kbTidyBusy" class="tidy" hidden><span id="kbTidyText"></span> <button id="memUpdate" class="link" type="button" title="整理：马上让模型从已收录的文字里抽结论、归进主题，不等空闲">现在整理</button><button id="memUpdStop" class="small" type="button" hidden title="停下这次整理，已整理好的保留，下次接着做">停止</button></div>
+        </div>
+        <div id="memUpdStatus" class="status" aria-live="polite"></div>
+        <div id="kbPlan" hidden>
+          <p id="kbPlanText" class="hint"></p>
+          <ul id="kbPlanLog" class="list rows"></ul>
+        </div>
+        <div id="xfailRow" class="strip" hidden><span id="xfailText"></span><button id="xfailRetry" class="link" type="button" title="把抽结论失败的文件重新排进整理">重试</button><button id="xfailShow" class="toggle" type="button" aria-expanded="false" aria-controls="xfailPanel" title="列出抽结论失败的文件">文件清单<span class="arrow" aria-hidden="true">▸</span></button></div>
+        <div id="xfailPanel" hidden><ul id="xfailList" class="list"></ul></div>
+        <div id="ingestStatus" class="status" aria-live="polite"></div>
+        <div id="kbRecent" hidden>
+          <h3>最近整理的主题</h3>
+          <ul id="kbRecentList" class="list rows"></ul>
+        </div>
+        <div id="kbEmpty" class="kb-empty" hidden><p id="kbEmptyText" class="hint"></p><button id="kbEmptyGo" type="button" title="按提示完成建库的下一步"></button></div>
+        <details id="kbMore" class="more-kb">
+          <summary>⋯ 更多</summary>
+          <h3>整理记录</h3>
+          <p class="hint">最近 20 次整理，可以从最近一次往回撤销。<button id="memLog" class="toggle" type="button" aria-expanded="false" aria-controls="memLogPanel" title="查看最近的整理做了哪些改动，可从最近一次往回撤销">整理记录<span class="arrow" aria-hidden="true">▸</span></button></p>
+          <div id="memLogPanel" hidden><ul id="memLogList" class="list"></ul></div>
+          <h3>没有收录的文件</h3>
+          <p id="ingestStats" class="hint"></p>
+          <ul id="ingestReasons" class="reasons"></ul>
+          <div class="row">
+            <button id="ingestRun" type="button" title="收录：马上查一遍勾选的文件夹，把新增或改过的文件读出文字存进知识库（不用模型）">立即收录</button>
+            <button id="ingestSkipped" class="toggle" type="button" aria-expanded="false" aria-controls="ingestSkippedPanel" hidden title="列出没有收录的文件和原因">文件清单<span class="arrow" aria-hidden="true">▸</span></button>
+          </div>
+          <div id="ingestSkippedPanel" hidden><ul id="ingestSkippedList" class="list"></ul></div>
+          <h3>按新办法重新整理全部</h3>
+          <p class="hint">删除全部主题、结论与要点（收录的原文保留），把全部已收录的文件按分批的办法重新抽结论、整理成主题；会把文件的文字重新发给模型，文件多时要很久，可以挑空闲时段做。</p>
+          <div class="row"><button id="memReorg" class="small" type="button" title="用新的整理办法把全部文件重新抽结论、整理主题，会先弹出确认框">按新办法重新整理全部……</button></div>
+          <div id="reorgStatus" class="status" aria-live="polite"></div>
+          <h3>保存为 Markdown</h3>
+          <p class="hint">把主题与结论保存成一组 Markdown 文件（zip），解压后可用 Obsidian 打开，看主题与文件之间的链接。</p>
+          <div class="row"><button id="memSaveMd" class="small" type="button" title="把全部主题和结论保存成一个 Markdown 文件">保存为 Markdown</button></div>
+          <div id="kbMdStatus" class="status" aria-live="polite"></div>
+        </details>
+      </div>
+      <div id="kbTopics" class="kb-panel" role="tabpanel" aria-labelledby="kbtab-topics" hidden>
+        <input id="memQ" type="text" placeholder="搜索主题、结论、原句或文件路径……" autocomplete="off" aria-label="搜索知识库">
+        <div id="kbFocusBar" class="strip" hidden><span id="kbFocusText"></span><button id="kbShowAll" class="link" type="button" title="取消定位，显示全部主题和结论">显示全部</button><button id="kbForgetFile" class="small" type="button" hidden title="从知识库删除这份文件的文字和结论，原文件不受影响">从知识库移出这份文件</button></div>
+        <p id="kbNone" class="hint" hidden>没有找到包含「<span id="kbNoneWord"></span>」的主题或结论。换个关键词，或 <button id="memQClear" class="link" type="button" title="清空搜索词，显示全部主题和结论">清空搜索</button></p>
+        <div id="kbLists">
+          <h3 id="kbTopicsH">主题</h3>
+          <ul id="memTopics" class="list"></ul>
+          <button id="moreTopics" class="small more-btn" type="button" hidden title="再列出 50 个主题"></button>
+          <h3 id="kbFactsH">结论</h3>
+          <ul id="memFacts" class="list"></ul>
+          <button id="moreFacts" class="small more-btn" type="button" hidden title="再列出 50 条结论"></button>
+        </div>
+        <div id="kbListStatus" class="status" aria-live="polite"></div>
+      </div>
+      <div id="kbFiles" class="kb-panel" role="tabpanel" aria-labelledby="kbtab-files" hidden>
+      <div id="kbStrip" class="strip"><span id="kbStripText"></span><button id="kbToOverview" class="link" type="button" title="切到「概览」标签">查看概览</button></div>
       <div class="tabs-row">
         <nav id="crumbs" aria-label="当前文件夹"></nav>
-        <label class="sort-by">排序<select id="sortBy">
-          <option value="time_desc">最新在前</option>
-          <option value="time_asc">最旧在前</option>
-          <option value="name_asc">名称 A→Z</option>
-          <option value="name_desc">名称 Z→A</option>
-        </select></label>
       </div>
       <div id="searchRow" class="row">
         <span class="qwrap"><input id="q" type="text" placeholder="文件名或路径里的字，空格分开多个关键字，回车加入第一个结果" autocomplete="off" aria-label="关键字"><button id="qClear" type="button" aria-label="清除关键字" title="清除关键字" hidden>×</button></span>
@@ -320,67 +545,62 @@
       </div>
       <div id="findStatusRow" class="status-row">
         <div id="findStatus" class="status info" aria-live="polite"></div>
-        <button id="refresh" class="link" type="button">刷新</button>
-        <button id="manageFolders" class="toggle" type="button" aria-expanded="false" aria-controls="folderPanel"><svg class="icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false"><path fill="currentColor" d="M1.5 3.5A1.5 1.5 0 0 1 3 2h3.2l1.5 1.5H13a1.5 1.5 0 0 1 1.5 1.5v7.5A1.5 1.5 0 0 1 13 14H3a1.5 1.5 0 0 1-1.5-1.5z"/></svg>管理文件夹<span class="arrow" aria-hidden="true">▸</span></button>
+        <button id="refresh" class="link" type="button" title="重新扫描已添加的文件夹，找出新增或改过的文件">刷新</button>
+        <button id="manageFolders" class="toggle" type="button" aria-haspopup="dialog" aria-controls="folderDlg" title="在大窗口里添加、移除文件夹，勾选哪些文件夹自动收录到知识库；打开期间其他功能暂停操作"><svg class="icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false"><path fill="currentColor" d="M1.5 3.5A1.5 1.5 0 0 1 3 2h3.2l1.5 1.5H13a1.5 1.5 0 0 1 1.5 1.5v7.5A1.5 1.5 0 0 1 13 14H3a1.5 1.5 0 0 1-1.5-1.5z"/></svg>管理文件夹</button>
+        <button id="findOptsBtn" class="toggle" type="button" aria-expanded="false" aria-controls="findOpts" title="搜索与列表的选项：去重、正则、忽略 Markdown、排序">选项<span id="findOptsN"></span><span class="arrow" aria-hidden="true">▸</span></button>
       </div>
       <div id="openStatusRow" class="status-row" hidden>
         <div id="openStatus" class="status info" aria-live="polite"></div>
-        <button id="copyFolder" class="link" type="button" hidden>复制路径</button>
+        <button id="copyFolder" class="link" type="button" hidden title="复制没能打开的文件夹的路径，到文件管理器里粘贴打开">复制路径</button>
       </div>
-      <div id="folderPanel" class="panel" hidden>
-        <h3>索引的文件夹</h3>
-        <ul id="folders" class="list"></ul>
-        <div class="row" style="margin-top:8px">
-          <input id="folder" type="text" placeholder="绝对路径、~/ 开头或粘贴 file:/// 地址，如 ~/文档" autocomplete="off" aria-label="要添加的文件夹" list="folderList" style="flex:1 1 240px">
-          <datalist id="folderList"></datalist>
-          <button id="pickFolder" type="button" aria-label="选择要添加的文件夹" hidden>选择……</button>
-          <button id="addFolder" type="button">添加</button>
-          <button id="rebuild" type="button">重建索引</button>
-        </div>
-        <div id="places" class="row hint" style="margin-top:6px"></div>
-        <div id="folderStatus" class="status" aria-live="polite"></div>
-      </div>
-      <div id="findOpts" class="find-opts">
+      <div id="findOpts" class="find-opts" hidden>
+        <label class="sort-by">排序<select id="sortBy">
+          <option value="time_desc">最新在前</option>
+          <option value="time_asc">最旧在前</option>
+          <option value="name_asc">名称 A→Z</option>
+          <option value="name_desc">名称 Z→A</option>
+        </select></label>
         <label class="dedup"><input id="dedup" type="checkbox" checked>按文件名去重</label>
         <label class="dedup"><input id="regex" type="checkbox">正则表达式</label>
         <label class="dedup"><input id="ignoreMd" type="checkbox" checked>忽略 Markdown 文件</label>
       </div>
       <div id="searchPane" aria-label="搜索结果" hidden>
         <div id="addAllRow" class="row" style="margin-top:6px" hidden>
-          <button id="addAll" class="small" type="button"></button>
-          <button id="addTop10" class="small" type="button" data-n="10"></button>
-          <button id="addTop30" class="small" type="button" data-n="30"></button>
-          <button id="addTop50" class="small" type="button" data-n="50"></button>
+          <button id="addAll" class="small" type="button" title="把列表里的全部文件加入「已选」"></button>
+          <button id="addTop10" class="small" type="button" data-n="10" title="按当前排序把前 10 个文件加入「已选」"></button>
+          <button id="addTop30" class="small" type="button" data-n="30" title="按当前排序把前 30 个文件加入「已选」"></button>
+          <button id="addTop50" class="small" type="button" data-n="50" title="按当前排序把前 50 个文件加入「已选」"></button>
           <span id="addAllHint" class="hint" style="margin:0"></span>
         </div>
         <ul id="results" class="list"></ul>
       </div>
       <div id="browsePane" aria-label="文件夹内容">
         <div id="browseAddRow" class="row" style="margin-top:6px" hidden>
-          <button id="browseAdd" class="small" type="button"></button>
-          <button id="browseTop10" class="small" type="button" data-n="10"></button>
-          <button id="browseTop30" class="small" type="button" data-n="30"></button>
-          <button id="browseTop50" class="small" type="button" data-n="50"></button>
+          <button id="browseAdd" class="small" type="button" title="把这个文件夹（含子文件夹）里的文件全部加入「已选」"></button>
+          <button id="browseTop10" class="small" type="button" data-n="10" title="按当前排序把前 10 个文件加入「已选」"></button>
+          <button id="browseTop30" class="small" type="button" data-n="30" title="按当前排序把前 30 个文件加入「已选」"></button>
+          <button id="browseTop50" class="small" type="button" data-n="50" title="按当前排序把前 50 个文件加入「已选」"></button>
           <span id="browseAddHint" class="hint" style="margin:0"></span>
         </div>
         <ul id="browseList" class="list"></ul>
+      </div>
       </div>
     </div>
   </section>
 
   <section class="card" id="pickedCard" aria-labelledby="h-picked">
     <div class="card-head">
-      <h2 id="h-picked"><button id="foldPicked" class="fold" type="button" aria-expanded="true" aria-controls="pickedBody"><span class="arrow" aria-hidden="true">▾</span>已选</button></h2>
+      <h2 id="h-picked"><button id="foldPicked" class="fold" type="button" aria-expanded="true" aria-controls="pickedBody" title="收起或展开「已选」"><span class="arrow" aria-hidden="true">▾</span>已选</button></h2>
       <span id="pickCount" class="hint"></span>
     </div>
     <div id="pickedBody" class="fold-body">
     <ul id="picked" class="list"></ul>
     <div class="row" style="margin-top:6px">
-      <button id="removeBad" type="button" hidden></button>
-      <button id="copyTexts" type="button" hidden>复制全部文字</button>
-      <button id="copyPaths" type="button" hidden>复制已选择的文件路径</button>
-      <button id="saveTexts" type="button" hidden>保存全部文字</button>
-      <button id="clearPicked" class="danger" type="button" hidden>清空已选</button>
+      <button id="removeBad" type="button" hidden title="从「已选」移除取不出文字的文件"></button>
+      <button id="copyTexts" type="button" hidden title="把已选文件的文字全部复制到剪贴板">复制全部文字</button>
+      <button id="copyPaths" type="button" hidden title="把已选文件的完整路径复制到剪贴板，一行一个">复制已选择的文件路径</button>
+      <button id="saveTexts" type="button" hidden title="把已选文件的文字合成一个文本文件保存">保存全部文字</button>
+      <button id="clearPicked" class="danger" type="button" hidden title="清空「已选」，原文件和知识库不受影响">清空已选</button>
     </div>
     <div id="pickStatus" class="status info" aria-live="polite"></div>
     </div>
@@ -390,40 +610,50 @@
   <div class="col-right">
   <section class="card" id="askCard" aria-labelledby="h-ask">
     <div class="card-head">
-      <h2 id="h-ask"><button id="foldAsk" class="fold" type="button" aria-expanded="true" aria-controls="askBody"><span class="arrow" aria-hidden="true">▾</span>问 AI</button></h2>
+      <h2 id="h-ask"><button id="foldAsk" class="fold" type="button" aria-expanded="true" aria-controls="askBody" title="收起或展开「问 AI」"><span class="arrow" aria-hidden="true">▾</span>问 AI</button></h2>
       <span id="askSummary" class="fold-sum hint"></span>
-      <button id="save" class="small push" type="button">保存对话</button>
-      <button id="saveDocx" class="small" type="button">保存为 Word</button>
-      <button id="clear" class="small danger" type="button">清空对话</button>
+      <button id="save" class="small push" type="button" title="把这个对话保存成 Markdown 文件">保存对话</button>
+      <button id="saveDocx" class="small" type="button" title="把这个对话保存成 Word 文件">保存为 Word</button>
+      <button id="clear" class="small danger" type="button" title="清空这个对话，已选文件保留">清空对话</button>
     </div>
     <div id="askBody" class="fold-body">
     <p id="noAiNote" hidden>本机没有可用的模型：可以找文件、预览，在「已选」里复制或保存取出的文字，带到能用 AI 的地方提问；要在这里问 AI，请在「模型设置」里填写接口（本机有 OpenCode 配置时可用「配置 OpenCode」换上自己的 AK），或启动本机的 llama-server、Ollama 后点「重新查找」。</p>
     <div id="chatStatus" class="status" aria-live="polite"></div>
-    <div id="chatWrap"><div id="chat"></div></div>
+    <div id="chatWrap">
+      <div id="guide" class="guide" hidden>
+        <h3>先建好知识库，提问时它会自动参考</h3>
+        <ol>
+          <li id="g1"><div><b>添加文件夹<span class="vh done-note">（已完成）</span></b><p class="hint">其中的文件会自动收录。</p><button id="g1Go" class="link" type="button" title="去「文件」标签添加要收录的文件夹">去「知识库」的「文件」标签添加</button></div></li>
+          <li id="g2"><div><b>收录<span class="vh done-note">（已完成）</span></b><p id="g2Text" class="hint">收录完的文件马上能用；整理成主题在空闲时进行，不用等。</p><div id="g2Bar" class="bar" aria-hidden="true" hidden><i></i></div></div></li>
+          <li id="g3"><div><b>直接提问<span class="vh done-note">（已完成）</span></b><p id="g3Text" class="hint">不选文件也能问；回答附出处，核对过的结论会记下来，下次自动参考。</p><div id="examples" class="examples" role="group" aria-label="示例问题" hidden></div></div></li>
+        </ol>
+        <button id="skipGuide" class="link" type="button" title="不建知识库，直接在「文件」标签挑文件提问">先不建库，直接挑文件提问</button>
+      </div>
+      <div id="offNote" class="off-note" hidden><p class="hint">知识库已关闭，这次提问只用已选的文件。</p><button id="offTurnOn" class="small" type="button" title="打开知识库：收录勾选的文件夹，提问时参考">打开知识库</button></div>
+      <div id="chat"></div>
+    </div>
     <div id="optRow" class="row">
     <div id="modelRow" class="row">
       <label for="model" class="hint" style="margin:0">模型</label>
       <select id="model"></select>
-      <button id="modelSettings" class="toggle" type="button" aria-expanded="false" aria-controls="setPanel"><svg class="icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false"><g fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="8" cy="8" r="2.2"/><circle cx="8" cy="8" r="4.6"/><path d="M8 1.2v2.2M8 12.6v2.2M1.2 8h2.2M12.6 8h2.2M3.2 3.2l1.5 1.5M11.3 11.3l1.5 1.5M3.2 12.8l1.5-1.5M11.3 4.7l1.5-1.5"/></g></svg>模型设置<span class="arrow" aria-hidden="true">▸</span></button>
-      <button id="findLocal" class="link" type="button">重新查找</button>
+      <button id="modelSettings" class="toggle" type="button" aria-expanded="false" aria-controls="setPanel" title="设置模型接口、发送字数上限等"><svg class="icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false"><g fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="8" cy="8" r="2.2"/><circle cx="8" cy="8" r="4.6"/><path d="M8 1.2v2.2M8 12.6v2.2M1.2 8h2.2M12.6 8h2.2M3.2 3.2l1.5 1.5M11.3 11.3l1.5 1.5M3.2 12.8l1.5-1.5M11.3 4.7l1.5-1.5"/></g></svg>模型设置<span class="arrow" aria-hidden="true">▸</span></button>
+      <button id="findLocal" class="link" type="button" title="重新查找本机运行的模型">重新查找</button>
     </div>
     <div id="skillRow" class="row">
       <label for="skillSel" class="hint" style="margin:0">skill</label>
       <select id="skillSel"><option value="">不用 skill</option></select>
-      <button id="skillReload" class="link" type="button">重新读取</button>
-      <button id="skillManage" class="toggle" type="button" aria-expanded="false" aria-controls="setPanel"><svg class="icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false"><g fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="8" cy="8" r="2.2"/><circle cx="8" cy="8" r="4.6"/><path d="M8 1.2v2.2M8 12.6v2.2M1.2 8h2.2M12.6 8h2.2M3.2 3.2l1.5 1.5M11.3 11.3l1.5 1.5M3.2 12.8l1.5-1.5M11.3 4.7l1.5-1.5"/></g></svg>skill 设置<span class="arrow" aria-hidden="true">▸</span></button>
+      <button id="skillReload" class="link" type="button" title="重新读取 skills 文件夹里的 skill">重新读取</button>
+      <button id="skillManage" class="toggle" type="button" aria-expanded="false" aria-controls="setPanel" title="新建、安装或管理 skill"><svg class="icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false"><g fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="8" cy="8" r="2.2"/><circle cx="8" cy="8" r="4.6"/><path d="M8 1.2v2.2M8 12.6v2.2M1.2 8h2.2M12.6 8h2.2M3.2 3.2l1.5 1.5M11.3 11.3l1.5 1.5M3.2 12.8l1.5-1.5M11.3 4.7l1.5-1.5"/></g></svg>skill 设置<span class="arrow" aria-hidden="true">▸</span></button>
     </div>
-    <span class="mem-row"><label id="useMemRow" class="dedup" style="margin-top:0"><input id="useMemory" type="checkbox" checked>参考知识库</label><button id="memSettings" class="toggle" type="button" aria-expanded="false" aria-controls="setPanel"><svg class="icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false"><g fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="8" cy="8" r="2.2"/><circle cx="8" cy="8" r="4.6"/><path d="M8 1.2v2.2M8 12.6v2.2M1.2 8h2.2M12.6 8h2.2M3.2 3.2l1.5 1.5M11.3 11.3l1.5 1.5M3.2 12.8l1.5-1.5M11.3 4.7l1.5-1.5"/></g></svg>知识库设置<span class="arrow" aria-hidden="true">▸</span></button></span>
+    <span class="mem-row"><label id="useMemRow" class="dedup" style="margin-top:0"><input id="useMemory" type="checkbox" checked>这次提问参考知识库</label></span>
     </div>
     <div id="localStatus" class="status" aria-live="polite"></div>
     <div id="skillHint" class="hint" aria-live="polite"></div>
     <div id="setPanel" class="panel" role="region" aria-label="设置" hidden>
       <div class="set-head">
         <div id="setTabs" role="tablist" aria-label="设置">
-          <button id="tab-model" type="button" role="tab" aria-selected="true" aria-controls="modelPanel">模型<span class="dirty" hidden><span aria-hidden="true">●</span><span class="vh">（有未保存的改动）</span></span></button>
-          <button id="tab-skill" type="button" role="tab" aria-selected="false" aria-controls="skillPanel" tabindex="-1">skill<span class="dirty" hidden><span aria-hidden="true">●</span><span class="vh">（有未保存的改动）</span></span></button>
-          <button id="tab-mem" type="button" role="tab" aria-selected="false" aria-controls="memSettingsPanel" tabindex="-1">知识库<span class="dirty" hidden><span aria-hidden="true">●</span><span class="vh">（有未保存的改动）</span></span></button>
-          <button id="tab-general" type="button" role="tab" aria-selected="false" aria-controls="generalPanel" tabindex="-1">通用<span class="dirty" hidden><span aria-hidden="true">●</span><span class="vh">（有未保存的改动）</span></span></button>
+          <button id="tab-model" type="button" role="tab" aria-selected="true" aria-controls="modelPanel" title="模型接口与发送字数上限">模型<span class="dirty" hidden><span aria-hidden="true">●</span><span class="vh">（有未保存的改动）</span></span></button>
+          <button id="tab-skill" type="button" role="tab" aria-selected="false" aria-controls="skillPanel" tabindex="-1" title="新建、安装 skill">skill<span class="dirty" hidden><span aria-hidden="true">●</span><span class="vh">（有未保存的改动）</span></span></button>
         </div>
         <button id="setClose" class="small" type="button" title="收起设置（Esc）">收起</button>
       </div>
@@ -431,7 +661,7 @@
         <h3>发送字数上限</h3>
         <div class="row">
           <input id="limit" type="number" min="1000" max="2000000" step="1000" aria-label="发送字数上限">
-          <button id="saveLimit" type="button" aria-label="保存字数上限">保存</button>
+          <button id="saveLimit" type="button" aria-label="保存字数上限" title="保存发送字数上限">保存</button>
         </div>
         <p class="hint">选中文件和对话的文字合计超过上限时先不发送。范围 1,000 到 2,000,000，默认 100,000，回车即保存。</p>
         <details class="more"><summary>详细说明</summary><p class="hint">按所用模型能接受的长度设置；本机模型另按其上下文折算（1 token 计 1 字，留四分之一给回答），取两者中较小的。</p></details>
@@ -444,9 +674,9 @@
           <label for="cKey">AK</label><input id="cKey" type="password" autocomplete="new-password">
         </div>
         <div class="row" style="margin-top:8px">
-          <button id="saveCustom" type="button" aria-label="保存自定义接口">保存</button>
-          <button id="clearKey" type="button">清除 AK</button>
-          <button id="testModel" type="button">测试连接</button>
+          <button id="saveCustom" type="button" aria-label="保存自定义接口" title="保存自定义模型接口的地址、模型名与 AK">保存</button>
+          <button id="clearKey" type="button" title="删除保存的 AK">清除 AK</button>
+          <button id="testModel" type="button" title="用填写的接口发一句话，看能不能连上">测试连接</button>
         </div>
         <div id="settingsStatus" class="status" aria-live="polite"></div>
         <h3 class="sep">配置 OpenCode</h3>
@@ -459,8 +689,8 @@
             <label for="ocKey">新的 AK</label><input id="ocKey" type="password" autocomplete="new-password">
           </div>
           <div class="row" style="margin-top:8px">
-            <button id="ocSave" type="button">测试并写入</button>
-            <button id="ocRollback" type="button" hidden>回滚</button>
+            <button id="ocSave" type="button" title="测试连接成功后写入 OpenCode 的配置文件">测试并写入</button>
+            <button id="ocRollback" type="button" hidden title="把 OpenCode 的配置换回写入之前的版本">回滚</button>
           </div>
         </div>
         <div id="ocStatus" class="status" aria-live="polite"></div>
@@ -474,104 +704,88 @@
           <input id="skDesc" type="text" placeholder="用途：做什么、什么时候用" autocomplete="off" aria-label="skill 用途">
         </div>
         <textarea id="skBody" aria-label="skill 说明正文" placeholder="说明正文：写给模型的做法、步骤和输出格式"></textarea>
-        <div class="row"><button id="skCreate" type="button">新建</button></div>
+        <div class="row"><button id="skCreate" type="button" title="按填写的名称和用途新建一个 skill">新建</button></div>
         <h3 class="sep">安装</h3>
         <label id="skDrop" class="drop" tabindex="0">点击选择或拖入 skill 的 .zip 包（最大 5 MB）<input id="skZip" class="vh" type="file" accept=".zip,application/zip" tabindex="-1"></label>
         <div class="row" style="margin-top:6px">
           <input id="skDir" type="text" placeholder="或填 skill 文件夹的路径（内有 SKILL.md）" autocomplete="off" aria-label="要安装的 skill 文件夹">
-          <button id="skPickDir" type="button" aria-label="选择要安装的 skill 文件夹" hidden>选择……</button>
-          <button id="skInstallDir" type="button">安装文件夹</button>
+          <button id="skPickDir" type="button" aria-label="选择要安装的 skill 文件夹" hidden title="用系统对话框选择要安装的 skill 文件夹">选择……</button>
+          <button id="skInstallDir" type="button" title="把填写的文件夹作为 skill 安装进 skills 文件夹">安装文件夹</button>
         </div>
         <div id="skStatus" class="status" aria-live="polite"></div>
       </div>
-      <div id="memSettingsPanel" role="tabpanel" aria-labelledby="tab-mem" hidden>
-        <label class="dedup" style="margin-top:0"><input id="memoryOn" type="checkbox" checked>收录提问时选过的文件和核对通过的结论</label>
-        <p class="hint">勾选「参考知识库」时，提问会参考知识库里相关的以前结论和原文段落；关掉后不再收录、也不再参考，已收录的保留。</p>
-        <details class="more"><summary>详细说明</summary><p class="hint">知识库存在「通用」里「保存位置」的 memory.sqlite（权限 600，只有你能读）。提问时按问题从知识库里找出相关的以前结论和原文段落，排在已选文件之后一起发给模型；文件改了按新内容复核，文件不在了就移出。已收录的可在「查看知识库」里清空。</p></details>
-        <label class="dedup"><input id="tocPick" type="checkbox" checked>提问前先让模型看主题页目录</label>
-        <p class="hint">有主题页时，每问先让所选模型从主题页目录里挑出相关的页，再与关键字检索的结果一起参考。</p>
-        <details class="more"><summary>详细说明</summary><p class="hint">勾选「参考知识库」时生效：把主题页目录（每页的标题与前两条要点，最近更新的在前）和问题发给所选模型，由它挑出至多 5 页，挑出的页排在关键字检索的结果之前。模型 20 秒（本机模型 60 秒）没有给出、出错或回答看不懂时只用关键字，不影响提问。关掉后只按关键字检索，每问少一次模型调用。</p></details>
-        <div id="tocStatus" class="status" aria-live="polite"></div>
-        <p id="memStats" class="hint"></p>
-        <h4 class="mem-h">更新知识库</h4>
-        <div class="row" style="margin-top:6px">
-          <button id="memUpdate" type="button">更新知识库</button>
-          <button id="memUpdStop" type="button" hidden>停止</button>
-          <label class="dedup" style="margin-top:0"><input id="memAuto" type="checkbox" checked>空闲时自动更新</label>
-          <button id="memLog" class="toggle" type="button" aria-expanded="false" aria-controls="memLogPanel">更新记录<span class="arrow" aria-hidden="true">▸</span></button>
-        </div>
-        <p class="hint">由所选模型把结论整理成主题页；勾选「空闲时自动更新」时，10 分钟没有提问后自动处理待更新的内容。</p>
-        <details class="more"><summary>详细说明</summary><p class="hint">更新时把知识库里的结论、原句和相关段落分批发给所选模型，由它把结论按主题整理成主题页并标出相关主题，合并重复、以新代旧、删除不再成立的说法，文件改过的按新内容改写结论，自动收录的文件按段落分批抽出结论；写入前逐条核对原句。点「更新知识库」先处理待更新的内容，再把全部结论体检一遍；空闲时自动更新只在工具开着时进行，一提问就让路。最近 20 次更新可以从最近一次往回撤销。</p></details>
-        <div id="memUpdStatus" class="status" aria-live="polite"></div>
-        <div id="memLogPanel" hidden>
-          <ul id="memLogList" class="list"></ul>
-        </div>
-        <h4 class="mem-h">自动收录</h4>
-        <div class="row">
-          <span id="ingestStats" class="hint" style="margin:0"></span>
-          <button id="ingestRun" type="button">立即收录</button>
-          <button id="ingestSkipped" class="toggle" type="button" aria-expanded="false" aria-controls="ingestSkippedPanel" hidden>没有收录的文件<span class="arrow" aria-hidden="true">▸</span></button>
-        </div>
-        <div id="ingestSkippedPanel" hidden><ul id="ingestSkippedList" class="list"></ul></div>
-        <div id="ingestStatus" class="status" aria-live="polite"></div>
-        <p class="hint">「管理文件夹」里勾选了「自动收录到知识库」的文件夹（新添加的默认勾选），其中支持格式的文件在后台自动收录到知识库。</p>
-        <details class="more"><summary>详细说明</summary><p class="hint">勾选「忽略 Markdown 文件」时不含 .md。每次扫描文件夹后在后台取出新增或改过的文件的文字，马上能被提问参考，不移动、不修改原文件；之后在「更新知识库」或空闲时自动更新里，由所选模型从文件里抽出带原句的结论，核对原句后写入，再整理进主题页。文件删除后移出它记下的内容；取消勾选只是不再收录，已收录的保留。自动收录不拖住退出，下次启动接着做。</p></details>
-        <h4 class="mem-h">容量上限</h4>
-        <div class="row" style="margin-top:6px">
-          <label for="memMb" class="hint" style="margin:0">容量上限（MB）</label>
-          <input id="memMb" type="number" min="50" max="102400" step="50" style="width:7em">
-          <button id="saveMemMb" type="button" aria-label="保存容量上限">保存</button>
-        </div>
-        <p class="hint">超过上限时先移出最久没被选用或参考的文件。范围 50 到 102,400，默认 1,024（1 GB），回车即保存。</p>
-        <details class="more"><summary>详细说明</summary><p class="hint">上限按知识库里的文字计算；调小时立即按新上限移出多出的部分，调大后因容量不足没收录的文件可以重新自动收录。</p></details>
-        <h4 class="mem-h"><button id="memView" class="toggle" type="button" aria-expanded="false" aria-controls="memPanel">查看知识库<span class="arrow" aria-hidden="true">▸</span></button></h4>
-        <div id="memPanel" hidden>
-          <div class="row" style="margin-top:6px">
-            <input id="memQ" type="text" placeholder="搜索结论、原句或文件路径" autocomplete="off" aria-label="搜索知识库" style="flex:1 1 200px">
-            <button id="memSaveMd" class="small" type="button" title="把主题页与结论保存成一组 Markdown 文件（zip），解压后可用 Obsidian 打开，看主题与文件之间的链接">保存为 Markdown</button>
-            <button id="memClear" class="small danger" type="button">清空知识库</button>
-          </div>
-          <h4 class="mem-h">主题</h4>
-          <ul id="memTopics" class="list"></ul>
-          <h4 class="mem-h">结论</h4>
-          <ul id="memFacts" class="list"></ul>
-          <h4 class="mem-h">文件</h4>
-          <ul id="memFiles" class="list"></ul>
-        </div>
-        <div id="memStatus" class="status" aria-live="polite"></div>
-      </div>
-      <div id="generalPanel" role="tabpanel" aria-labelledby="tab-general" hidden>
-        <h3>保存位置</h3>
-        <p id="dataDirNow" class="hint name"></p>
-        <div class="row">
-          <input id="dataDir" type="text" placeholder="不会被清理的文件夹的完整路径" autocomplete="off" aria-label="新的保存位置" style="flex:1 1 200px">
-          <button id="pickDataDir" type="button" hidden>选择……</button>
-          <button id="setDataDir" type="button">更改</button>
-        </div>
-        <p class="hint">知识库、设置（已添加的文件夹、模型设置等）和网址令牌一起存在这里；家目录可能被清理时，改到不会被清理的文件夹。</p>
-        <details class="more"><summary>详细说明</summary><p class="hint">例如数据盘上的文件夹。新位置是空文件夹时，把现有的移过去，原处不保留；新位置已有本工具的数据时直接改用那一份，不合并，当前的保留不动。有回答在生成、知识库在更新等任务进行时不能改。位置记在工具目录的 data-dir.txt；升级时把它复制到新版本的工具目录，或在新版本里重新选一次同一个文件夹。</p></details>
-        <div id="dataStatus" class="status" aria-live="polite"></div>
-      </div>
     </div>
-    <div id="dest" class="hint"></div>
     <textarea id="ask" aria-label="要问的内容" placeholder="写下要 AI 做什么，例如：总结这几份文件的要点；把第 2 份改写成一则通知；这几份材料的说法有什么不同"></textarea>
     <div class="row" style="margin-top:8px">
-      <button id="send" class="primary" type="button">发送</button>
-      <button id="stop" type="button" hidden>停止</button>
+      <button id="send" class="primary" type="button" title="把问题和已选文件的文字发给模型（回车发送，Shift+回车换行）">发送</button>
+      <button id="stop" type="button" hidden title="停下正在生成的回答，已生成的部分保留">停止</button>
+      <span id="dest" class="send-sum"></span>
       <span id="sendHint" class="hint">Enter 发送，Shift+Enter 换行</span>
     </div>
     <div id="askNotice" class="status-row">
       <div id="askStatus" class="status" aria-live="polite"></div>
-      <button id="sendCut" type="button" hidden>仍然发送（按比例截断每个文件）</button>
+      <button id="sendCut" type="button" hidden title="超出发送字数上限时，按比例截短每个文件后照样发送">仍然发送（按比例截断每个文件）</button>
     </div>
     </div>
   </section>
   </div>
   </div>
   <div id="convFrames" hidden></div>
+  <dialog id="folderDlg" class="folder-dlg" aria-labelledby="folderTitle">
+    <div class="folder-head">
+      <h3 id="folderTitle">索引的文件夹</h3>
+      <button id="folderDone" class="primary" type="button" title="关闭文件夹管理，回到文件列表">完成</button>
+    </div>
+    <div class="row">
+      <input id="folder" type="text" placeholder="绝对路径、~/ 开头或粘贴 file:/// 地址，如 ~/文档" autocomplete="off" aria-label="要添加的文件夹" list="folderList" style="flex:1 1 240px">
+      <datalist id="folderList"></datalist>
+      <button id="pickFolder" type="button" aria-label="选择要添加的文件夹" hidden title="用系统对话框选择要添加的文件夹">选择……</button>
+      <button id="addFolder" type="button" title="把填写的文件夹加入文件列表，默认勾选自动收录">添加</button>
+      <button id="rebuild" type="button" title="丢掉文件索引，从头扫描全部文件夹；文件多时需要一些时间">重建索引</button>
+    </div>
+    <div id="places" class="row hint"></div>
+    <div id="folderStatus" class="status" aria-live="polite"></div>
+    <ul id="folders" class="list" aria-labelledby="folderTitle"></ul>
+  </dialog>
+  <dialog id="clearDlg" aria-labelledby="clearTitle" aria-describedby="clearText">
+    <h3 id="clearTitle">清空知识库？</h3>
+    <p id="clearText"></p>
+    <div class="row"><button id="clearOk" class="danger" type="button" title="确认删除知识库全部内容，不能恢复">清空知识库</button><button id="clearNo" type="button" title="不清空，关闭这个对话框">取消</button></div>
+  </dialog>
+  <dialog id="graphDlg" class="graph-dlg" aria-labelledby="graphTitle">
+    <div class="graph-head">
+      <h3 id="graphTitle">关系图</h3>
+      <input id="graphQ" type="text" placeholder="搜主题、结论或文件名" autocomplete="off" aria-label="在关系图里搜索主题、结论或文件名" aria-controls="graphHits">
+      <button id="graphFit" class="small" type="button" title="缩放到整张图都在窗口里">适合窗口</button>
+      <button id="graphRelayout" class="small" type="button" title="重新排布节点位置">重新布局</button>
+      <button id="graphZoomIn" class="small" type="button" aria-label="放大" title="放大">＋</button>
+      <button id="graphZoomOut" class="small" type="button" aria-label="缩小" title="缩小">－</button>
+      <button id="graphClose" class="small" type="button" title="关闭关系图，回到页面">返回</button>
+    </div>
+    <ul id="graphHits" class="list" aria-label="搜索结果" hidden></ul>
+    <div id="graphStatus" class="status" aria-live="polite"></div>
+    <p class="graph-legend hint"><span class="lg topic" aria-hidden="true"></span>主题<span class="lg fact" aria-hidden="true"></span>结论<span class="lg file" aria-hidden="true"></span>文件　实线：出自该文件；橙线：主题要点与结论是同一句原文；蓝虚线：相关主题。点节点展开一层，拖动节点或画布，滚轮缩放。</p>
+    <div class="graph-body">
+      <svg id="graphSvg" role="img" aria-label="主题、结论与文件的关系图；用旁边的列表也能逐层查看"></svg>
+      <div class="graph-side">
+        <ul id="graphTree" role="tree" aria-label="关系列表：方向键逐层展开，回车查看详情"></ul>
+        <div id="graphDetail" role="region" aria-label="选中项的详情"></div>
+      </div>
+    </div>
+  </dialog>
+  <dialog id="reorgDlg" aria-labelledby="reorgTitle" aria-describedby="reorgText">
+    <h3 id="reorgTitle">按新办法重新整理全部？</h3>
+    <p id="reorgText"></p>
+    <div class="row"><button id="reorgOk" class="danger" type="button" title="确认按新办法重新整理全部">重新整理全部</button><button id="reorgNo" type="button" title="不重新整理，关闭这个对话框">取消</button></div>
+  </dialog>
+  <dialog id="outDlg" aria-labelledby="outTitle" aria-describedby="outText">
+    <h3 id="outTitle">移出不在自动收录范围内的文件？</h3>
+    <p id="outText"></p>
+    <div class="row"><button id="outOk" class="danger" type="button" title="确认删除这些文件的文字和结论，不能恢复">移出</button><button id="outNo" type="button" title="不移出，关闭这个对话框">取消</button></div>
+  </dialog>
 
 
-  <footer><span id="ver">资料管家 v2.20</span>　<button id="copyUrl" type="button" class="small">复制网址</button>　网址固定不变，可收藏或复制到浏览器打开。关闭页面后服务继续运行，没有页面、也没有任务 30 分钟后自动退出；点「退出」立即结束，开着的页面一起结束。有回答正在生成（含 skill 脚本运行）或知识库正在手动更新时，服务等它结束再退出，升级也等它结束再进行；升级或退回后服务用新版重新启动，本页自动刷新；自动收录与空闲时自动更新不拖住退出，下次启动接着做。对话不自动保存，退出即清空；知识库存在本机，可在「知识库设置」里关闭或清空。<div id="urlStatus" class="status info" aria-live="polite"></div></footer>
+  <footer><span id="ver">资料管家 v2.30</span>　<button id="copyUrl" type="button" class="small" title="复制本页的固定网址，可收藏或在别的浏览器打开">复制网址</button>　网址固定不变，可收藏或复制到浏览器打开。关闭全部页面几秒后服务退出，点「退出」立即结束，开着的页面一起结束；退出时正在生成的回答、收录与整理一起停下，下次启动接着做。升级或退回等回答生成与手动整理结束再进行，完成后服务用新版重新启动，本页自动刷新。对话不自动保存，退出即清空；知识库存在本机，可在「知识库设置」里关闭或清空。<div id="urlStatus" class="status info" aria-live="polite"></div></footer>
 </main>
 <script>
 'use strict';
@@ -660,9 +874,11 @@ function el(tag, cls, text) {
   if (text !== undefined) e.textContent = text;
   return e;
 }
-function btn(text, cls, onClick) {
+// tip 为鼠标放上去时的说明（title）：一句话写做什么、影响什么
+function btn(text, cls, onClick, tip) {
   const b = el('button', cls, text);
   b.type = 'button';
+  if (tip) b.title = tip;
   b.addEventListener('click', onClick);
   return b;
 }
@@ -697,7 +913,7 @@ function folderBtn(name, cls, onClick) {
 // ---------------- 找文件
 
 function indexText(ix) {
-  if (!state || !state.folders.length) return '还没有添加文件夹：先点「管理文件夹」添加要索引的文件夹。';
+  if (!state || !state.folders.length) return '';
   let s = '已索引 ' + fmtNum(ix.files) + ' 个文件';
   if (ix.scanning) s += '，正在扫描文件夹变化……';
   else if (ix.scanned_at) s += '（' + ix.scanned_at + ' 更新）';
@@ -769,7 +985,7 @@ function renderCrumbs(dir, crumbs) {
   nav.textContent = '';
   const here = (text, title) => { const x = el('span', '', text); x.setAttribute('aria-current', 'location'); if (title) x.title = title; nav.appendChild(x); };
   if (!dir) here('全部');
-  else nav.appendChild(btn('全部', 'link', () => openBrowse('')));
+  else nav.appendChild(btn('全部', 'link', () => openBrowse(''), '回到全部已添加的文件夹'));
   crumbs.forEach((c, i) => {
     nav.appendChild(el('span', 'sep', '›'));
     if (i === crumbs.length - 1) here(c.name, c.path);
@@ -789,6 +1005,11 @@ function showFindStatus() {
     if (kind === 'info' || kind === 'busy') kind = 'warn';
   }
   say('findStatus', s, kind);
+  // 重建索引：管理文件夹开着时在里面显示进度，结束时写完成
+  if (!rebuildWatch) return;
+  const done = indexNote[1] !== 'busy';
+  if (done) rebuildWatch = false;
+  if ($('folderDlg').open) say('folderStatus', (done ? '重建完成：' : '正在重建索引：') + s, done ? (indexNote[1] === 'warn' ? 'warn' : 'ok') : 'busy');
 }
 
 function watchScan(scanning) {
@@ -839,11 +1060,23 @@ function samePicked(r) { return dedupOn ? picked.find(p => sameNameKey(p.name) =
 function setDedup(on) {
   dedupOn = on;
   $('dedup').checked = on;
+  renderOptsCount();
+}
+// 「选项」：排序与三个勾选框收在一起，默认收起，展开与否记在本浏览器；不是默认值的项数写在按钮上
+function renderOptsCount() {
+  const n = [!dedupOn, regexOn, !ignoreMd, findPrefs.sort !== 'time_desc'].filter(Boolean).length;
+  $('findOptsN').textContent = n ? '（' + n + ' 项已改）' : '';
+}
+function setOptsOpen(open) {
+  togglePanel($('findOptsBtn'), $('findOpts'), open);
+  findPrefs.opts = open;
+  saveFindPrefs();
 }
 // 「忽略 Markdown 文件」：搜索结果与文件夹内容共用，服务端过滤；扩展名框明确填了 md 时照列
 function setIgnoreMd(on) {
   ignoreMd = on;
   $('ignoreMd').checked = on;
+  renderOptsCount();
 }
 $('ignoreMd').addEventListener('change', () => {
   setIgnoreMd($('ignoreMd').checked);
@@ -882,12 +1115,12 @@ function dupList(dups) {
     if (!d.supported) meta.appendChild(el('span', 'bad', '　' + d.reason));
     li.appendChild(meta);
     const open = !!dupPreviews[d.path];
-    const pv = btn(open ? '收起' : '预览', 'small', () => toggleDupPreview(d));
+    const pv = btn(open ? '收起' : '预览', 'small', () => toggleDupPreview(d), open ? '收起预览' : '预览这个文件取出的文字');
     pv.dataset.act = 'preview';
     pv.disabled = !d.supported;
     pv.setAttribute('aria-expanded', String(open));
     pv.setAttribute('aria-label', (open ? '收起预览 ' : '预览 ') + d.rel);
-    const b = !on && !d.supported ? openFolderBtn(d.path, d.rel) : btn(on ? '移除' : '加入', 'small', () => { on ? unpick(d.path) : pick(d); });
+    const b = !on && !d.supported ? openFolderBtn(d.path, d.rel) : btn(on ? '移除' : '加入', 'small', () => { on ? unpick(d.path) : pick(d); }, on ? '从「已选」移除这个文件' : '把这个文件加入「已选」，提问时发给模型');
     if (on || d.supported) {
       b.dataset.act = 'toggle';
       b.disabled = !on && full();
@@ -968,7 +1201,7 @@ $('addAll').addEventListener('click', () => {
 function renderResults() {
   renderAddAll();
   renderBrowse();
-  const key = JSON.stringify([results.map(r => [r.path, (r.dups || []).map(d => d.path)]), picked.map(p => p.path), full(), listVer]);
+  const key = JSON.stringify([results.map(r => [r.path, (r.dups || []).map(d => d.path), markKey(r)]), picked.map(p => p.path), full(), listVer, kbOn()]);
   if (key === resultsKey) return;      // 没变就不重绘，扫描轮询时不打断滚动与焦点
   resultsKey = key;
   const ul = $('results'), top = ul.scrollTop, focus = focusedRow(ul);
@@ -988,6 +1221,27 @@ function hideRow(r) {
 }
 
 // 一个文件行：文件名、所在文件夹（withFolder 时可点，进入那个文件夹，有关键字时在里面重搜）、大小、时间、从列表移除、加入/移除
+// 列表重绘的比对键里算上收录标记：收录状态变了才重绘
+function markKey(r) { return r.kb ? r.kb.state + ':' + (r.kb.facts || 0) : ''; }
+// 收录标记（第二行）：已收录的可点，跳到这份文件的结论；没收录的写原因，title 写下一步
+function kbMark(r) {
+  const k = r.kb;
+  if (!k || !kbOn()) return null;
+  const line = el('div', 'meta tagline-kb');
+  if (k.state === 'done') {
+    const b = btn('已收录 · ' + k.facts + ' 条结论', 'tag in', () => kbFocus({path: r.path}, '已在知识库中定位到：' + r.name + ' 的结论'), '这个文件已收录进知识库：点开在「主题与结论」里看它的结论');
+    b.dataset.act = 'kb';
+    b.title = '查看这份文件收录的结论';
+    b.setAttribute('aria-label', r.name + ' 已收录，' + k.facts + ' 条结论：查看');
+    line.appendChild(b);
+  } else if (k.state === 'waiting') line.appendChild(el('span', 'tag wait', '待收录'));
+  else {
+    const t = el('span', 'tag no', '未收录：' + (INGEST_STATE[k.state] || k.state));
+    t.title = (INGEST_STATE[k.state] || k.state) + '：' + (INGEST_NEXT[k.state] || k.reason);
+    line.appendChild(t);
+  }
+  return line;
+}
 function fileRow(r, withFolder) {
   const on = isPicked(r.path);
   const li = el('li', on ? 'picked' : '');
@@ -996,8 +1250,9 @@ function fileRow(r, withFolder) {
   box.appendChild(el('div', 'name', r.name));
   const meta = el('div', 'meta');
   if (withFolder) {
-    const f = folderBtn(folderOf(r.rel), 'link', () => openBrowse(dirOf(r.path)));
+    const f = folderBtn(midTrim(folderOf(r.rel), 36), 'link', () => openBrowse(dirOf(r.path)));
     f.dataset.act = 'folder';
+    f.title = '进入文件夹 ' + folderOf(r.rel);
     f.setAttribute('aria-label', '进入文件夹 ' + folderOf(r.rel));
     meta.appendChild(f);
     meta.appendChild(document.createTextNode('　'));
@@ -1007,21 +1262,23 @@ function fileRow(r, withFolder) {
   const dups = r.dups || [], open = dups.length > 0 && !!openDups[r.path];
   if (dups.length) {
     meta.appendChild(document.createTextNode('　'));
-    const more = btn('另有 ' + dups.length + ' 个同名', 'link', () => toggleDups(r.path));
+    const more = btn('另有 ' + dups.length + ' 个同名', 'link', () => toggleDups(r.path), '列出其他文件夹里的同名文件');
     more.dataset.act = 'dups';
     more.setAttribute('aria-expanded', String(open));
     more.setAttribute('aria-label', '另有 ' + dups.length + ' 个与 ' + r.name + ' 同名的文件');
     meta.appendChild(more);
   }
   box.appendChild(meta);
+  const mark = kbMark(r);
+  if (mark) box.appendChild(mark);
   li.appendChild(box);
-  const b = !on && !r.supported ? openFolderBtn(r.path, r.name) : btn(on ? '移除' : '加入', 'small', () => { on ? unpick(r.path) : pick(r); });
+  const b = !on && !r.supported ? openFolderBtn(r.path, r.name) : btn(on ? '移除' : '加入', 'small', () => { on ? unpick(r.path) : pick(r); }, on ? '从「已选」移除这个文件' : '把这个文件加入「已选」，提问时发给模型');
   if (on || r.supported) {
     b.dataset.act = 'toggle';
     b.setAttribute('aria-label', (on ? '移除 ' : '加入 ') + r.name);
     b.disabled = !on && full();
   }
-  const h = btn('从列表移除', 'small', () => hideRow(r));
+  const h = btn('从列表移除', 'small', () => hideRow(r), '只在本次列表里隐藏这一行，文件和知识库不受影响');
   h.dataset.act = 'hide';
   h.setAttribute('aria-label', '从列表移除 ' + r.name);
   const acts = el('span', 'acts');
@@ -1051,7 +1308,7 @@ function revealFile(path, b) {
 }
 // 读不了的文件（压缩包、缺 pdftotext 的 pdf 等）：「加入」换成「打开文件夹」，由使用者自己处理
 function openFolderBtn(path, name) {
-  const b = btn('打开文件夹', 'small', () => revealFile(path, b));
+  const b = btn('打开文件夹', 'small', () => revealFile(path, b), '在文件管理器里打开这个文件所在的文件夹');
   b.dataset.act = 'open-folder';
   b.setAttribute('aria-label', '打开 ' + name + ' 所在的文件夹');
   return b;
@@ -1085,6 +1342,7 @@ function setRegex(on) {
   regexOn = on;
   $('regex').checked = on;
   qHint();
+  renderOptsCount();
 }
 $('regex').addEventListener('change', () => {
   setRegex($('regex').checked);
@@ -1134,8 +1392,11 @@ function setFindMode(mode) {
   return refreshFind();
 }
 $('sortBy').value = findPrefs.sort;
+$('findOptsBtn').addEventListener('click', () => setOptsOpen($('findOpts').hidden));
+if (findPrefs.opts === true) togglePanel($('findOptsBtn'), $('findOpts'), true);
 $('sortBy').addEventListener('change', () => {
   findPrefs.sort = $('sortBy').value;
+  renderOptsCount();
   saveFindPrefs();
   refreshFind();
 });
@@ -1225,7 +1486,7 @@ $('browseAdd').addEventListener('click', () => {
 function renderBrowse() {
   renderBrowseAdd();
   if (!browse) return;
-  const key = JSON.stringify([browse.dir, browse.dirs, browse.files.map(f => [f.path, (f.dups || []).map(d => d.path)]), picked.map(p => p.path), full(), listVer]);
+  const key = JSON.stringify([browse.dir, browse.dirs, browse.files.map(f => [f.path, (f.dups || []).map(d => d.path), markKey(f)]), picked.map(p => p.path), full(), listVer, kbOn()]);
   if (key === browseKey) return;
   const first = !browseKey, moved = first || JSON.parse(browseKey)[0] !== browse.dir;
   browseKey = key;
@@ -1240,6 +1501,7 @@ function renderBrowse() {
     const box = el('div', 'grow');
     const b = folderBtn(d.name, 'dir', () => openBrowse(d.path));
     b.dataset.act = 'open';
+    b.title = '进入文件夹 ' + d.name;
     b.setAttribute('aria-label', '打开文件夹 ' + d.name);
     box.appendChild(b);
     box.appendChild(el('div', 'meta', '文件夹，' + fmtNum(d.files) + ' 个文件'));
@@ -1248,7 +1510,13 @@ function renderBrowse() {
   });
   browse.files.forEach(r => ul.appendChild(fileRow(r, true)));
   if (!browse.dirs.length && !browse.listed) {
-    ul.appendChild(el('li', 'meta', browse.dir ? '这个文件夹里没有已索引的文件；刚放进来的文件请点「刷新」。' : '还没有添加文件夹：先点「管理文件夹」添加。'));
+    if (browse.dir) ul.appendChild(el('li', 'meta', '这个文件夹里没有已索引的文件；刚放进来的文件请点「刷新」。'));
+    else {
+      // 没有文件夹：空状态只在这里说一次，并给「添加文件夹」
+      const li = el('li', 'meta empty-folders', '还没有添加文件夹：添加要索引的文件夹后，这里列出其中的文件。');
+      li.appendChild(btn('添加文件夹', 'small', () => goAddFolder(), '打开文件夹管理，填写或选择要添加的文件夹'));
+      ul.appendChild(li);
+    }
   }
   if (browse.here_dedup > browse.listed) {
     ul.appendChild(el('li', 'meta', '共 ' + fmtNum(browse.here_dedup) + ' 个文件（含子文件夹），只列出' + SORT_LEAD[findPrefs.sort] + ' ' + browse.listed + ' 个；要找其他文件请在上方输入关键字搜索。'));
@@ -1333,7 +1601,7 @@ function renderPicked() {
   const ul = $('picked'), focus = focusedRow(ul);
   ul.textContent = '';
   $('pickCount').textContent = picked.length + ' / ' + maxFiles + (picked.length ? '，共 ' + fmtNum(totalChars()) + ' 字' : '');
-  if (!picked.length) ul.appendChild(el('li', 'meta', '还没有选文件：在上面的「找文件」里点「加入」，可以多次浏览、搜索累加。'));
+  if (!picked.length) ul.appendChild(el('li', 'meta', '还没有选文件：在「知识库」的「文件」标签里点「加入」，可以多次浏览、搜索累加。'));
   picked.forEach((p, i) => {
     const li = el('li');
     li.dataset.path = p.path;
@@ -1348,12 +1616,12 @@ function renderPicked() {
     box.appendChild(el('div', cls, meta));
     li.appendChild(box);
     const open = !!openPreviews[p.path];
-    const pv = btn(open ? '收起' : '预览', 'small', () => togglePreview(p, li, pv));
+    const pv = btn(open ? '收起' : '预览', 'small', () => togglePreview(p, li, pv), open ? '收起预览' : '预览这个文件取出的文字');
     pv.dataset.act = 'preview';
     pv.disabled = p.loading || !!p.error;
     pv.setAttribute('aria-expanded', String(open));
     pv.setAttribute('aria-label', (open ? '收起预览 ' : '预览 ') + p.name);
-    const rm = btn('移除', 'small', () => unpick(p.path));
+    const rm = btn('移除', 'small', () => unpick(p.path), '从「已选」移除这个文件');
     rm.dataset.act = 'remove';
     rm.setAttribute('aria-label', '移除 ' + p.name);
     const acts = el('span', 'acts');
@@ -1539,14 +1807,22 @@ function renderModels() {
   renderDest();
 }
 
+// 发送按钮旁一行：这次提问用到什么、发到哪里、多少字
 function renderDest() {
   const m = currentModel();
-  $('dest').className = m ? 'hint' : 'hint warn';
-  $('dest').textContent = m
-    ? '将发送到：' + m.host + (m.auth || m.loopback ? '' : '（未鉴权）') + '，模型 ' + m.label + '，' + picked.length + ' 个文件' + (currentSkill() ? '，skill ' + currentSkill().label : '') + (memoryActive() ? '，参考知识库' : '') +
-      '；文件 ' + fmtNum(totalChars()) + ' 字' + (currentSkill() ? ' + skill ' + fmtNum(skillChars()) + ' 字' : '') + ' + 对话 ' + fmtNum(historyChars()) + ' 字' +
-      (m.limit && m.limit < charLimit ? '；发送上限 ' + fmtNum(m.limit) + ' 字（' + m.limit_note + '）' : '')
-    : '没有可用的模型：OpenCode 配置里找不到带接口地址和 AK 的模型，本机也没有运行中的 llama-server 或 Ollama；请在「模型设置」里填写自定义接口（本机有 OpenCode 配置时可用「配置 OpenCode」换上自己的 AK），或启动本机模型服务后点「重新查找」。';
+  $('dest').className = m ? 'send-sum' : 'send-sum warn';
+  if (!m) {
+    $('dest').textContent = '没有可用的模型：OpenCode 配置里找不到带接口地址和 AK 的模型，本机也没有运行中的 llama-server 或 Ollama；请在「模型设置」里填写自定义接口（本机有 OpenCode 配置时可用「配置 OpenCode」换上自己的 AK），或启动本机模型服务后点「重新查找」。';
+    return;
+  }
+  const parts = [];
+  if (memoryActive()) parts.push('参考知识库');
+  parts.push(picked.length ? '已选 ' + picked.length + ' 个文件' : '没选文件');
+  if (currentSkill()) parts.push('skill ' + currentSkill().label);
+  $('dest').title = '接口：' + m.host;
+  $('dest').textContent = '这次提问：' + parts.join(' · ') + ' · 发送到 ' + m.label + (m.auth || m.loopback ? '' : '（未鉴权：' + m.host + '）') +
+    '；文件 ' + fmtNum(totalChars()) + ' 字' + (currentSkill() ? ' + skill ' + fmtNum(skillChars()) + ' 字' : '') + ' + 对话 ' + fmtNum(historyChars()) + ' 字' +
+    (m.limit && m.limit < charLimit ? '；发送上限 ' + fmtNum(m.limit) + ' 字（' + m.limit_note + '）' : '');
 }
 
 // ---------------- skill
@@ -1583,7 +1859,7 @@ function renderSkillHint() {
     if (!skillOpen) d.title = k.description;
     else d.style.whiteSpace = 'normal';
     one.appendChild(d);
-    const b = btn(skillOpen ? '收起' : '详情', 'link', () => { skillOpen = !skillOpen; renderSkillHint(); $('skillHint').querySelector('button').focus(); });
+    const b = btn(skillOpen ? '收起' : '详情', 'link', () => { skillOpen = !skillOpen; renderSkillHint(); $('skillHint').querySelector('button').focus(); }, skillOpen ? '收起 skill 说明' : '查看所选 skill 的说明');
     b.setAttribute('aria-expanded', String(skillOpen));
     b.setAttribute('aria-label', (skillOpen ? '收起' : '展开') + ' skill 说明');
     one.appendChild(b);
@@ -1594,8 +1870,6 @@ function renderSkillHint() {
         : (k.refs ? '模型会按需读取这个 skill 里的参考文件。' : '只把说明交给模型，不运行任何东西。')));
       box.appendChild(el('div', '', '选了 skill 时可以不选文件，也可以不写问题直接发送（代为提问「' + EMPTY_ASK + '」）。'));
     }
-  } else if (skillsDir) {
-    box.appendChild(el('div', '', '自建 skill 放在 ' + skillsDir + '/<名称>/SKILL.md，放好后点「重新读取」；也可以点「skill 设置」新建或安装。'));
   }
   renderDest();
   noticeLimit();
@@ -1767,15 +2041,15 @@ function toolsNode(m) {
     if (t.files && t.files.length) {
       const row = el('div', 'row');
       t.files.forEach(f => {
-        const b = btn('保存 ' + f.name, 'small', () => saveOutputs([f]));
+        const b = btn('保存 ' + f.name, 'small', () => saveOutputs([f]), '把模型生成的这个文件保存到本机');
         row.appendChild(b);
         if (f.skill) {
-          const ins = btn('安装 ' + f.name, 'small', () => installSkill({output: f.id}, ins, 'chatStatus'));
+          const ins = btn('安装 ' + f.name, 'small', () => installSkill({output: f.id}, ins, 'chatStatus'), '把模型生成的这个 skill 安装进 skills 文件夹');
           ins.dataset.act = 'install-skill';
           row.appendChild(ins);
         }
       });
-      if (t.files.length > 1) row.appendChild(btn('全部保存', 'small', () => saveOutputs(t.files)));
+      if (t.files.length > 1) row.appendChild(btn('全部保存', 'small', () => saveOutputs(t.files), '把这次生成的文件全部保存到本机'));
       d.appendChild(row);
       d.open = true;
     }
@@ -1800,21 +2074,22 @@ function renderChat() {
     const who = el('div', 'who', m.role === 'user' ? '我' : 'AI' + (m.model ? '（' + m.model + (m.skill ? '，skill ' + m.skill : '') + '）' : ''));
     const done = m.role === 'assistant' && m.content && !m.streaming;
     if (done) {
-      const c = btn('复制', 'small', () => copyText(m.content, c));
+      const c = btn('复制', 'small', () => copyText(m.content, c), '复制这条内容');
       c.setAttribute('aria-label', '复制这条回答');
       who.appendChild(c);
       const w = btn('保存为 Word', 'small', () => saveDocx(m.content + '\n' + refsMarkdown().join('\n'), i > 0 ? chat[i - 1].content.trim().slice(0, 30) : '', w));
       w.setAttribute('aria-label', '把这条回答保存为 Word');
+      w.title = '把这条回答（含引用）保存成 Word 文件';
       who.appendChild(w);
       if (m.answerId && !m.wrong) {
-        const x = btn('不对', 'small', () => forgetAnswer(m, x));
-        x.setAttribute('aria-label', '这条回答不对：移出它收录的结论');
+        const x = btn('这条不对', 'small', () => forgetAnswer(m, x), '删除从这条回答记下的结论，以后不再记');
+        x.setAttribute('aria-label', '这条回答不对：移出它记下的结论');
         who.appendChild(x);
       }
     }
     d.appendChild(who);
     if (m.tools && m.tools.length) d.appendChild(toolsNode(m));
-    if (m.memory && m.memory.files.length) d.appendChild(memoryNode(m.memory));
+    if (m.memory && m.memory.files.length) d.appendChild(memoryNode(m.memory, i));
     const body = m.role === 'assistant' ? mdBody(m) : el('div', 'msg-body', m.content);
     d.appendChild(body);
     if (m.partial) d.appendChild(el('div', 'partial', '（回答不完整）'));
@@ -1822,20 +2097,24 @@ function renderChat() {
     // 长回答读到底部时不用往回滚就能复制
     if (done) {
       const foot = el('div', 'row foot');
-      const c = btn('复制', 'small', () => copyText(m.content, c));
+      const c = btn('复制', 'small', () => copyText(m.content, c), '复制这条内容');
       c.setAttribute('aria-label', '复制这条回答');
       foot.appendChild(c);
-      if (m.answerId && m.wrong) foot.appendChild(el('span', 'hint', '已移出这条回答收录的结论'));
+      if (m.answerId && m.wrong) foot.appendChild(el('span', 'hint', '已移出这条回答记下的结论'));
       else if (m.answerId) {
-        const r = btn('已收录 ' + m.remembered + ' 条结论', 'link', () => openMemory(true));
-        r.setAttribute('aria-label', '已收录 ' + m.remembered + ' 条结论，打开知识库设置');
+        const r = btn('记下 ' + m.remembered + ' 条结论，下次提问会参考', 'link', () => kbFocus({ids: m.rememberedIds || []}, '', r), '在「主题与结论」里查看从这条回答记下的结论');
+        r.dataset.ref = i + ':r';
+        r.setAttribute('aria-label', '记下 ' + m.remembered + ' 条结论，下次提问会参考：在知识库中查看');
         foot.appendChild(r);
+        const x = btn('这条不对', 'small', () => forgetAnswer(m, x), '删除从这条回答记下的结论，以后不再记');
+        x.setAttribute('aria-label', '这条回答不对：移出它记下的结论');
+        foot.appendChild(x);
       }
       // 只在最后一条回答不完整时给「继续」「重新生成」；发了新问题后旧的只留标记
       if (m.partial && i === chat.length - 1) {
-        const go = btn('继续', 'small resume', () => run({kind: 'continue'}));
+        const go = btn('继续', 'small resume', () => run({kind: 'continue'}), '让模型接着没写完的回答往下写');
         go.setAttribute('aria-label', '继续这条不完整的回答');
-        const re = btn('重新生成', 'small resume', () => run({kind: 'regen'}));
+        const re = btn('重新生成', 'small resume', () => run({kind: 'regen'}), '丢掉这条回答，重新问一次');
         re.setAttribute('aria-label', '重新生成这条不完整的回答');
         go.disabled = re.disabled = busy || !alive;
         foot.appendChild(go);
@@ -1848,6 +2127,7 @@ function renderChat() {
   });
   box.scrollTop = box.scrollHeight;
   renderDest();
+  if (state) renderGuide();
   layoutCards();
 }
 
@@ -1865,144 +2145,638 @@ function setBusy(on) {
   document.querySelectorAll('#chat button.resume').forEach(b => { b.disabled = on || !alive; });
 }
 
-// ---------------- 知识库
+// ---------------- 知识库：卡片的「文件」「概览」「主题与结论」三个标签、齿轮里的设置、引导与回答引用的跳转
 
 function memoryActive() { return !!state && state.memory && $('useMemory').checked; }
-function memoryTitle(mem) { return '参考了知识库：' + mem.facts + ' 条结论、' + mem.paras + ' 段原文'; }
+function kbOn() { return !!state && state.memory && (!state.data || state.data.ok); }
+function kbEmpty(st) { return !st || (!st.files && !st.facts && !st.topics); }
+function memoryTitle(mem) {
+  const refs = mem.refs || [];
+  const facts = refs.length ? refs.filter(r => r.kind === 'fact').length : mem.facts;
+  return '参考了知识库：' + (mem.topics ? mem.topics + ' 个主题、' : '') + facts + ' 条结论、' + mem.paras + ' 段原文';
+}
+// 路径太长时在中间省略，完整路径放进 title
+function midTrim(text, n) { return text.length <= n ? text : text.slice(0, Math.ceil(n / 2) - 1) + '……' + text.slice(-(Math.floor(n / 2) - 1)); }
 
-// 回答上方可展开的一行：用到了哪些知识库，出处可打开所在文件夹
-function memoryNode(mem) {
+// 回答上方可展开的一行：用到的主题、结论和文件，每条可点，跳到知识库里的位置；文件另可打开所在文件夹
+function memoryNode(mem, i) {
   const d = el('details', 'memo');
+  const m = chat[i];
+  d.open = !!(m && m.memoOpen);
+  d.addEventListener('toggle', () => { if (m) m.memoOpen = d.open; });
   d.appendChild(el('summary', '', memoryTitle(mem)));
-  mem.files.forEach(f => {
-    const row = el('div', 'row');
-    row.appendChild(el('span', 'grow', '文件 ' + f.n + '：' + f.path + '（' + f.paras + ' 段原文）'));
-    row.appendChild(revealBtn(f.path, f.path.split('/').pop()));
-    d.appendChild(row);
-    if (f.facts.length) {
-      const ul = el('ul');
-      f.facts.forEach(x => ul.appendChild(el('li', '', x.conclusion + '（原文：「' + x.quote + '」）')));
-      d.appendChild(ul);
+  const files = {};
+  mem.files.forEach(f => { files[f.path] = f; });
+  const refs = mem.refs || mem.files.map(f => ({kind: 'file', path: f.path, shown: f.shown}));
+  const ul = el('ul');
+  refs.forEach((r, j) => {
+    const li = el('li'), label = {topic: '主题：', fact: '结论：', file: '文件：'}[r.kind];
+    li.appendChild(document.createTextNode(label));
+    const text = r.kind === 'topic' ? r.title : r.kind === 'fact' ? r.text : r.path;
+    const b = btn(text, 'link', () => kbJump(r, b), '在知识库里定位这条引用');
+    b.dataset.ref = i + ':' + j;
+    b.setAttribute('aria-label', '在知识库中定位' + label + text);
+    li.appendChild(b);
+    if (r.kind === 'file') {
+      const f = files[r.path];
+      if (f) li.appendChild(document.createTextNode('（文件 ' + f.n + '，' + f.paras + ' 段原文）'));
+      li.appendChild(revealBtn(r.path, r.path.split('/').pop()));
     }
+    ul.appendChild(li);
   });
+  d.appendChild(ul);
   return d;
 }
 
-// 「不对」：移出这条回答收录的结论，之后不再收录；不弹窗
+// 「这条不对」：移出这条回答记下的结论，之后不再收录；不弹窗
 function forgetAnswer(m, b) {
   b.disabled = true;
   post('/api/memory', {action: 'wrong', answer_id: m.answerId}).then(r => {
     m.wrong = true;
     renderChat();
-    say('chatStatus', '已移出这条回答收录的 ' + r.count + ' 条结论，之后不再收录。', 'ok');
+    say('chatStatus', '已移出这条回答记下的 ' + r.count + ' 条结论，之后不再收录。', 'ok');
     showMemStats(r.stats);
+    if (kbList.loaded) loadKbList();
   }).catch(e => { b.disabled = !alive; say('chatStatus', failText('移出', e.message, RETRY), 'bad'); });
 }
 
-function showMemStats(st) {
-  if (!st) return;
-  state.memory_stats = st;
-  const full = st.max_bytes && st.bytes >= st.max_bytes * 0.95;
-  $('memStats').textContent = st.error ? '读不了知识库：' + st.error : '已收录 ' + fmtNum(st.files) + ' 个文件、' + fmtNum(st.facts) +
-    ' 条结论、' + fmtNum(st.topics || 0) + ' 页主题页' + (st.queued ? '，待更新 ' + fmtNum(st.queued) + ' 项' : '') +
-    (st.extract ? '（其中从文件抽结论 ' + fmtNum(st.extract) + ' 个文件）' : '') +
-    (st.reextract ? '，按新规则重新抽取：剩 ' + fmtNum(st.reextract) + ' 个文件' : '') +
-    '，约 ' + fmtSize(st.bytes) + '（上限 ' + fmtSize(st.max_bytes) + (full ? '，容量快满了，可调大上限' : '，超出时先移出最久没用的文件') + '）';
-  $('memStats').className = full ? 'hint warn' : 'hint';
-  $('memSaveMd').disabled = !alive || !(st.facts || st.topics);
+// ---- 标签：文件、概览、主题与结论；方向键切换。上次打开的标签记在本浏览器，读不到时为「概览」
+const KB_TAB_KEY = 'ask-local-files.kbTab';
+const KB_TABS = ['files', 'overview', 'topics'];
+let kbTab = 'overview';
+function savedKbTab() { try { const t = localStorage.getItem(KB_TAB_KEY); return KB_TABS.includes(t) ? t : ''; } catch (e) { return ''; } }
+function selectKbTab(t, focus, remember) {
+  kbTab = t;
+  KB_TABS.forEach(x => {
+    const b = $('kbtab-' + x), on = x === t;
+    b.setAttribute('aria-selected', String(on));
+    b.tabIndex = on ? 0 : -1;
+    $(b.getAttribute('aria-controls')).hidden = !on;
+  });
+  if (remember !== false) { try { localStorage.setItem(KB_TAB_KEY, t); } catch (e) { /* 存不了时只在本页有效 */ } }
+  if (focus) $('kbtab-' + t).focus();
+  if (t === 'overview') refreshKb();
+  else if (t === 'topics' && !kbList.loaded) loadKbList();
+  layoutCards();
 }
-function refreshMemStats() {
-  api('/api/memory?q=' + encodeURIComponent($('memQ').value.trim())).then(r => {
-    showMemStats(r.stats);
-    if (!$('memPanel').hidden) renderMemory(r);
-  }).catch(() => {});
+KB_TABS.forEach(t => $('kbtab-' + t).addEventListener('click', () => selectKbTab(t, false)));
+$('kbTabs').addEventListener('keydown', ev => {
+  const i = KB_TABS.indexOf(kbTab), n = KB_TABS.length;
+  const j = {ArrowRight: (i + 1) % n, ArrowLeft: (i + n - 1) % n, Home: 0, End: n - 1}[ev.key];
+  if (j === undefined) return;
+  ev.preventDefault();
+  selectKbTab(KB_TABS[j], true);
+});
+$('kbToOverview').addEventListener('click', () => selectKbTab('overview', true));
+// 展开知识库卡片（窄屏开始对话后自动收起的也展开）
+function openKbCard() {
+  if (!isFolded('find')) return;
+  if (folds.find) { folds.find = false; saveFolds(); }
+  findOpen = true;
+  layoutCards();
 }
 
-function renderMemory(r) {
-  const facts = $('memFacts'), files = $('memFiles'), topics = $('memTopics');
-  facts.textContent = '';
-  files.textContent = '';
-  topics.textContent = '';
-  const q = $('memQ').value.trim();
-  if (!r.topics.length) topics.appendChild(el('li', 'meta', q ? '没有含「' + q + '」的主题页。' : '还没有主题页：点「更新知识库」整理。'));
-  r.topics.forEach(t => {
+// ---- 齿轮：知识库设置
+function toggleKbSettings(open) {
+  togglePanel($('memSettings'), $('kbSetPanel'), open);
+  if (!$('kbSetPanel').hidden) { openKbCard(); $('kbSetPanel').scrollIntoView({block: 'nearest'}); }
+}
+$('memSettings').addEventListener('click', () => toggleKbSettings());
+$('kbSetPanel').addEventListener('keydown', ev => {
+  if (ev.key !== 'Escape' || ev.defaultPrevented) return;
+  ev.preventDefault();
+  toggleKbSettings(false);
+  $('memSettings').focus();
+});
+function openKbSettings() { toggleKbSettings(true); $('memoryOn').focus(); }
+
+// ---- 概览：一句数字、进行中的收录与整理、最近整理的主题、空状态；卡片头与「文件」标签顶部的一行一并更新
+let kbRecent = [], kbFiles = [], kbTimer = 0;
+let kbDataBusy = false;
+function kbData() {
+  if (!state || kbDataBusy) return Promise.resolve();
+  kbDataBusy = true;
+  return api('/api/memory?limit=5').then(r => { kbRecent = r.topics; kbFiles = r.files; showMemStats(r.stats); })
+    .catch(() => {}).then(() => { kbDataBusy = false; });
+}
+function refreshKb() {
+  if (!state) return Promise.resolve();
+  return kbData().then(() => Promise.all([pollMemUpdate(), pollIngest()]));
+}
+const refreshMemStats = refreshKb;
+function showMemStats(st) {
+  if (!st || !state) return;
+  state.memory_stats = st;
+  renderKb();
+}
+function ingestProgress() {
+  const sum = ingest && ingest.summary;
+  return kbOn() && sum && sum.waiting > 0 ? sum : null;
+}
+function kbWatching() {
+  return alive && !!state && !document.hidden && ((!$('kbOverview').hidden && !isFolded('find')) || !$('guide').hidden);
+}
+function renderKb() {
+  if (!state) return;
+  const st = state.memory_stats || {}, on = state.memory, dataOk = !state.data || state.data.ok;
+  const empty = kbEmpty(st), prog = ingestProgress(), x = prog ? prog.done : 0, y = prog ? prog.total : 0;
+  const ingText = prog ? '收录中 ' + fmtNum(x) + ' / ' + fmtNum(y) : '';
+  // 卡片头（收起时显示）与「文件」标签顶部的一行
+  $('findSummary').textContent = !dataOk ? '保存位置不可用' : !on ? '已关闭' : prog ? ingText : empty ? '还是空的' :
+    fmtNum(st.files) + ' 个文件 · ' + fmtNum(st.facts) + ' 条结论 · ' + fmtNum(st.topics || 0) + ' 个主题';
+  $('kbStripText').textContent = '知识库：' + (!dataOk ? '保存位置不可用' : !on ? '已关闭' : prog ? ingText :
+    '已收录 ' + fmtNum(st.files) + ' · 待整理 ' + fmtNum(st.queued || 0));
+  $('sub').hidden = on && dataOk && empty;
+  // 一句数字
+  const full = st.max_bytes && st.bytes >= st.max_bytes * 0.95;
+  $('memStats').hidden = !on || !dataOk || (empty && !st.error);
+  $('memStats').className = 'lead' + (full || st.error ? ' warn' : '');
+  $('memStats').textContent = st.error ? '读不了知识库：' + st.error : '已收录 ' + fmtNum(st.files) + ' 个文件' +
+    (st.outside ? '（其中 ' + fmtNum(st.outside) + ' 个不在自动收录范围内：不在勾选的文件夹里，或格式不再自动收录，不再更新）' : '') + '、' + fmtNum(st.facts) +
+    ' 条结论、' + fmtNum(st.topics || 0) + ' 个主题。' + (full ? '容量快满了，可在设置里调大容量上限。' : '');
+  $('memOutsideRow').hidden = !on || !dataOk || !st.outside;
+  $('xfailRow').hidden = !on || !dataOk || !st.xfailed;
+  if (st.xfailed) $('xfailText').textContent = fmtNum(st.xfailed) + ' 个文件抽结论失败（模型的回答几次都看不懂），已跳过。';
+  if (!st.xfailed) { $('xfailPanel').hidden = true; $('xfailShow').setAttribute('aria-expanded', 'false'); }
+  $('memOutside').dataset.n = String(st.outside || 0);
+  // 进行中：收录进度与整理状态
+  $('kbIngestBusy').hidden = !prog;
+  if (prog) {
+    $('kbIngestText').textContent = '收录中：' + fmtNum(x) + ' / ' + fmtNum(y) + ' 个文件……收录完的马上能被参考。';
+    $('kbIngestBar').style.width = (y ? Math.round(x * 100 / y) : 0) + '%';
+  }
+  const pending = st.queued || 0, running = memUpd.running;
+  let tidy = '', paused = false;
+  if (on && dataOk) {
+    if (running) tidy = memUpd.mode === 'manual' ? '整理：正在进行，详见下方。' : '整理：正在空闲时自动整理，提问时会让路。';
+    else if (pending && noAi()) { tidy = '整理已暂停：没有可用的模型。收录照常进行；配好模型后自动继续。'; paused = true; }
+    else if (pending) tidy = '整理：' + fmtNum(pending) + ' 项' + (memUpd.auto !== false ? '等空闲时进行（10 分钟没有提问后），不用等。' : '待整理，可点「现在整理」。') +
+      (st.reextract ? '其中 ' + fmtNum(st.reextract) + ' 个文件按新规则重新抽取。' : '');
+  }
+  $('kbTidyBusy').hidden = !tidy;
+  $('kbTidyBusy').classList.toggle('paused', paused);
+  $('kbTidyText').textContent = tidy;
+  $('memUpdate').hidden = running || paused || !pending;
+  $('memUpdate').disabled = running || !alive || !on;
+  $('memUpdStop').hidden = !(running && memUpd.mode === 'manual');
+  $('kbBusy').hidden = !prog && !tidy;
+  // 最近整理的主题，至多 5 个，整行可点
+  const recent = on && dataOk && !empty && kbRecent.length > 0;
+  $('kbRecent').hidden = !recent;
+  const ul = $('kbRecentList');
+  ul.textContent = '';
+  if (recent) kbRecent.slice(0, 5).forEach(t => {
     const li = el('li');
-    const g = el('div', 'grow');
-    g.appendChild(el('div', '', t.title));
-    t.points.forEach(p => g.appendChild(el('div', 'hint', '· ' + p.text + '（「' + p.quote + '」 · ' + p.path + '）' +
-                                            (p.stale ? '（文件已改，待复核）' : ''))));
-    if (t.related && t.related.length) g.appendChild(el('div', 'hint', '相关主题：' + t.related.map(x => x.title).join('、')));
+    const b = btn('', 'rowbtn', () => kbFocus({topic: t.id}, '', b), '在「主题与结论」里打开这个主题');
+    b.appendChild(document.createTextNode(t.title));
+    b.appendChild(el('span', 'meta', ' · ' + t.points.length + ' 条要点 · ' + memTime(t.updated)));
+    li.appendChild(b);
+    ul.appendChild(li);
+  });
+  // 空状态：保存位置不可用、已关闭、第一次使用、清空之后（有文件夹而知识库是空的，也没在收录）
+  let emptyText = '', go = '';
+  if (!dataOk) { emptyText = '保存位置不可用：本次不收录，提问时也不参考知识库，详见页头的提示。'; go = 'data'; }
+  else if (!on) { emptyText = '知识库已关闭：不收录，提问时也不参考。已收录的内容保留。'; go = 'on'; }
+  else if (empty && !state.folders.length) { emptyText = '先在「文件」标签添加文件夹，其中的文件会自动收录。'; go = 'folders'; }
+  else if (empty && !prog && !(ingest && ingest.running)) {
+    emptyText = '知识库是空的。勾选了「自动收录到知识库」的文件夹会在下次扫描时重新收录。'; go = 'ingest';
+  }
+  $('kbEmpty').hidden = !emptyText;
+  $('kbEmptyText').textContent = emptyText;
+  $('kbEmptyGo').dataset.go = go;
+  $('kbEmptyGo').textContent = {data: '保存位置设置', on: '打开知识库', folders: '添加文件夹', ingest: '立即重新收录'}[go] || '';
+  $('kbEmptyGo').disabled = !alive || (go === 'ingest' && !(state.auto_folders || []).length);
+  $('kbMore').hidden = !on || !dataOk || (empty && !(memUpd.history || []).length);
+  $('memSaveMd').disabled = !alive || !(st.facts || st.topics);
+  $('memCap').textContent = st.max_bytes ? '已用约 ' + fmtSize(st.bytes || 0) + '，上限 ' + fmtSize(st.max_bytes) + (full ? '，容量快满了。' : '。') : '';
+  $('memCap').className = full ? 'hint warn' : 'hint';
+  $('offNote').hidden = on && dataOk || !$('askBody') || noAi();
+  renderGuide();
+  scheduleKb();
+}
+
+// ---- 自动刷新：只刷看得见的标签；整理或收录进行中至多每 KB_BUSY_MS 刷一次（整理每做完一批另刷一次），
+// 空闲时每 KB_IDLE_MS；页面在后台、知识库卡片收起时不刷，切回或展开时立即刷一次。请求失败不提示，下一轮再试
+const KB_BUSY_MS = 5000, KB_IDLE_MS = 15000;
+let kbDue = 0;
+function kbBusy() { return !!((ingest && ingest.running) || memUpd.running); }
+function kbShown() { return alive && !!state && !document.hidden && !isFolded('find'); }
+function scheduleKb() {
+  if (!kbShown() && !kbWatching()) { clearTimeout(kbTimer); kbTimer = 0; return; }
+  const ms = kbBusy() ? KB_BUSY_MS : KB_IDLE_MS, due = Date.now() + ms;
+  if (kbTimer && kbDue <= due) return;      // 已排了更早的一次，不往后推
+  clearTimeout(kbTimer);
+  kbDue = due;
+  kbTimer = setTimeout(() => { kbTimer = 0; kbAuto(); }, ms);
+}
+function kbAuto() {
+  if (!kbShown() && !kbWatching()) { clearTimeout(kbTimer); kbTimer = 0; return; }
+  const busy = kbBusy();
+  const tab = !kbShown() ? null : kbTab === 'topics' ? quietKbList() : kbTab === 'files' && busy ? quietFind() : null;
+  Promise.all([refreshKb(), tab]).then(() => scheduleKb());
+}
+// 整理每做完一批：刷新数字，「主题与结论」开着时一并刷新
+function kbBatchDone() {
+  if (!kbShown()) return;
+  kbData();
+  if (kbTab === 'topics') quietKbList();
+}
+// 刷新前后保持滚动位置：元素自身可滚动的祖先与整页
+function scrollSpots(node) {
+  const out = [];
+  for (let n = node; n; n = n.parentElement) if (n.scrollHeight > n.clientHeight) out.push([n, n.scrollTop]);
+  const se = document.scrollingElement;
+  if (se) out.push([se, se.scrollTop]);
+  return out;
+}
+function restoreScroll(spots) { spots.forEach(([n, t]) => { n.scrollTop = t; }); }
+// 刚在这块里点过、按过键（KB_HANDS_MS 内）或有对话框开着时不自动刷新，免得列表在手下变动
+const KB_HANDS_MS = 10000;
+const kbHands = {topics: 0, files: 0};
+[['topics', 'kbTopics'], ['files', 'kbFiles']].forEach(([k, id]) => ['pointerdown', 'keydown', 'input'].forEach(t =>
+  $(id).addEventListener(t, () => { kbHands[k] = Date.now(); }, true)));
+function kbHandsOn(k) { return Date.now() - kbHands[k] < KB_HANDS_MS || !!document.querySelector('dialog[open]'); }
+let kbListQuiet = false;
+function quietKbList() {
+  if (!kbList.loaded || kbListQuiet || kbHandsOn('topics')) return Promise.resolve();
+  kbListQuiet = true;
+  const seq = kbListSeq, n = Math.min(500, Math.max(KB_PAGE, kbList.topics.length, kbList.facts.length));
+  const url = kbListUrl(0).replace(/([?&])limit=\d+/, '$1limit=' + n);
+  return api(url).then(r => {
+    if (seq !== kbListSeq || kbHandsOn('topics')) return;
+    showMemStats(r.stats);
+    const now = JSON.stringify([r.topics, r.facts, r.topics_total, r.facts_total]);
+    if (now === JSON.stringify([kbList.topics, kbList.facts, kbList.topicsTotal, kbList.factsTotal])) return;
+    const spots = scrollSpots($('kbTopics'));
+    Object.assign(kbList, {topics: r.topics, facts: r.facts, topicsTotal: r.topics_total, factsTotal: r.facts_total});
+    renderKbList();
+    restoreScroll(spots);
+  }).catch(() => {}).then(() => { kbListQuiet = false; });
+}
+let findQuiet = false;
+function quietFind() {
+  if (findQuiet || kbHandsOn('files')) return Promise.resolve();
+  findQuiet = true;
+  const spots = scrollSpots($('kbFiles'));
+  return refreshFind().then(() => restoreScroll(spots)).catch(() => {}).then(() => { findQuiet = false; });
+}
+$('kbEmptyGo').addEventListener('click', () => {
+  const go = $('kbEmptyGo').dataset.go;
+  if (go === 'data') openDataSettings();
+  else if (go === 'on') turnKbOn();
+  else if (go === 'folders') goAddFolder();
+  else if (go === 'ingest') $('ingestRun').click();
+});
+// 去「文件」标签添加文件夹：打开管理文件夹并聚焦输入框
+function goAddFolder() {
+  openKbCard();
+  selectKbTab('files', false);
+  openFolders(true);
+}
+function turnKbOn() {
+  $('memoryOn').checked = true;
+  $('memoryOn').dispatchEvent(new Event('change'));
+}
+$('offTurnOn').addEventListener('click', turnKbOn);
+
+// ---- 引导：打开页面时知识库为空才显示；本页里发出第一问或点「先不建库」后收起
+let guideOn = false;
+function renderGuide() {
+  const show = guideOn && !chat.length && kbOn();
+  $('guide').hidden = !show;
+  if (!show) return;
+  const st = state.memory_stats || {}, prog = ingestProgress(), has = (st.files || 0) > 0;
+  $('g1').classList.toggle('done', state.folders.length > 0);
+  $('g2').classList.toggle('done', has && !prog);
+  $('g2Bar').hidden = !prog;
+  if (prog) $('g2Bar').firstChild.style.width = (prog.total ? Math.round(prog.done * 100 / prog.total) : 0) + '%';
+  const tidy = noAi() ? '整理已暂停：没有可用的模型，配好模型后自动继续。' : '整理成主题在空闲时进行，不用等。';
+  $('g2Text').textContent = (prog ? '收录中：' + fmtNum(prog.done) + ' / ' + fmtNum(prog.total) + ' 个文件……' : '') + '收录完的文件马上能用；' + tidy;
+  const ex = $('examples');
+  ex.textContent = '';
+  const qs = [];
+  if (kbRecent[0]) qs.push(kbRecent[0].title + ' 有哪些要点？');
+  kbFiles.slice(0, 2).forEach((f, k) => {
+    const name = f.path.split('/').pop();
+    qs.push(k ? '「' + name + '」里讲了哪些内容？' : '总结「' + name + '」的要点');
+  });
+  qs.slice(0, 3).forEach(q => ex.appendChild(btn(q, '', () => { $('ask').value = q; $('ask').focus(); }, '把这个问题填进提问框')));
+  ex.hidden = !has || !qs.length;
+  $('g3Text').textContent = has && qs.length ? '已经可以问了，试试根据已收录文件生成的问题：' : '不选文件也能问；回答附出处，核对过的结论会记下来，下次自动参考。';
+}
+$('g1Go').addEventListener('click', goAddFolder);
+$('skipGuide').addEventListener('click', () => {
+  guideOn = false;
+  renderGuide();
+  post('/api/settings', {guide_skip: true}).catch(() => {});
+  say('chatStatus', '已收起引导。在「知识库」的「文件」标签挑文件，加入已选后提问。', 'info');
+  $('ask').focus();
+});
+
+// ---- 主题与结论：搜索，每次 50 条，「显示更多」；定位时只列目标，给「显示全部」
+const KB_PAGE = 50;
+let kbList = {q: '', focus: null, topics: [], facts: [], topicsTotal: 0, factsTotal: 0, loaded: false, open: {}};
+function kbListUrl(offset) {
+  const p = new URLSearchParams({limit: String(KB_PAGE), offset: String(offset)}), f = kbList.focus;
+  if (f && f.ids) p.set('ids', f.ids.join(','));
+  else if (f && f.path) p.set('path', f.path);
+  else if (f && f.topic) p.set('topic', String(f.topic));
+  else if (kbList.q) p.set('q', kbList.q);
+  return '/api/memory?' + p;
+}
+let kbListSeq = 0;
+function loadKbList() {
+  const seq = ++kbListSeq;     // 只用最后一次请求的结果，免得先发的晚到、盖掉定位后的列表
+  kbList.loaded = true;
+  return api(kbListUrl(0)).then(r => {
+    if (seq !== kbListSeq) return;
+    Object.assign(kbList, {topics: r.topics, facts: r.facts, topicsTotal: r.topics_total, factsTotal: r.facts_total, loaded: true});
+    showMemStats(r.stats);
+    renderKbList();
+  }).catch(e => say('kbListStatus', failText('读取知识库', e.message, RETRY), 'bad'));
+}
+function loadMore(kind, b) {
+  b.disabled = true;
+  const had = kbList[kind].length;
+  api(kbListUrl(had)).then(r => {
+    kbList[kind] = kbList[kind].concat(r[kind]);
+    renderKbList();
+    const li = $(kind === 'topics' ? 'memTopics' : 'memFacts').children[had];
+    const f = li && li.querySelector('button');
+    if (f) f.focus();
+  }).catch(e => { b.disabled = !alive; say('kbListStatus', failText('读取知识库', e.message, RETRY), 'bad'); });
+}
+$('moreTopics').addEventListener('click', () => loadMore('topics', $('moreTopics')));
+$('moreFacts').addEventListener('click', () => loadMore('facts', $('moreFacts')));
+function moreBtn(id, shown, total) {
+  const b = $(id);
+  b.hidden = shown >= total;
+  b.disabled = !alive;
+  b.textContent = '显示更多（每次 ' + KB_PAGE + ' 条，还有 ' + fmtNum(total - shown) + ' 条）';
+}
+function renderKbList() {
+  const f = kbList.focus, q = kbList.q;
+  $('kbFocusBar').hidden = !f;
+  $('kbForgetFile').hidden = !(f && f.path);
+  if (f) {
+    $('kbFocusText').textContent = f.path ? '只显示这份文件的 ' + fmtNum(kbList.factsTotal) + ' 条结论：' + midTrim(f.path, 40)
+      : f.topic ? '只显示定位到的主题' : '只显示定位到的 ' + fmtNum(kbList.factsTotal) + ' 条结论';
+    $('kbFocusText').title = f.path || '';
+  }
+  const none = !f && q && !kbList.topics.length && !kbList.facts.length;
+  $('kbNone').hidden = !none;
+  $('kbNoneWord').textContent = q;
+  $('kbLists').hidden = !!none;
+  const showTopics = !f || !!f.topic, showFacts = !f || !f.topic;
+  $('kbTopicsH').hidden = $('memTopics').hidden = !showTopics;
+  $('kbFactsH').hidden = $('memFacts').hidden = !showFacts;
+  const topics = $('memTopics'), facts = $('memFacts');
+  topics.textContent = '';
+  facts.textContent = '';
+  if (showTopics && !kbList.topics.length) topics.appendChild(el('li', 'meta', q ? '没有含「' + q + '」的主题。' : f ? '这个主题已不在知识库里。' : '还没有主题：整理后会出现在这里。'));
+  kbList.topics.forEach(t => {
+    const li = el('li');
+    li.dataset.kb = 't' + t.id;
+    const g = el('div', 'grow'), open = !!kbList.open[t.id] || !!(f && f.topic);
+    const b = btn('', 'rowbtn', () => { kbList.open[t.id] = !open; renderKbList(); const n = document.querySelector('#memTopics li[data-kb="t' + t.id + '"] .rowbtn'); if (n) n.focus(); }, open ? '收起要点' : '展开这个主题的要点');
+    b.setAttribute('aria-expanded', String(open));
+    b.appendChild(el('b', '', t.title));
+    b.appendChild(el('span', 'meta', ' · ' + t.points.length + ' 条要点' + (t.related && t.related.length ? ' · 相关主题：' + t.related.map(x => x.title).join('、') : '')));
+    g.appendChild(b);
+    if (open) {
+      const pts = el('ul', 'points');
+      t.points.forEach(p => pts.appendChild(el('li', '', p.text + '（「' + p.quote + '」 · ' + p.path + '）' + (p.stale ? '（文件已改，待复核）' : ''))));
+      g.appendChild(pts);
+    }
     li.appendChild(g);
-    const x = btn('删除', 'small', () => memAction({action: 'topic', id: t.id}, x, '已删除主题页「' + t.title + '」。'));
-    x.setAttribute('aria-label', '删除主题页 ' + t.title);
+    const x = btn('移出', 'small', () => memAction({action: 'topic', id: t.id}, x, '已移出主题「' + t.title + '」。'), '从知识库删除这个主题，结论保留');
+    x.setAttribute('aria-label', '移出主题 ' + t.title);
     li.appendChild(x);
     topics.appendChild(li);
   });
-  if (!r.facts.length) facts.appendChild(el('li', 'meta', q ? '没有含「' + q + '」的结论。' : '还没有收录结论。'));
-  r.facts.forEach(f => {
+  if (showFacts && !kbList.facts.length) facts.appendChild(el('li', 'meta', q ? '没有含「' + q + '」的结论。' : f ? '没有可显示的结论。' : '还没有结论。'));
+  kbList.facts.forEach(x => {
     const li = el('li');
+    li.dataset.kb = 'f' + x.id;
     const g = el('div', 'grow');
-    g.appendChild(el('div', '', f.conclusion));
-    g.appendChild(el('div', 'hint', '「' + f.quote + '」 · ' + f.path + (f.count > 1 ? ' · 得出 ' + f.count + ' 次' : '')));
+    g.appendChild(el('div', '', x.conclusion));
+    g.appendChild(el('div', 'meta', '原句：「' + x.quote + '」 · ' + x.path + (x.count > 1 ? ' · 得出 ' + x.count + ' 次' : '')));
     li.appendChild(g);
-    const x = btn('删除', 'small', () => memAction({action: 'fact', id: f.id}, x, '已删除这条结论。'));
-    x.setAttribute('aria-label', '删除这条结论');
-    li.appendChild(x);
+    const w = btn('这条不对', 'small', () => memAction({action: 'fact', id: x.id, wrong: true}, w, '已移出这条结论，之后不再收录。'), '删除这条结论，以后整理时不再抽出它');
+    w.setAttribute('aria-label', '这条不对：移出这条结论');
+    li.appendChild(w);
     facts.appendChild(li);
   });
-  if (!r.files.length) files.appendChild(el('li', 'meta', q ? '没有路径含「' + q + '」的文件。' : '还没有收录文件。'));
-  r.files.forEach(f => {
-    const li = el('li');
-    const g = el('div', 'grow');
-    g.appendChild(el('div', 'name', f.path));
-    g.appendChild(el('div', 'hint', f.facts + ' 条结论 · ' + fmtSize(f.bytes)));
-    li.appendChild(g);
-    const x = btn('移出', 'small', () => memAction({action: 'file', path: f.path}, x, '已移出这个文件及其 ' + f.facts + ' 条结论。'));
-    x.setAttribute('aria-label', '移出这个文件及其结论');
-    li.appendChild(x);
-    files.appendChild(li);
+  moreBtn('moreTopics', showTopics ? kbList.topics.length : 0, showTopics ? kbList.topicsTotal : 0);
+  moreBtn('moreFacts', showFacts ? kbList.facts.length : 0, showFacts ? kbList.factsTotal : 0);
+}
+let memTimer = 0;
+$('memQ').addEventListener('input', () => {
+  clearTimeout(memTimer);
+  memTimer = setTimeout(() => { kbList.q = $('memQ').value.trim(); kbList.focus = null; loadKbList(); }, 250);
+});
+$('memQClear').addEventListener('click', () => { $('memQ').value = ''; kbList.q = ''; loadKbList(); $('memQ').focus(); });
+$('kbShowAll').addEventListener('click', () => { kbList.focus = null; kbList.q = ''; $('memQ').value = ''; loadKbList().then(() => $('memQ').focus()); });
+$('kbForgetFile').addEventListener('click', () => {
+  const f = kbList.focus;
+  if (!f || !f.path) return;
+  memAction({action: 'file', path: f.path}, $('kbForgetFile'), '已从知识库移出这份文件及其 ' + kbList.factsTotal + ' 条结论。')
+    .then(() => { kbList.focus = null; $('kbForgetFile').disabled = !alive; return loadKbList(); }).then(() => $('memQ').focus());
+});
+
+function memAction(body, b, done, statusId) {
+  b.disabled = true;
+  statusId = statusId || 'kbListStatus';
+  return post('/api/memory', body).then(r => {
+    say(statusId, done, 'ok');
+    showMemStats(r.stats);
+    if (kbList.loaded) loadKbList();
+    refreshKb();
+  }).catch(e => { b.disabled = !alive; say(statusId, failText('操作', e.message, RETRY), 'bad'); });
+}
+
+// ---- 跳转：回答上方的引用、「记下 N 条结论」、文件的收录标记、概览里的主题。
+// 知识库卡片展开、切到对应标签、目标高亮并获得焦点；定位结果写在卡片里的定位栏（aria-live），
+// 从回答跳来的，定位栏里放「返回回答」；下一次操作知识库卡片时定位栏收起
+let jumpBack = '';
+function kbJump(ref, from) {
+  if (ref.kind === 'file') { locateFile(ref.path, from); return; }
+  const q = new URLSearchParams({kind: ref.kind, id: String(ref.id), path: ref.path || '', quote: ref.quote || '', title: ref.title || ''});
+  api('/api/memory-locate?' + q).then(r => {
+    const what = ref.kind === 'topic' ? '这个主题' : '这条结论';
+    // 已移出：不跳转，提示写在引用所在的回答旁
+    if (r.state === 'gone') { say('chatStatus', what + '已从知识库移出，没有可定位的位置。', 'warn'); return; }
+    const msg = r.state === 'merged' ? what + '已在整理时合并到：「' + r.text + '」，已定位到合并后的那' + (r.kind === 'topic' ? '个主题' : '条') + '。'
+      : '已在知识库中定位到：' + r.text;
+    kbFocus(r.kind === 'topic' ? {topic: r.id} : {ids: [r.id]}, msg, from);
+  }).catch(e => say('chatStatus', failText('定位', e.message, RETRY), 'bad'));
+}
+function setJumpBack(from) {
+  jumpBack = from && from.dataset.ref && from.closest('#askCard') ? from.dataset.ref : '';
+}
+// 定位栏：写明定位结果，从回答跳来的给「返回回答」
+function showJump(msg) {
+  $('kbJumpBar').hidden = !msg;
+  $('kbJumpText').textContent = msg || '';
+  $('kbJumpBack').hidden = !jumpBack;
+}
+function hideJump() {
+  if ($('kbJumpBar').hidden) return;
+  showJump('');
+  document.querySelectorAll('#findCard li.hl').forEach(x => x.classList.remove('hl'));
+}
+$('kbJumpBack').addEventListener('click', () => backToAnswer());
+// 在知识库卡片里另做操作（切标签、搜索、点别的按钮）时收起定位栏
+$('findBody').addEventListener('click', ev => { if (!ev.target.closest('#kbJumpBar, [data-ref]')) hideJump(); });
+$('findBody').addEventListener('input', hideJump);
+function kbFocus(focus, msg, from) {
+  setJumpBack(from);
+  kbList.focus = focus;
+  kbList.q = '';
+  $('memQ').value = '';
+  openKbCard();
+  kbList.loaded = true;       // 切标签时不另发不带定位的请求
+  selectKbTab('topics', false);
+  return loadKbList().then(() => {
+    const items = Array.from(document.querySelectorAll('#kbTopics li[data-kb]'));
+    items.forEach(li => li.classList.add('hl'));
+    // 从回答跳来而没带说明的（「记下 N 条结论」）也写一句，好放「返回回答」
+    showJump(msg || (jumpBack ? '已在知识库中定位到这条回答记下的 ' + items.length + ' 条结论' : ''));
+    const target = items[0];
+    if (!target) return;
+    target.tabIndex = -1;
+    target.focus({preventScroll: true});
+    target.scrollIntoView({block: 'nearest'});
+  });
+}
+function backToAnswer() {
+  const b = document.querySelector('#chat [data-ref="' + jumpBack + '"]');
+  hideJump();
+  if (!b) { $('ask').focus(); return; }
+  if (isFolded('ask')) { folds.ask = false; saveFolds(); layoutCards(); }
+  const d = b.closest('details');
+  if (d) d.open = true;
+  b.scrollIntoView({block: 'center'});
+  b.focus();
+}
+// 文件：切到「文件」标签，进入它所在的文件夹并定位到这一行
+function locateFile(path, from) {
+  setJumpBack(from);
+  openKbCard();
+  selectKbTab('files', false);
+  $('q').value = '';
+  $('ext').value = '';
+  $('qClear').hidden = true;
+  setDir(dirOf(path));
+  return setFindMode('browse').then(() => {
+    const li = Array.from($('browseList').children).find(x => x.dataset.path === path);
+    document.querySelectorAll('#browseList li.hl').forEach(x => x.classList.remove('hl'));
+    if (!li) { showJump('已在「文件」标签打开它所在的文件夹：' + dirOf(path)); return; }
+    li.classList.add('hl');
+    showJump('已在知识库中定位到：' + path.split('/').pop());
+    li.tabIndex = -1;
+    li.focus({preventScroll: true});
+    li.scrollIntoView({block: 'nearest'});
   });
 }
 
-function memAction(body, b, done) {
-  b.disabled = true;
-  return post('/api/memory', body).then(r => {
-    say('memStatus', done, 'ok');
-    showMemStats(r.stats);
-    refreshMemStats();
-  }).catch(e => { b.disabled = !alive; say('memStatus', failText('操作', e.message, RETRY), 'bad'); });
-}
-
-// 打开设置的「知识库」标签（提示条与回答下方的入口）；view 为真时另外展开「查看知识库」
-function openMemory(view) {
-  if (!settingsOpen('mem')) openSettings('mem', document.activeElement);
-  else tabBtn('mem').focus();
-  if (view && $('memPanel').hidden) $('memView').click();
-}
-
-$('memView').addEventListener('click', () => {
-  togglePanel($('memView'), $('memPanel'));
-  if (!$('memPanel').hidden) refreshMemStats();
+// ---- 设置：总开关、清空（页面内确认框，写明会删除什么、数量多少）
+function chatBusy() { return convStates().some(c => c.busy); }
+$('memClear').addEventListener('click', () => {
+  api('/api/memory?limit=1').then(r => r.stats).catch(() => state.memory_stats || {}).then(st => {
+    $('clearText').textContent = '将删除：已收录的 ' + fmtNum(st.files || 0) + ' 个文件的文字（约 ' + fmtSize(st.bytes || 0) + '）、待整理 ' +
+      fmtNum(st.queued || 0) + ' 项、' + fmtNum(st.facts || 0) + ' 条结论、' + fmtNum(st.points || 0) + ' 条要点、' +
+      fmtNum(st.topics || 0) + ' 个主题，以及整理记录和文件索引，不能撤销。' +
+      (chatBusy() ? '正在生成的回答会被停止。' : '') +
+      '设置、网址和原文件不受影响；清空后自动收录先暂停，点「概览」里的「立即收录」或下次启动时再收录。';
+    $('clearDlg').showModal();
+    $('clearNo').focus();
+  });
 });
-let memTimer = 0;
-$('memQ').addEventListener('input', () => { clearTimeout(memTimer); memTimer = setTimeout(refreshMemStats, 250); });
-// 「清空」类操作直接清，不弹确认
-$('memClear').addEventListener('click', () => memAction({action: 'clear'}, $('memClear'), '知识库已清空。')
-  .then(() => { $('memClear').disabled = !alive; }));
+$('memOutside').addEventListener('click', () => {
+  $('outText').textContent = '将移出 ' + fmtNum(+$('memOutside').dataset.n || 0) + ' 个不在自动收录范围内的文件（不在勾选的文件夹里，或是网页、代码等不再自动收录的格式）：删除它们的文字、待整理项、结论和出自它们的要点（要点删空的主题一并删除），不能撤销。其余文件和原文件不受影响。';
+  $('outDlg').showModal();
+  $('outNo').focus();
+});
+$('outNo').addEventListener('click', () => $('outDlg').close());
+$('outDlg').addEventListener('close', () => { if (alive && !$('memOutsideRow').hidden) $('memOutside').focus(); });
+$('outOk').addEventListener('click', () => {
+  $('outDlg').close();
+  say('outStatus', '正在移出……', 'busy');
+  post('/api/memory', {action: 'outside'}).then(r => {
+    say('outStatus', '已移出 ' + fmtNum(r.count) + ' 个文件。', 'ok');
+    showMemStats(r.stats);
+    if (kbList.loaded) loadKbList();
+    refreshKb();
+  }).catch(e => say('outStatus', failText('移出', e.message, RETRY), 'bad'));
+});
+$('clearNo').addEventListener('click', () => $('clearDlg').close());
+$('clearDlg').addEventListener('close', () => { if (alive) $('memClear').focus(); });
+$('clearOk').addEventListener('click', () => {
+  $('clearDlg').close();
+  kbList.focus = null;
+  say('memStatus', '正在清空……', 'busy');
+  memAction({action: 'clear'}, $('memClear'), '知识库已清空。自动收录已暂停，点「概览」里的「立即收录」或下次启动时再收录。', 'memStatus')
+    .then(() => { $('memClear').disabled = !alive; });
+});
 $('memoryOn').addEventListener('change', () => {
   const on = $('memoryOn').checked;
   post('/api/settings', {memory: on}).then(r => {
     applyState(r);
     renderFolders();
-    say('memStatus', on ? '已打开知识库。' : '已关闭知识库：不再收录、也不再参考，已收录的保留。', 'ok');
+    refreshKb();
+    say('memStatus', on ? '已打开知识库。' : '已关闭知识库：不收录，提问时也不参考，已收录的保留。', 'ok');
   }).catch(e => { $('memoryOn').checked = !on; say('memStatus', failText('保存', e.message, RETRY), 'bad'); });
 });
+
 // ---------------- 保存位置：知识库、设置与令牌存放的文件夹
 
 function showDataDir(d) {
   if (!d) return;
-  $('dataDirNow').textContent = '当前：' + (d.custom ? d.path : '默认（家目录）：' + d.path) +
+  $('dataDirNow').textContent = '当前：' + (d.custom ? d.path : (d.home ? '家目录：' : '默认（安装目录下的「数据」）：') + d.path) +
     (d.ok ? '' : '（不可用：' + d.error + '）');
+  // 默认应存在安装目录；启动时没能用上（安装目录不可写、搬迁失败）而退回家目录时，常驻写明原因并给「改存到安装目录」
+  $('dataToolRow').hidden = !d.home;
+  $('dataWhy').hidden = !d.home && !d.notice;
+  if (d.home) $('dataWhy').textContent = (d.notice || '现在存在家目录，没有用默认的安装目录。') + '安装目录下的「数据」：' + d.tool;
+  else if (d.notice) $('dataWhy').textContent = d.notice;
+  // 升级后知识库是空的、上一版里有：给「从上一版取回」
+  const p = d.previous;
+  $('dataPrev').hidden = $('dataPrevRow').hidden = !p;
+  if (p) $('dataPrev').textContent = '现在的知识库是空的，上一版（' + p.path + '）的知识库里有 ' + fmtNum(p.files) + ' 个文件，可以取回。';
+}
+function restoreConfirmText(p) {
+  return '从上一版取回知识库、设置和网址令牌？\n\n将复制 ' + p.items.length + ' 个文件：' +
+    p.items.map(i => i.label + '（' + i.name + '，' + fmtSize(i.bytes) + '）').join('、') +
+    '\n从：' + p.path + '\n到：' + p.to +
+    '\n\n上一版里的文件不动。现在「数据」里的同名文件改名为「原名.取回前」留着，不删除。网址可能随之改变，取回后按新网址重新打开页面。';
+}
+$('dataRestore').addEventListener('click', () => {
+  const b = $('dataRestore');
+  b.disabled = true;
+  say('dataStatus', '正在检查……', 'busy');
+  post('/api/data-restore', {}).then(r => {
+    if (!confirm(restoreConfirmText(r.plan))) { say('dataStatus', '没有取回。', 'info'); return; }
+    say('dataStatus', '正在取回……', 'busy');
+    return post('/api/data-restore', {confirm: true}).then(d => {
+      showDataDir(d.data);
+      if (d.url_changed) {
+        say('dataStatus', '已从上一版取回，正在按新网址重新打开页面……', 'ok');
+        setTimeout(() => (EMBED ? window.parent : window).location.replace(d.url), 1200);
+        return;
+      }
+      say('dataStatus', '已从上一版取回。', 'ok');
+      refreshMemStats();
+      refreshFind();
+    });
+  }).catch(e => say('dataStatus', failText('取回', e.message, e.status === 409 ? '' : RETRY), 'bad'))
+    .then(() => { b.disabled = !alive; });
+});
+// 打开知识库设置并定位到保存位置
+function openDataSettings() {
+  toggleKbSettings(true);
+  $('dataH').scrollIntoView({block: 'nearest'});
+  $(!$('dataPrevRow').hidden ? 'dataRestore' : !$('dataToolRow').hidden ? 'dataToTool' : 'dataDir').focus();
 }
 function dataConfirmText(p) {
   const list = p.items.map(i => i.label + '（' + i.name + '，' + fmtSize(i.bytes) + '）').join('、');
@@ -2023,17 +2797,21 @@ function dataFail(e) {
 $('pickDataDir').addEventListener('click', () => pickInto($('dataDir'), $('pickDataDir'), 'dataStatus', '选择保存位置'));
 $('dataDir').addEventListener('keydown', ev => { if (ev.key === 'Enter') $('setDataDir').click(); });
 $('setDataDir').addEventListener('click', () => {
-  const v = $('dataDir').value.trim(), b = $('setDataDir');
+  const v = $('dataDir').value.trim();
   if (!v) { say('dataStatus', '请先填写或选择新的保存位置。', 'warn'); $('dataDir').focus(); return; }
+  changeDataDir({path: v}, $('setDataDir'));
+});
+// 「改存到安装目录」：服务端先建好安装目录下的「数据」，再照常检查、确认、移过去
+$('dataToTool').addEventListener('click', () => changeDataDir({tool: true}, $('dataToTool')));
+function changeDataDir(body, b) {
   b.disabled = true;
   say('dataStatus', '正在检查……', 'busy');
-  post('/api/data-dir', {path: v}).then(r => {
+  post('/api/data-dir', body).then(r => {
     if (!confirm(dataConfirmText(r.plan))) { say('dataStatus', '没有更改保存位置。', 'info'); return; }
     say('dataStatus', r.plan.mode === 'move' ? '正在移动……' : '正在改用……', 'busy');
-    return post('/api/data-dir', {path: v, confirm: true}).then(d => {
+    return post('/api/data-dir', Object.assign({}, body, {confirm: true})).then(d => {
       showDataDir(d.data);
-      $('dataDir').value = '';
-      updateDirty();
+      if (body.path) $('dataDir').value = '';
       const where = d.data.path;
       if (d.mode === 'use' || d.url_changed) {
         say('dataStatus', '已改用 ' + where + ' 里的数据，正在重新打开页面……', 'ok');
@@ -2045,9 +2823,9 @@ $('setDataDir').addEventListener('click', () => {
     });
   }).catch(e => say('dataStatus', dataFail(e), 'bad'))
     .then(() => { b.disabled = !alive; });
-});
+}
 
-// ---------------- 知识库更新：手动、空闲时自动、更新记录与撤销
+// ---------------- 整理知识库：手动（「现在整理」）、空闲时自动整理、整理记录与撤销
 
 let memUpd = {running: false, mode: '', history: []}, memUpdShown = null, memUpdTimer = 0;
 function memTime(sec) {
@@ -2055,32 +2833,44 @@ function memTime(sec) {
   return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
 }
 function showMemUpdate(st) {
-  const was = memUpd.running;
+  const was = memUpd.running, wasDone = memUpd.done;
   memUpd = st;
-  $('memUpdate').disabled = st.running || !alive || !state.memory;
-  $('memUpdStop').hidden = !(st.running && st.mode === 'manual');
   $('memAuto').checked = st.auto;
   if (st.running && st.mode === 'manual') {
-    say('memUpdStatus', '正在更新知识库：' + (st.stage || '准备') + (st.total ? '，第 ' + Math.min(st.done + 1, st.total) + ' / ' + st.total + ' 批' : '') + '……', 'busy');
-  } else if (st.running) {
-    say('memUpdStatus', '正在空闲时自动更新知识库，提问时会让路……', 'busy');
+    say('memUpdStatus', '正在整理知识库：' + (st.stage || '准备') + (st.total ? '，第 ' + Math.min(st.done + 1, st.total) + ' / ' + st.total + ' 批' : '') + '……', 'busy');
   } else if (st.result && st.result.time !== memUpdShown && st.result.text) {
     memUpdShown = st.result.time;
     say('memUpdStatus', st.result.text, {done: 'ok', stopped: 'warn', yielded: 'info', error: 'bad'}[st.result.kind]);
-  } else if (!st.result && !$('memUpdStatus').textContent) {
-    say('memUpdStatus', st.pending ? '待更新 ' + fmtNum(st.pending) + ' 项。' : '', 'info');
   }
-  if (was && !st.running) refreshMemStats();
+  if (was && !st.running) refreshKb();
+  else if (was && st.running && st.done !== wasDone) kbBatchDone();
   renderMemLog();
+  renderPlan();
+  renderKb();
   clearTimeout(memUpdTimer);
-  // 进行中每秒看一次进度；知识库设置开着时每 15 秒看一次，以便显示自动更新
-  if (alive && (st.running || settingsOpen('mem'))) memUpdTimer = setTimeout(pollMemUpdate, st.running ? 1000 : 15000);
+  // 进行中每秒看一次进度（概览或引导看得见时）
+  if (alive && st.running && kbWatching()) memUpdTimer = setTimeout(pollMemUpdate, 1000);
 }
 function pollMemUpdate() { return api('/api/memory-update').then(showMemUpdate).catch(() => {}); }
+// 分批计划与最近几批的记录：整理进行中，或这一轮刚做完时显示
+function renderPlan() {
+  const plan = memUpd.plan, logs = memUpd.log || [];
+  const show = !!plan && plan.batches > 0 && (memUpd.running || logs.length > 0);
+  $('kbPlan').hidden = !show;
+  if (!show) return;
+  const parts = plan.folders.map(g => folderName(g.folder) + ' ' + fmtNum(g.files) + ' 个文件 ' + fmtNum(g.batches) + ' 批');
+  $('kbPlanText').textContent = '分批计划：共 ' + fmtNum(plan.batches) + ' 批抽结论，按文件夹、从旧到新：' + parts.join('；') +
+    (plan.more ? '；另有 ' + fmtNum(plan.more) + ' 个文件夹' : '') + '。';
+  const ul = $('kbPlanLog');
+  ul.textContent = '';
+  logs.slice().reverse().forEach(x => ul.appendChild(el('li', 'hint', '第 ' + fmtNum(x.n) + ' / ' + fmtNum(x.total) + ' 批：' +
+    folderName(x.folder) + '，' + fmtNum(x.files) + ' 个文件，新增结论 ' + fmtNum(x.facts) + ' 条，更新主题 ' + fmtNum(x.topics) + ' 个')));
+}
+function folderName(p) { const parts = String(p || '').split('/').filter(Boolean); return parts.length ? parts[parts.length - 1] : '/'; }
 function renderMemLog() {
   const ul = $('memLogList');
   ul.textContent = '';
-  if (!memUpd.history.length) ul.appendChild(el('li', 'meta', '还没有更新记录。'));
+  if (!memUpd.history.length) ul.appendChild(el('li', 'meta', '还没有整理记录。'));
   memUpd.history.forEach((h, i) => {
     const li = el('li');
     const g = el('div', 'grow');
@@ -2092,13 +2882,15 @@ function renderMemLog() {
       const u = btn('撤销', 'small', () => {
         u.disabled = true;
         post('/api/memory-update', {action: 'undo', id: h.id}).then(r => {
-          say('memUpdStatus', '已撤销 ' + memTime(h.time) + ' 的更新：' + h.summary + '。', 'ok');
+          say('memUpdStatus', '已撤销 ' + memTime(h.time) + ' 的整理：' + h.summary + '。', 'ok');
           showMemStats(r.stats);
           showMemUpdate(r);
-          refreshMemStats();
+          refreshKb();
+          if (kbList.loaded) loadKbList();
         }).catch(e => { u.disabled = !alive; say('memUpdStatus', failText('撤销', e.message, RETRY), 'bad'); });
       });
-      u.setAttribute('aria-label', '撤销这次更新');
+      u.setAttribute('aria-label', '撤销这次整理');
+      u.title = '撤销这次整理及其之后的整理，知识库回到这次之前';
       u.disabled = memUpd.running;
       li.appendChild(u);
     }
@@ -2107,9 +2899,9 @@ function renderMemLog() {
 }
 $('memUpdate').addEventListener('click', () => {
   $('memUpdate').disabled = true;
-  say('memUpdStatus', '正在更新知识库：准备……', 'busy');
+  say('memUpdStatus', '正在整理知识库：准备……', 'busy');
   post('/api/memory-update', {action: 'run'}).then(showMemUpdate)
-    .catch(e => { $('memUpdate').disabled = !alive; say('memUpdStatus', failText('更新知识库', e.message, RETRY), 'bad'); });
+    .catch(e => { $('memUpdate').disabled = !alive; say('memUpdStatus', failText('整理知识库', e.message, RETRY), 'bad'); });
 });
 $('memUpdStop').addEventListener('click', () => {
   $('memUpdStop').disabled = true;
@@ -2120,22 +2912,27 @@ $('memAuto').addEventListener('change', () => {
   const on = $('memAuto').checked;
   post('/api/settings', {memory_auto: on}).then(() => {
     memUpd.auto = on;
-    say('memUpdStatus', on ? '已打开空闲时自动更新。' : '已关闭空闲时自动更新，可随时点「更新知识库」。', 'ok');
-  }).catch(e => { $('memAuto').checked = !on; say('memUpdStatus', failText('保存', e.message, RETRY), 'bad'); });
+    say('memStatus', on ? '已打开空闲时自动整理。' : '已关闭空闲时自动整理，可随时在「概览」里点「现在整理」。', 'ok');
+    renderKb();
+  }).catch(e => { $('memAuto').checked = !on; say('memStatus', failText('保存', e.message, RETRY), 'bad'); });
 });
 $('memLog').addEventListener('click', () => togglePanel($('memLog'), $('memLogPanel')));
 $('tocPick').addEventListener('change', () => {
   const on = $('tocPick').checked;
   post('/api/settings', {toc_pick: on}).then(() => {
     state.toc_pick = on;
-    say('tocStatus', on ? '已打开：提问前先让模型看主题页目录。' : '已关闭：提问时只按关键字检索知识库。', 'ok');
+    say('tocStatus', on ? '已打开：提问前先让模型看主题目录。' : '已关闭：提问时只按关键字检索知识库。', 'ok');
   }).catch(e => { $('tocPick').checked = !on; say('tocStatus', failText('保存', e.message, RETRY), 'bad'); });
 });
 
 // ---------------- 自动收录：勾选的文件夹里的文件自动收录到知识库
 
 let ingest = null, ingestShown = null, ingestTimer = 0;
-const INGEST_STATE = {failed: '取不出文字', evicted: '容量不足', forgotten: '已移出'};
+const INGEST_STATE = {failed: '取不出文字', evicted: '容量不足', forgotten: '已移出', format: '格式不自动收录'};
+// 没有收录的原因各附下一步
+const INGEST_NEXT = {failed: '另存为可复制文字的 PDF 后再放回', evicted: '在设置里调大容量上限，或移出不用的文件',
+                     forgotten: '文件改过后会重新收录',
+                     format: '自动收录只收 Word、Excel、PPT、WPS、PDF、邮件、txt 和 Markdown；要用时在「文件」标签里加入「已选」再提问'};
 function showIngest(st) {
   if (!st) return;
   const was = ingest && ingest.running;
@@ -2145,7 +2942,8 @@ function showIngest(st) {
   const sum = st.summary;
   let text = '';
   if (!state.memory) text = '知识库已关闭，不自动收录。';
-  else if (!on) text = '还没有勾选「自动收录到知识库」的文件夹：在「管理文件夹」里给要收录的文件夹勾选。';
+  else if (!on) text = '还没有勾选「自动收录到知识库」的文件夹：在「文件」标签的「管理文件夹」里给要收录的文件夹勾选。';
+  else if (st.paused && !st.running) text = '自动收录已暂停（清空了知识库）：点「立即收录」重新收录勾选的 ' + st.folders.length + ' 个文件夹，下次启动时也会自动恢复。';
   else if (sum) {
     text = '勾选的 ' + st.folders.length + ' 个文件夹里共 ' + fmtNum(sum.total) + ' 个文件：已收录 ' + fmtNum(sum.done) + ' 个' +
       (sum.waiting ? '，待收录 ' + fmtNum(sum.waiting) + ' 个' : '') +
@@ -2154,35 +2952,520 @@ function showIngest(st) {
   $('ingestStats').textContent = text;
   $('ingestStats').className = sum && sum.skipped.some(x => x.state === 'evicted') ? 'hint warn' : 'hint';
   const skipped = sum ? sum.skipped : [];
+  // 按原因分组：「<原因> N 个：<下一步>」
+  const groups = {};
+  skipped.forEach(x => { groups[x.state] = (groups[x.state] || 0) + 1; });
+  const rs = $('ingestReasons');
+  rs.textContent = '';
+  Object.keys(groups).forEach(k => rs.appendChild(el('li', '', (INGEST_STATE[k] || k) + ' ' + fmtNum(groups[k]) + ' 个：' + (INGEST_NEXT[k] || ''))));
   $('ingestSkipped').hidden = !skipped.length;
   const ul = $('ingestSkippedList');
   ul.textContent = '';
   skipped.forEach(x => {
     const li = el('li'), g = el('div', 'grow');
     g.appendChild(el('div', 'name', x.path));
-    g.appendChild(el('div', 'hint', (INGEST_STATE[x.state] || x.state) + '：' + x.reason));
+    g.appendChild(el('div', 'hint', (INGEST_STATE[x.state] || x.state) + '：' + (INGEST_NEXT[x.state] || x.reason)));
     li.appendChild(g);
     ul.appendChild(li);
   });
   if (sum && sum.skipped_total > skipped.length) ul.appendChild(el('li', 'meta', '……另有 ' + fmtNum(sum.skipped_total - skipped.length) + ' 个'));
   if (!skipped.length && !$('ingestSkippedPanel').hidden) togglePanel($('ingestSkipped'), $('ingestSkippedPanel'), false);
-  if (st.running) say('ingestStatus', '正在自动收录：' + (st.stage || '准备') + '……', 'busy');
-  else if (st.result && st.result.time !== ingestShown) {
+  const busyNote = $('ingestStatus').classList.contains('busy');
+  if (st.result && st.result.time !== ingestShown) {
     ingestShown = st.result.time;
     say('ingestStatus', st.result.text, st.result.kind === 'error' ? 'bad' : 'ok');
-  } else if (!st.result) say('ingestStatus', '');
-  if (was && !st.running) refreshMemStats();
+  } else if (st.running && busyNote) say('ingestStatus', '正在收录：' + (st.stage || '查找要收录的文件') + '……', 'busy');
+  // 收录完了但没有新结果（没有新增或改过的文件）：不留在「正在收录」
+  else if (!st.running && busyNote) say('ingestStatus', '自动收录：没有新增或改过的文件。', 'info');
+  if (was && !st.running) {
+    refreshKb();
+    if (kbTab === 'files' && kbShown()) quietFind();
+  }
+  renderKb();
   clearTimeout(ingestTimer);
-  if (alive && (st.running || settingsOpen('mem'))) ingestTimer = setTimeout(pollIngest, st.running ? 1000 : 15000);
+  if (alive && st.running && kbWatching()) ingestTimer = setTimeout(pollIngest, 1000);
 }
 function pollIngest() { return api('/api/memory-ingest').then(showIngest).catch(() => {}); }
 $('ingestRun').addEventListener('click', () => {
   $('ingestRun').disabled = true;
-  say('ingestStatus', '正在自动收录：查找要收录的文件……', 'busy');
+  say('ingestStatus', '正在收录：查找要收录的文件……', 'busy');
   post('/api/memory-ingest', {action: 'run'}).then(showIngest)
     .catch(e => { $('ingestRun').disabled = !alive; say('ingestStatus', failText('收录', e.message, RETRY), 'bad'); });
 });
 $('ingestSkipped').addEventListener('click', () => togglePanel($('ingestSkipped'), $('ingestSkippedPanel')));
+
+// ---------------- 关系图：主题、结论与文件之间的关系，按需从服务端取一层；只读
+const GRAPH_MAX = 300;      // 一次最多画多少个节点
+const GKIND = {topic: '主题', fact: '结论', path: '文件'};
+const SVGNS = 'http://www.w3.org/2000/svg';
+let G = {nodes: new Map(), edges: new Map(), sel: null, open: new Set(), view: {x: 0, y: 0, k: 1}, anim: 0, heat: 0};
+function gEdgeKey(e) { return e.a < e.b ? e.a + '|' + e.b : e.b + '|' + e.a; }
+function gSay(msg, kind) { say('graphStatus', msg, kind); }
+function gSize() { const r = $('graphSvg').getBoundingClientRect(); return {w: r.width || 800, h: r.height || 500}; }
+// 把一批节点与连线并进图里；新节点放在 near 附近。超出上限时不加，返回 false
+function gMerge(data, near) {
+  const fresh = data.nodes.filter(n => !G.nodes.has(n.id));
+  if (G.nodes.size + fresh.length > GRAPH_MAX) return false;
+  const c = near && G.nodes.get(near), {w, h} = gSize();
+  fresh.forEach((n, i) => {
+    const a = (i / Math.max(1, fresh.length)) * Math.PI * 2, r = c ? 60 + Math.random() * 30 : 120 + Math.random() * 160;
+    G.nodes.set(n.id, Object.assign({}, n, {x: (c ? c.x : w / 2) + Math.cos(a) * r, y: (c ? c.y : h / 2) + Math.sin(a) * r, vx: 0, vy: 0}));
+  });
+  (data.edges || []).forEach(e => { if (G.nodes.has(e.a) && G.nodes.has(e.b)) G.edges.set(gEdgeKey(e), e); });
+  return true;
+}
+function gNeighbors(id) {
+  const out = new Set();
+  G.edges.forEach(e => { if (e.a === id) out.add(e.b); else if (e.b === id) out.add(e.a); });
+  return out;
+}
+// 只留 id 和它直接相连的节点
+function gCollapseOthers(id) {
+  const keep = gNeighbors(id);
+  keep.add(id);
+  Array.from(G.nodes.keys()).forEach(k => { if (!keep.has(k)) G.nodes.delete(k); });
+  Array.from(G.edges.keys()).forEach(k => { const e = G.edges.get(k); if (!G.nodes.has(e.a) || !G.nodes.has(e.b)) G.edges.delete(k); });
+  Array.from(G.open).forEach(k => { if (!G.nodes.has(k)) G.open.delete(k); });
+}
+function gExpand(id) {
+  return api('/api/graph?node=' + encodeURIComponent(id)).then(r => {
+    if (!gMerge(r, id)) {
+      gSay('展开后会超过 ' + GRAPH_MAX + ' 个节点。可以「收起其他」，只留这个节点和与它直接相连的，再展开；也可以用上方搜索缩小范围。', 'warn');
+      const b = btn('收起其他', 'link', () => { gCollapseOthers(id); gMerge(r, id); G.open.add(id); gRedraw(); gSay('已收起其他节点并展开。', 'ok'); }, '收起其他展开的节点，腾出位置展开这个');
+      $('graphStatus').appendChild(b);
+      return;
+    }
+    G.open.add(id);
+    clearTimeout(G.fitTimer);
+    G.fitTimer = setTimeout(gFit, 1200);      // 布局大致稳定后把全部节点放进窗口
+    const more = Object.entries(r.totals || {}).filter(([k, n]) => n > r.nodes.filter(x => (k === 'file' ? 'path' : k) === x.kind).length);
+    if (more.length) gSay('只画出了一部分：' + more.map(([k, n]) => (k === 'file' ? '文件' : GKIND[k]) + '共 ' + fmtNum(n) + ' 个').join('、') + '，其余可用搜索找到。', 'info');
+    gRedraw();
+  }).catch(e => gSay(failText('展开', e.message, RETRY), 'bad'));
+}
+function gSelect(id, focusTree) {
+  G.sel = id;
+  gPaint();
+  gTree(focusTree);
+  const box = $('graphDetail');
+  box.textContent = '';
+  api('/api/graph?detail=' + encodeURIComponent(id)).then(d => {
+    if (G.sel !== id) return;
+    box.textContent = '';
+    gSay('已选中' + GKIND[d.kind] + '：' + (d.kind === 'topic' ? d.title : d.kind === 'fact' ? d.conclusion : d.path).slice(0, 40) + '，详情在右侧。', 'info');
+    const head = el('div', '', '');
+    head.appendChild(el('strong', '', GKIND[d.kind] + '：'));
+    head.appendChild(document.createTextNode(d.kind === 'topic' ? d.title : d.kind === 'fact' ? d.conclusion : d.path));
+    box.appendChild(head);
+    const row = el('div', 'row');
+    box.appendChild(row);
+    let paths = [];
+    if (d.kind === 'topic') {
+      const ul = el('ul', 'list');
+      d.points.forEach(pt => {
+        const li = el('li');
+        const g = el('div', 'grow');
+        g.appendChild(el('div', '', pt.text));
+        g.appendChild(el('div', 'hint', '「' + pt.quote + '」 ' + pt.path));
+        li.appendChild(g);
+        ul.appendChild(li);
+      });
+      box.appendChild(ul);
+      paths = Array.from(new Set(d.points.map(pt => pt.path)));
+    } else if (d.kind === 'fact') {
+      box.appendChild(el('div', 'hint', '原文摘句：「' + d.quote + '」'));
+      box.appendChild(el('div', 'hint', '出处：' + d.path));
+      paths = [d.path];
+    } else {
+      box.appendChild(el('div', 'hint', fmtNum(d.facts) + ' 条结论，出现在 ' + fmtNum(d.topics) + ' 个主题里'));
+      paths = [d.path];
+    }
+    row.appendChild(btn('展开', 'small', () => gExpand(id), '在图上画出和它相连的节点'));
+    row.appendChild(btn('在主题与结论里查看', 'small', () => {
+      $('graphDlg').close();
+      const num = Number(id.slice(1));
+      kbFocus(d.kind === 'topic' ? {topic: num} : d.kind === 'fact' ? {ids: [num]} : {path: d.path},
+        '已在知识库中定位到关系图里选中的' + GKIND[d.kind] + '。');
+    }, '关闭关系图，在「主题与结论」标签里定位这个节点'));
+    row.appendChild(btn('把出处文件加入已选', 'small', () => gPick(paths), '把这个节点出自的文件加入「已选」'));
+  }).catch(e => gSay(failText('读取详情', e.message, RETRY), 'bad'));
+}
+function gPick(paths) {
+  const todo = paths.filter(p => !isPicked(p));
+  if (!todo.length) { gSay('出处文件都已在已选里。', 'info'); return; }
+  if (picked.length + todo.length > maxFiles) {
+    gSay('加入失败：已选还能加 ' + Math.max(0, maxFiles - picked.length) + ' 个文件，这里有 ' + todo.length + ' 个。请先在已选里移除几个。', 'warn');
+    return;
+  }
+  if (!newChat()) { gSay('加入失败：回答生成中。等它结束或点「停止」后再加。', 'warn'); return; }
+  todo.forEach(p => pick({path: p, name: p.split('/').pop(), rel: p}, true));
+  gSay('已把 ' + todo.length + ' 个出处文件加入已选。', 'ok');
+}
+// ---- 布局：力导向，节点互相排斥，连线拉近，向中心收拢；每次结构变化后重新升温
+function gTick() {
+  const nodes = Array.from(G.nodes.values()), {w, h} = gSize();
+  const k = G.heat;
+  for (let i = 0; i < nodes.length; i++) {
+    const a = nodes[i];
+    for (let j = i + 1; j < nodes.length; j++) {
+      const b = nodes[j];
+      let dx = a.x - b.x, dy = a.y - b.y, d2 = dx * dx + dy * dy || 0.01;
+      if (d2 > 90000) continue;
+      const f = 900 / d2;
+      dx *= f; dy *= f;
+      a.vx += dx; a.vy += dy; b.vx -= dx; b.vy -= dy;
+    }
+  }
+  G.edges.forEach(e => {
+    const a = G.nodes.get(e.a), b = G.nodes.get(e.b);
+    if (!a || !b) return;
+    const dx = b.x - a.x, dy = b.y - a.y, d = Math.sqrt(dx * dx + dy * dy) || 1, f = (d - 70) * 0.02;
+    a.vx += dx / d * f; a.vy += dy / d * f; b.vx -= dx / d * f; b.vy -= dy / d * f;
+  });
+  nodes.forEach(n => {
+    n.vx += (w / 2 - n.x) * 0.002; n.vy += (h / 2 - n.y) * 0.002;
+    if (n.drag) { n.vx = n.vy = 0; return; }
+    n.x += Math.max(-20, Math.min(20, n.vx * k)); n.y += Math.max(-20, Math.min(20, n.vy * k));
+    n.vx *= 0.5; n.vy *= 0.5;
+  });
+}
+function gRun() {
+  G.heat = 1;
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    // 减少动态效果：一次算完再画，不播放移动过程
+    cancelAnimationFrame(G.anim);
+    G.anim = 0;
+    for (let i = 0; i < 200 && G.heat > 0.02; i++) { gTick(); G.heat *= 0.97; }
+    gPaint();
+    return;
+  }
+  if (G.anim) return;
+  const step = () => {
+    gTick();
+    gPaint();
+    G.heat *= 0.97;
+    G.anim = G.heat > 0.02 && $('graphDlg').open ? requestAnimationFrame(step) : 0;
+  };
+  G.anim = requestAnimationFrame(step);
+}
+// 结构变了：重建图形，再开始布局；列表随之更新
+function gRedraw() {
+  const svg = $('graphSvg');
+  svg.textContent = '';
+  const root = document.createElementNS(SVGNS, 'g');
+  root.id = 'graphRoot';
+  svg.appendChild(root);
+  G.edges.forEach((e, key) => {
+    const l = document.createElementNS(SVGNS, 'line');
+    l.setAttribute('class', 'ge ' + e.kind);
+    l.dataset.key = key;
+    root.appendChild(l);
+  });
+  G.nodes.forEach(n => {
+    const g = document.createElementNS(SVGNS, 'g');
+    g.setAttribute('class', 'gn ' + n.kind);
+    g.dataset.id = n.id;
+    let shape;
+    if (n.kind === 'topic') {
+      shape = document.createElementNS(SVGNS, 'circle');
+      shape.setAttribute('r', String(8 + Math.min(10, Math.sqrt(n.size || 1) * 2)));
+    } else if (n.kind === 'fact') {
+      shape = document.createElementNS(SVGNS, 'rect');
+      shape.setAttribute('x', '-6'); shape.setAttribute('y', '-6'); shape.setAttribute('width', '12'); shape.setAttribute('height', '12');
+      shape.setAttribute('rx', '2');
+    } else {
+      shape = document.createElementNS(SVGNS, 'path');
+      shape.setAttribute('d', 'M0 -8 L8 0 L0 8 L-8 0 Z');
+    }
+    shape.setAttribute('class', 'shape');
+    const title = document.createElementNS(SVGNS, 'title');
+    title.textContent = GKIND[n.kind] + '：' + (n.path || n.label);
+    g.appendChild(title);
+    g.appendChild(shape);
+    const t = document.createElementNS(SVGNS, 'text');
+    t.setAttribute('x', '12'); t.setAttribute('y', '4');
+    t.textContent = n.label.length > 18 ? n.label.slice(0, 18) + '…' : n.label;
+    g.appendChild(t);
+    root.appendChild(g);
+  });
+  gPaint();
+  gTree(false);
+  gRun();
+}
+function gPaint() {
+  const root = $('graphRoot');
+  if (!root) return;
+  const v = G.view;
+  root.setAttribute('transform', 'translate(' + v.x + ' ' + v.y + ') scale(' + v.k + ')');
+  root.querySelectorAll('line.ge').forEach(l => {
+    const [a, b] = l.dataset.key.split('|').map(id => G.nodes.get(id));
+    if (!a || !b) return;
+    l.setAttribute('x1', a.x); l.setAttribute('y1', a.y); l.setAttribute('x2', b.x); l.setAttribute('y2', b.y);
+  });
+  root.querySelectorAll('g.gn').forEach(g => {
+    const n = G.nodes.get(g.dataset.id);
+    if (!n) return;
+    g.setAttribute('transform', 'translate(' + n.x + ' ' + n.y + ')');
+    g.classList.toggle('sel', n.id === G.sel);
+  });
+}
+function gFit() {
+  const nodes = Array.from(G.nodes.values());
+  if (!nodes.length) return;
+  const {w, h} = gSize();
+  const xs = nodes.map(n => n.x), ys = nodes.map(n => n.y);
+  const x0 = Math.min(...xs) - 40, x1 = Math.max(...xs) + 140, y0 = Math.min(...ys) - 30, y1 = Math.max(...ys) + 30;
+  const k = Math.max(0.2, Math.min(1.2, Math.min(w / (x1 - x0), h / (y1 - y0))));
+  G.view = {k, x: (w - (x1 + x0) * k) / 2, y: (h - (y1 + y0) * k) / 2};
+  gPaint();
+}
+function gZoom(f, cx, cy) {
+  const {w, h} = gSize(), v = G.view;
+  cx = cx === undefined ? w / 2 : cx; cy = cy === undefined ? h / 2 : cy;
+  const k = Math.max(0.2, Math.min(4, v.k * f));
+  G.view = {k, x: cx - (cx - v.x) * k / v.k, y: cy - (cy - v.y) * k / v.k};
+  gPaint();
+}
+// 拖动：按在节点上拖节点，按在空白处拖画布；没怎么动的按下算点击
+(function () {
+  const svg = $('graphSvg');
+  let drag = null;
+  svg.addEventListener('pointerdown', ev => {
+    const g = ev.target.closest && ev.target.closest('g.gn');
+    const r = svg.getBoundingClientRect();
+    drag = {id: g ? g.dataset.id : null, sx: ev.clientX, sy: ev.clientY, vx: G.view.x, vy: G.view.y, moved: false, r};
+    if (drag.id) G.nodes.get(drag.id).drag = true;
+    svg.setPointerCapture(ev.pointerId);
+  });
+  svg.addEventListener('pointermove', ev => {
+    if (!drag) return;
+    const dx = ev.clientX - drag.sx, dy = ev.clientY - drag.sy;
+    if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true;
+    if (drag.id) {
+      const n = G.nodes.get(drag.id);
+      n.x = (ev.clientX - drag.r.left - G.view.x) / G.view.k;
+      n.y = (ev.clientY - drag.r.top - G.view.y) / G.view.k;
+      gPaint();
+    } else {
+      G.view.x = drag.vx + dx; G.view.y = drag.vy + dy;
+      gPaint();
+    }
+  });
+  const up = () => {
+    if (!drag) return;
+    const d = drag;
+    drag = null;
+    if (d.id && G.nodes.get(d.id)) {
+      G.nodes.get(d.id).drag = false;
+      if (!d.moved) { gSelect(d.id, false); if (!G.open.has(d.id)) gExpand(d.id); }
+      else gRun();
+    }
+  };
+  svg.addEventListener('pointerup', up);
+  svg.addEventListener('pointercancel', up);
+  svg.addEventListener('wheel', ev => {
+    ev.preventDefault();
+    const r = svg.getBoundingClientRect();
+    gZoom(ev.deltaY < 0 ? 1.15 : 1 / 1.15, ev.clientX - r.left, ev.clientY - r.top);
+  }, {passive: false});
+})();
+// ---- 层级列表：主题 → 与它相连的结论、文件、相关主题；不连主题的结论与文件列在最后
+function gTree(focus) {
+  const ul = $('graphTree');
+  ul.textContent = '';
+  const nodes = Array.from(G.nodes.values());
+  const topics = nodes.filter(n => n.kind === 'topic'), shown = new Set();
+  const item = (n, level, kids) => {
+    const li = el('li');
+    li.setAttribute('role', 'treeitem');
+    li.setAttribute('aria-level', String(level));
+    li.setAttribute('aria-selected', n.id === G.sel ? 'true' : 'false');
+    li.tabIndex = -1;
+    li.dataset.id = n.id;
+    const lab = el('span', 'gi');
+    lab.appendChild(el('span', 'k', GKIND[n.kind]));
+    lab.appendChild(document.createTextNode(n.kind === 'path' ? n.path : n.label));
+    li.appendChild(lab);
+    if (kids) {
+      const open = G.open.has(n.id);
+      li.setAttribute('aria-expanded', open ? 'true' : 'false');
+      if (open) {
+        const sub = el('ul');
+        sub.setAttribute('role', 'group');
+        kids.forEach(k => sub.appendChild(item(k, level + 1, null)));
+        li.appendChild(sub);
+      }
+    }
+    return li;
+  };
+  topics.forEach(t => {
+    const kids = Array.from(gNeighbors(t.id)).map(id => G.nodes.get(id)).filter(Boolean)
+      .sort((a, b) => 'factpathtopic'.indexOf(a.kind) - 'factpathtopic'.indexOf(b.kind));
+    kids.forEach(k => shown.add(k.id));
+    shown.add(t.id);
+    ul.appendChild(item(t, 1, kids));
+  });
+  nodes.filter(n => !shown.has(n.id)).forEach(n => ul.appendChild(item(n, 1, null)));
+  const items = Array.from(ul.querySelectorAll('[role=treeitem]'));
+  const cur = items.find(li => li.dataset.id === G.sel) || items[0];
+  if (cur) cur.tabIndex = 0;
+  if (focus && cur) cur.focus();
+}
+$('graphTree').addEventListener('click', ev => {
+  const li = ev.target.closest('[role=treeitem]');
+  if (!li) return;
+  const id = li.dataset.id;
+  if (li.hasAttribute('aria-expanded') && !G.open.has(id)) gExpand(id);
+  gSelect(id, true);
+});
+$('graphTree').addEventListener('keydown', ev => {
+  const items = Array.from($('graphTree').querySelectorAll('[role=treeitem]'));
+  const li = document.activeElement.closest && document.activeElement.closest('[role=treeitem]');
+  if (!li) return;
+  const i = items.indexOf(li), id = li.dataset.id;
+  const go = el2 => { if (!el2) return; items.forEach(x => { x.tabIndex = -1; }); el2.tabIndex = 0; el2.focus(); };
+  if (ev.key === 'ArrowDown') go(items[i + 1]);
+  else if (ev.key === 'ArrowUp') go(items[i - 1]);
+  else if (ev.key === 'Home') go(items[0]);
+  else if (ev.key === 'End') go(items[items.length - 1]);
+  else if (ev.key === 'ArrowRight' && li.getAttribute('aria-expanded') === 'false') { G.sel = id; gExpand(id); }
+  else if (ev.key === 'ArrowRight' && li.getAttribute('aria-expanded') === 'true') go(li.querySelector('[role=treeitem]'));
+  else if (ev.key === 'ArrowLeft' && li.getAttribute('aria-expanded') === 'true') { G.open.delete(id); G.sel = id; gTree(true); }
+  else if (ev.key === 'ArrowLeft') go(li.parentElement.closest('[role=treeitem]'));
+  else if (ev.key === 'Enter' || ev.key === ' ') gSelect(id, true);
+  else return;
+  ev.preventDefault();
+});
+// ---- 搜索：选中结果即以它为中心展开
+let graphQTimer = 0;
+$('graphQ').addEventListener('input', () => {
+  clearTimeout(graphQTimer);
+  graphQTimer = setTimeout(() => {
+    const q = $('graphQ').value.trim(), ul = $('graphHits');
+    ul.textContent = '';
+    ul.hidden = !q;
+    if (!q) return;
+    api('/api/graph?q=' + encodeURIComponent(q)).then(r => {
+      ul.textContent = '';
+      if (!r.nodes.length) { ul.appendChild(el('li', 'hint', '没有找到包含「' + q + '」的主题、结论或文件。')); return; }
+      r.nodes.forEach(n => {
+        const li = el('li');
+        const b = btn(GKIND[n.kind] + '：' + (n.kind === 'path' ? n.path : n.label), 'link', () => {
+          ul.hidden = true;
+          $('graphQ').value = '';
+          if (!G.nodes.has(n.id) && !gMerge({nodes: [n], edges: []})) {
+            gCollapseOthers(G.sel || n.id);
+            gMerge({nodes: [n], edges: []});
+          }
+          gRedraw();
+          gSelect(n.id, false);
+          gExpand(n.id);
+        }, '在关系图里选中并展开这个节点');
+        li.appendChild(b);
+        ul.appendChild(li);
+      });
+    }).catch(e => gSay(failText('搜索', e.message, RETRY), 'bad'));
+  }, 250);
+});
+$('graphFit').addEventListener('click', gFit);
+$('graphRelayout').addEventListener('click', () => {
+  const {w, h} = gSize();
+  G.nodes.forEach(n => { n.x = w / 2 + (Math.random() - 0.5) * w * 0.6; n.y = h / 2 + (Math.random() - 0.5) * h * 0.6; });
+  gRun();
+  setTimeout(gFit, 1200);
+});
+$('graphZoomIn').addEventListener('click', () => gZoom(1.25));
+$('graphZoomOut').addEventListener('click', () => gZoom(1 / 1.25));
+$('graphClose').addEventListener('click', () => $('graphDlg').close());
+$('graphDlg').addEventListener('close', () => { cancelAnimationFrame(G.anim); G.anim = 0; if (alive && !$('kbGraph').hidden) $('kbGraph').focus(); });
+$('kbGraph').addEventListener('click', () => {
+  G = {nodes: new Map(), edges: new Map(), sel: null, open: new Set(), view: {x: 0, y: 0, k: 1}, anim: 0, heat: 0};
+  $('graphSvg').textContent = '';
+  $('graphTree').textContent = '';
+  $('graphDetail').textContent = '';
+  $('graphHits').hidden = true;
+  $('graphQ').value = '';
+  gSay('', 'info');
+  $('graphDlg').showModal();
+  api('/api/graph').then(r => {
+    if (!r.topics) {
+      gSay('还没有主题：整理后才有主题，可在「概览」里点「现在整理」。', 'info');
+      $('graphQ').disabled = true;
+      return;
+    }
+    $('graphQ').disabled = false;
+    gMerge(r);
+    gRedraw();
+    gSay(r.topics > r.nodes.length ? '先显示要点最多的 ' + r.nodes.length + ' 个主题（共 ' + fmtNum(r.topics) + ' 个），点节点展开，或用搜索找别的。' : '', 'info');
+    setTimeout(gFit, 1500);
+  }).catch(e => gSay(failText('读取关系图', e.message, RETRY), 'bad'));
+});
+
+// 抽结论失败的文件：重试、文件清单
+$('xfailRetry').addEventListener('click', () => {
+  const b = $('xfailRetry');
+  b.disabled = true;
+  post('/api/memory', {action: 'retry_xfail'}).then(r => {
+    say('memUpdStatus', '已把 ' + fmtNum(r.count) + ' 个文件重新排进抽结论，空闲时或点「现在整理」时处理。', 'ok');
+    showMemStats(r.stats);
+    refreshKb();
+  }).catch(e => say('memUpdStatus', failText('重试', e.message, RETRY), 'bad')).then(() => { b.disabled = !alive; });
+});
+$('xfailShow').addEventListener('click', () => {
+  const open = $('xfailPanel').hidden;
+  $('xfailShow').setAttribute('aria-expanded', open ? 'true' : 'false');
+  $('xfailPanel').hidden = !open;
+  if (!open) return;
+  api('/api/memory-reorg').then(r => {
+    const ul = $('xfailList');
+    ul.textContent = '';
+    r.xfail.forEach(p => ul.appendChild(el('li', 'name', p)));
+  }).catch(e => say('memUpdStatus', failText('读取', e.message, RETRY), 'bad'));
+});
+
+// 按新办法重新整理全部：页面内确认框写明会删除的数量与预计批数
+$('memReorg').addEventListener('click', () => {
+  const b = $('memReorg');
+  b.disabled = true;
+  api('/api/memory-reorg').then(r => {
+    $('reorgText').textContent = '将删除 ' + fmtNum(r.topics) + ' 个主题、' + fmtNum(r.facts) + ' 条结论、' + fmtNum(r.points) +
+      ' 条要点，不能撤销；收录的原文保留。之后把 ' + fmtNum(r.files) + ' 个已收录的文件按新办法重新抽结论，预计 ' +
+      fmtNum(r.batches) + ' 批，会把这些文件的文字重新发给模型，空闲时或点「现在整理」时进行。';
+    $('reorgDlg').showModal();
+    $('reorgNo').focus();
+  }).catch(e => say('reorgStatus', failText('读取', e.message, RETRY), 'bad')).then(() => { b.disabled = !alive; });
+});
+$('reorgNo').addEventListener('click', () => $('reorgDlg').close());
+$('reorgDlg').addEventListener('close', () => { if (alive) $('memReorg').focus(); });
+$('reorgOk').addEventListener('click', () => {
+  $('reorgDlg').close();
+  say('reorgStatus', '正在删除并重新排队……', 'busy');
+  post('/api/memory', {action: 'reorganize'}).then(r => {
+    say('reorgStatus', '已删除主题与结论，' + fmtNum(r.count) + ' 个文件已重新排进抽结论。', 'ok');
+    showMemStats(r.stats);
+    if (kbList.loaded) loadKbList();
+    refreshKb();
+  }).catch(e => say('reorgStatus', failText('重新整理', e.message, RETRY), 'bad'));
+});
+
+// 每批大小：从文件抽结论时每批至多多少字、几个文件
+$('saveXb').addEventListener('click', () => {
+  const c = Number($('xbChars').value), f = Number($('xbFiles').value);
+  const [[c0, c1], [f0, f1]] = state.xbatch_range || [[5000, 200000], [1, 100]];
+  if (!Number.isInteger(c) || c < c0 || c > c1 || !Number.isInteger(f) || f < f0 || f > f1) {
+    say('memStatus', '保存失败：每批字数须为 ' + fmtNum(c0) + ' 到 ' + fmtNum(c1) + ' 的整数，文件数须为 ' + f0 + ' 到 ' + f1 + ' 的整数。请改正后再保存。', 'warn');
+    return;
+  }
+  $('saveXb').disabled = true;
+  post('/api/settings', {xbatch_chars: c, xbatch_files: f}).then(r => {
+    fillSaved('xbChars', c, true);
+    fillSaved('xbFiles', f, true);
+    applyState(r);
+    say('memStatus', '每批大小已改为至多 ' + fmtNum(c) + ' 字、' + f + ' 个文件，下一轮整理起生效。', 'ok');
+  }).catch(e => say('memStatus', failText('保存', e.message, RETRY), 'bad'))
+    .then(() => { $('saveXb').disabled = !alive; });
+});
+['xbChars', 'xbFiles'].forEach(id => $(id).addEventListener('keydown', ev => { if (ev.key === 'Enter') $('saveXb').click(); }));
 
 // 容量上限（MB）
 $('saveMemMb').addEventListener('click', () => {
@@ -2207,15 +3490,15 @@ $('memMb').addEventListener('keydown', ev => { if (ev.key === 'Enter') $('saveMe
 $('memSaveMd').addEventListener('click', () => {
   const b = $('memSaveMd');
   b.disabled = true;
-  say('memStatus', '正在生成 Markdown……', 'busy');
+  say('kbMdStatus', '正在生成 Markdown……', 'busy');
   fetch('/api/memory-export', {headers: {'X-Token': TOKEN}}).then(r => {
     if (!r.ok) return r.json().then(j => { throw new Error(j.error || ('HTTP ' + r.status)); });
     return r.blob().then(blob => {
       const name = '知识库-' + stampNow() + '.zip';
       saveBlob(blob, name);
-      say('memStatus', '已保存为 ' + name + '（浏览器的下载文件夹）：解压后用 Obsidian「打开文件夹作为库」即可浏览主题与文件之间的链接。', 'ok');
+      say('kbMdStatus', '已保存为 ' + name + '（浏览器的下载文件夹）：解压后用 Obsidian「打开文件夹作为库」即可浏览主题与文件之间的链接。', 'ok');
     });
-  }).catch(e => say('memStatus', failText('保存', e.message, RETRY), 'bad'))
+  }).catch(e => say('kbMdStatus', failText('保存', e.message, RETRY), 'bad'))
     .then(() => { b.disabled = !alive || !(state.memory_stats && (state.memory_stats.facts || state.memory_stats.topics)); });
 });
 
@@ -2440,7 +3723,6 @@ function layoutCards() {
     cards.forEach(c => c.classList.toggle('fill', c === fill));
     $('convMain').classList.toggle(cls, cards.every(c => c.classList.contains('folded')));
   });
-  $('findSummary').textContent = '已选 ' + picked.length + ' 个文件，共 ' + fmtNum(totalChars()) + ' 字';
   const m = currentModel(), n = rounds();
   $('askSummary').textContent = m ? m.label + (n ? '，' + n + ' 轮问答' : '') : noAi() ? '没有可用的模型' : '';
 }
@@ -2452,20 +3734,8 @@ Object.keys(FOLDS).forEach(k => $(FOLDS[k]).querySelector('button.fold').addEven
   if (k === 'find') findOpen = was;
   saveFolds();
   layoutCards();
+  if (k === 'find' && was) kbRevisit();     // 展开知识库卡片时立即刷新一次
 }));
-// 页头说明：默认收起，与各模块共用一份收起记录
-function layoutSub() {
-  const open = folds.sub === false;
-  $('sub').hidden = !open;
-  $('foldSub').setAttribute('aria-expanded', String(open));
-  $('foldSub').querySelector('.arrow').textContent = open ? '▾' : '▸';
-}
-$('foldSub').addEventListener('click', () => {
-  folds.sub = folds.sub === false;
-  saveFolds();
-  layoutSub();
-});
-layoutSub();
 narrow.addEventListener('change', layoutCards);
 layoutCards();
 
@@ -2487,14 +3757,29 @@ function togglePanel(b, panel, open) {
   const arrow = b.querySelector('.arrow');
   if (arrow) arrow.textContent = open ? '▾' : '▸';
 }
-$('manageFolders').addEventListener('click', () => togglePanel($('manageFolders'), $('folderPanel')));
+// 管理文件夹：模态大窗口，打开期间页面其他部分不能操作；「完成」或 Esc 关闭，焦点回到「管理文件夹」，文件列表随之刷新
+let rebuildWatch = false;
+function openFolders(focusInput) {
+  const d = $('folderDlg');
+  if (!d.open) { renderFolders(); d.showModal(); }
+  if (focusInput) $('folder').focus();
+}
+$('manageFolders').addEventListener('click', () => openFolders(!state || !state.folders.length));
+$('folderDone').addEventListener('click', () => $('folderDlg').close());
+$('folderDlg').addEventListener('close', () => {
+  say('folderStatus', '', 'info');
+  if (!alive) return;
+  const b = $('manageFolders');
+  if (b.offsetParent) b.focus();
+  refreshFind();
+});
 
-// ---------------- 设置面板：模型、skill、知识库、通用四个标签，一次只显示一页
+// ---------------- 设置面板：模型、skill 两个标签，一次只显示一页（知识库设置与保存位置在知识库卡片的齿轮里）
 // 三个入口各开对应标签，已开在该标签时收起；Esc 或「收起」关闭，焦点回到打开它的入口。
 // 上次打开的标签记在本浏览器，读不到时为「模型」；刷新后面板收起。本机没有可用模型时不显示 skill 标签。
 const SET_KEY = 'ask-local-files.setTab';
-const SET_TABS = ['model', 'skill', 'mem', 'general'];
-const SET_ENTRY = {model: 'modelSettings', skill: 'skillManage', mem: 'memSettings'};
+const SET_TABS = ['model', 'skill'];
+const SET_ENTRY = {model: 'modelSettings', skill: 'skillManage'};
 let setTab = 'model', setOpener = null;
 try { const t = localStorage.getItem(SET_KEY); if (SET_TABS.includes(t)) setTab = t; } catch (e) { /* 读不到时按默认 */ }
 function tabBtn(t) { return $('tab-' + t); }
@@ -2518,7 +3803,6 @@ function renderSetPanel() {
 // 打开或切到某一页时刷新它显示的内容
 function loadSetTab(t) {
   if (t === 'model') { findLocal(false); loadOpencode(); }
-  else if (t === 'mem') { refreshMemStats(); pollMemUpdate(); pollIngest(); }
 }
 function selectSetTab(t, focus) {
   setTab = t;
@@ -2562,8 +3846,7 @@ $('setPanel').addEventListener('keydown', ev => {
 $('setClose').addEventListener('click', closeSettings);
 
 // 未保存的改动：标签文字后加圆点，保存或恢复原值后消失；切换标签或收起时输入框内容保留
-const SET_FIELDS = {model: ['limit', 'cBase', 'cModel', 'cKey', 'ocKey'], skill: ['skName', 'skDesc', 'skBody', 'skDir'],
-                    mem: ['memMb'], general: ['dataDir']};
+const SET_FIELDS = {model: ['limit', 'cBase', 'cModel', 'cKey', 'ocKey'], skill: ['skName', 'skDesc', 'skBody', 'skDir']};
 // 有已存值的输入框（字数上限、接口地址、模型名、容量上限）与已存值比较，其余的填了就算改动
 function isDirty(id) {
   const x = $(id);
@@ -2606,7 +3889,7 @@ function run(action, truncate) {
   cutAction = null;
   const skill = currentSkill(), last = chat[chat.length - 1];
   if (kind !== 'send' && !(last && last.partial)) return;
-  if (!picked.length && !skill && !memoryActive()) { say('askStatus', '还没有选文件：先在「找文件」里加入要用的文件、选一个 skill，或勾选「参考知识库」。', 'warn'); return; }
+  if (!picked.length && !skill && !memoryActive()) { say('askStatus', '还没有选文件：先在「知识库」的「文件」标签里加入要用的文件、选一个 skill，或勾选「这次提问参考知识库」。', 'warn'); return; }
   if (picked.some(p => p.loading)) { say('askStatus', '还在取文字，请稍等。', 'warn'); return; }
   if (picked.some(p => p.error)) { say('askStatus', '有文件取不出文字：请先在「已选」里点「移除取不出文字的文件」。', 'bad'); return; }
   if (kind === 'send' && !typed && !skill) { say('askStatus', '请先写下要 AI 做什么；选了 skill 时可以不写。', 'warn'); $('ask').focus(); return; }
@@ -2754,6 +4037,7 @@ function readStream(r, answer) {
       answer.uncited = !!m.uncited;
       answer.answerId = m.answer_id || '';
       answer.remembered = m.remembered || 0;
+      answer.rememberedIds = m.remembered_ids || [];
       if (answer.remembered) refreshMemStats();
       answer.stopTimer();
       say('askStatus', cut ? '回答完成（发送时已按比例截断每个文件）。' : '回答完成。', cut ? 'warn' : 'ok');
@@ -2857,10 +4141,17 @@ $('saveDocx').addEventListener('click', () => {
 
 // ---------------- 设置
 
+// 这个文件夹里在知识库排队抽结论或复核的文件数（确认框用）；知识库关闭时为 0，查不到时按 0 处理
+function queuedIn(f) {
+  if (!state.memory) return Promise.resolve(0);
+  return post('/api/folders', {count: f}).then(r => r.queued || 0).catch(() => 0);
+}
+function parkText(n) { return '知识库里有 ' + n + ' 个文件待抽结论，会撤出排队，已收录的保留。'; }
+
 function renderFolders() {
   const ul = $('folders');
   ul.textContent = '';
-  if (!state.folders.length) ul.appendChild(el('li', 'meta', '还没有添加文件夹。'));
+  if (!state.folders.length) ul.appendChild(el('li', 'meta', '列表是空的：在上方填写路径或点「选择……」，再点「添加」。'));
   state.folders.forEach(f => {
     const li = el('li');
     li.appendChild(el('div', 'grow name', f));
@@ -2870,28 +4161,36 @@ function renderFolders() {
     cb.checked = (state.auto_folders || []).includes(f);
     cb.disabled = !state.memory || !alive;
     cb.setAttribute('aria-label', '自动收录到知识库：' + f);
-    lab.title = state.memory ? '勾选后，这个文件夹里支持格式的文件自动收录到知识库，详见「知识库设置」' : '知识库已关闭，请先在「知识库设置」里打开知识库';
+    lab.title = state.memory ? '勾选后，这个文件夹里支持格式的文件自动收录到知识库，进度见「概览」' : '知识库已关闭，请先在「知识库设置」（知识库卡片右上的齿轮）里打开知识库';
     lab.appendChild(cb);
     lab.appendChild(document.createTextNode('自动收录到知识库'));
     cb.addEventListener('change', () => {
       const on = cb.checked;
       cb.disabled = true;
-      post('/api/folders', {auto: f, on: on}).then(r => {
+      // 取消勾选：这个文件夹有文件在知识库里排队时先确认，点取消就复原勾选
+      (on ? Promise.resolve(0) : queuedIn(f)).then(n => {
+        if (n && !confirm('关闭这个文件夹的自动收录？\n\n' + f + '\n\n' + parkText(n))) return null;
+        return post('/api/folders', {auto: f, on: on});
+      }).then(r => {
+        if (!r) { cb.checked = !on; return; }
         state.auto_folders = r.auto_folders;
-        say('folderStatus', on ? '已打开自动收录：正在后台把这个文件夹里的文件收录到知识库，进度见「知识库设置」。'
-                               : '已关闭自动收录：不再收录这个文件夹的文件，已收录的保留。', 'ok');
+        say('folderStatus', on ? '已打开自动收录：正在后台把这个文件夹里的文件收录到知识库，进度见「概览」。'
+                               : '已关闭自动收录：不再收录这个文件夹的文件，' +
+                                 (r.parked ? '排队中的 ' + r.parked + ' 个文件已撤出，' : '') + '已收录的保留。', 'ok');
         showIngest(r.ingest);
+        refreshMemStats();
       }).catch(e => { cb.checked = !on; say('folderStatus', failText('保存', e.message, RETRY), 'bad'); })
         .then(() => { cb.disabled = !state.memory || !alive; });
     });
     li.appendChild(lab);
-    li.appendChild(btn('移除', 'small', () => {
+    const rmFolder = btn('移除', 'small', () => queuedIn(f).then(q => {
       const inside = p => p.path === f || p.path.startsWith(f.replace(/\/$/, '') + '/');
       const n = picked.filter(inside).length;
       let msg = '从索引中移除文件夹？\n\n' + f + '\n\n只是不再搜索这里，不会删除任何文件。';
       if (n) msg += '\n已选的 ' + n + ' 个文件在这个文件夹里，会一并移出已选' + (chat.length ? '，当前问答也会清空' : '') + '。';
+      if (q) msg += '\n' + parkText(q);
       if (!confirm(msg)) return;
-      post('/api/folders', {remove: f}).then(r => {
+      return post('/api/folders', {remove: f}).then(r => {
         state.folders = r.folders;
         state.auto_folders = r.auto_folders;
         if (n) {
@@ -2899,9 +4198,11 @@ function renderFolders() {
           if (chat.length) { chat = []; renderChat(); }
           renderPicked();
         }
-        renderFolders(); refreshFind(); say('folderStatus', '已移除。', 'ok');
-      }).catch(e => say('folderStatus', failText('移除', e.message, RETRY), 'bad'));
-    }));
+        renderFolders(); refreshFind(); refreshMemStats();
+        say('folderStatus', '已移除。' + (r.parked ? '知识库里排队中的 ' + r.parked + ' 个文件已撤出，已收录的保留。' : ''), 'ok');
+      });
+    }).catch(e => say('folderStatus', failText('移除', e.message, RETRY), 'bad')), '不再搜索和自动收录这个文件夹，不删除任何文件；已收录的保留');
+    li.appendChild(rmFolder);
     ul.appendChild(li);
   });
 }
@@ -2939,7 +4240,7 @@ function pickInto(input, b, statusId, title) {
     cancelled = true;
     cancel.disabled = true;
     post('/api/pick-cancel', {page: PAGE}).catch(() => {});
-  });
+  }, '关掉选择窗口，改为直接输入路径');
   b.after(cancel);
   if (hadFocus) cancel.focus();
   const finish = () => {
@@ -2983,12 +4284,12 @@ function renderPlaces(places) {
     $('folder').value = p.path;
     $('folder').focus();
     loadDirs().catch(() => {});
-  })));
+  }, '把 ' + p.path + ' 填进文件夹路径')));
 }
 
 $('rebuild').addEventListener('click', () => {
   if (!confirm('丢弃现有索引，重新扫描全部 ' + state.folders.length + ' 个文件夹？\n\n不会改动任何文件；文件多时要等一会儿。')) return;
-  post('/api/refresh', {full: true}).then(() => { say('folderStatus', '正在重建索引……', 'busy'); refreshFind(); })
+  post('/api/refresh', {full: true}).then(() => { rebuildWatch = true; say('folderStatus', '正在重建索引……', 'busy'); refreshFind(); })
     .catch(e => say('folderStatus', failText('重建', e.message, RETRY), 'bad'));
 });
 
@@ -3044,10 +4345,11 @@ function applyState(s) {
   $('useMemRow').hidden = !state.memory;
   $('memAuto').checked = state.memory_auto !== false;
   $('tocPick').checked = state.toc_pick !== false;
-  $('memUpdate').disabled = !state.memory || memUpd.running || !alive;
   if (state.memory_mb) fillSaved('memMb', state.memory_mb);
-  showMemStats(state.memory_stats);
+  if (state.xbatch_chars) fillSaved('xbChars', state.xbatch_chars);
+  if (state.xbatch_files) fillSaved('xbFiles', state.xbatch_files);
   if (ingest) showIngest(ingest);
+  renderKb();
   renderModels();
   document.body.classList.toggle('no-ai', noAi());
   $('noAiNote').hidden = !noAi();
@@ -3074,7 +4376,7 @@ function upEl(tag, attrs, text) {
   if (text !== undefined) e.textContent = text;
   return e;
 }
-let upCheck = null, upBusy = false, upTimer = null, upRestarting = false, upVersion = '';
+let upCheck = null, upBusy = false, upTimer = null, upRestarting = false, upVersion = '', upCancelling = false;
 const CRC_TABLE = (() => {
   const t = new Uint32Array(256);
   for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; }
@@ -3235,9 +4537,23 @@ function upStatus() {
     rb.dataset.cur = st.rollback.current;
     rb.dataset.prev = st.rollback.previous;
     rb.title = st.rollback.available ? '上一版：' + st.rollback.previous : '没有可退回的版本';
+    if (!upBusy && !upRestarting && ['waiting', 'running', 'done'].includes(st.state)) {
+      // 页面刷新或重新打开时，升级或退回仍在后台进行：接着显示阶段文字
+      upBusy = true; upCheck = null;
+      $('up-report').textContent = ''; $('up-go').hidden = true;
+      upSay('busy', upStageText(st));
+      upWatch();
+    }
     upButtons();
     return st;
   });
+}
+function upStageText(st) {
+  if (st.state === 'waiting' && st.wait_for) {
+    return '正在等' + st.wait_for + '结束，结束后自动开始' + (st.stage.indexOf('退回') >= 0 ? '退回' : '升级') +
+      '；不想等可点「取消等待」。自动收录和空闲时自动整理不用等，会先停下。';
+  }
+  return st.stage;
 }
 function upWatch() {
   // 升级或退回在服务端后台进行：轮询阶段文字，完成后等服务用新版重新启动，再刷新页面
@@ -3247,13 +4563,15 @@ function upWatch() {
       if (upRestarting) {
         if (st.state === 'idle') { upSay('ok', '已重新连上，正在刷新页面……'); location.reload(); return; }
       } else if (st.state === 'waiting' || st.state === 'running') {
-        upSay('info', st.stage);
+        upSay('busy', upStageText(st));
+        upCancelShow(st.state === 'waiting' && !!st.wait_for);
       } else if (st.state === 'done') {
-        upRestarting = true;
+        upRestarting = true; upCancelShow(false);
         upSay('ok', st.message + ' 页面会自动重新连上。');
       } else if (st.state === 'failed') {
-        upBusy = false; upButtons(); upStatus().catch(() => {});
-        upSay('bad', st.message);
+        upBusy = false; upCancelShow(false); upButtons(); upStatus().catch(() => {});
+        upSay(upCancelling ? 'info' : 'bad', st.message);
+        upCancelling = false;
         return;
       }
       upWatch();
@@ -3263,6 +4581,21 @@ function upWatch() {
     });
   }, 600);
 }
+function upCancelShow(on) {
+  const b = $('up-cancel');
+  if (!on) b.disabled = false;
+  if (b.hidden === !on) return;
+  if (!on && document.activeElement === b) $('up-open').focus();
+  b.hidden = !on;
+}
+$('up-cancel').addEventListener('click', () => {
+  const b = $('up-cancel');
+  if (b.disabled) return;
+  b.disabled = true;
+  api('/api/upgrade/cancel', {method: 'POST'})
+    .then(() => { upCancelling = true; upSay('busy', '正在取消……'); })
+    .catch(err => { b.disabled = false; upSay('bad', '取消失败：' + upWhy(err) + '。升级或退回可能已经开始，请等它结束。'); });
+});
 // 页面另有需要提醒的事（如开着的对话会清空）时，定义 upPageWarn() 返回一句话
 function upExtraWarn() { return typeof upPageWarn === 'function' ? upPageWarn() : ''; }
 $('up-go').addEventListener('click', () => {
@@ -3296,6 +4629,10 @@ $('up-open').addEventListener('click', () => {
   $('up-open').setAttribute('aria-expanded', open ? 'true' : 'false');
   if (open) { upStatus().catch(err => upSay('bad', '读取升级信息失败：' + upWhy(err) + '。请刷新页面后重试。')); box.scrollIntoView({block: 'nearest'}); }
 });
+// 打开页面时升级或退回仍在后台进行（如等待中刷新了页面）：展开「升级」接着显示进度
+api('/api/upgrade').then(st => {
+  if (['waiting', 'running', 'done'].includes(st.state) && !$('upgrade').classList.contains('open')) $('up-open').click();
+}).catch(() => {});
 // 升级后服务重新启动、页面刷新，对话不自动保存
 function upPageWarn() {
   return convStates().some(c => c.rounds > 0) ? '升级后服务重新启动、页面刷新，开着的对话会清空（对话不自动保存）。' : '';
@@ -3329,7 +4666,7 @@ function renderConvs() {
   $('convBar').hidden = convs.length < 2;
   convs.forEach((c, i) => {
     const wrap = el('span', 'convtab'), label = convLabel(states[i]);
-    const t = btn(label, '', () => showConv(c.id));
+    const t = btn(label, '', () => showConv(c.id), '切换到这个对话');
     if (states[i].title && states[i].title.full) t.title = states[i].title.full;
     t.setAttribute('role', 'tab');
     t.id = 'convTab' + c.id;
@@ -3338,7 +4675,7 @@ function renderConvs() {
     t.tabIndex = c.id === convActive ? 0 : -1;
     wrap.appendChild(t);
     if (c.frame) {
-      const x = btn('×', 'close', () => closeConv(c.id));
+      const x = btn('×', 'close', () => closeConv(c.id), '关闭这个对话标签');
       x.id = 'convClose' + c.id;
       x.setAttribute('aria-label', '关闭 ' + label);
       wrap.appendChild(x);
@@ -3357,6 +4694,9 @@ function showConv(id, focus) {
   $('convFrames').hidden = id === 1;
   convs.forEach(c => { if (c.frame) c.frame.hidden = c.id !== id; });
   renderConvs();
+  // 切到的对话标签刷新一次概览与收录标记（同源页面，直接调用）
+  const c = convs.find(x => x.id === id);
+  try { if (c && c.frame && c.frame.contentWindow.kbRevisit) c.frame.contentWindow.kbRevisit(); else if (id === 1) kbRevisit(); } catch (e) { /* 页面还没加载完时下次再刷新 */ }
   if (focus) $('convTab' + id).focus();
 }
 
@@ -3412,6 +4752,27 @@ function quit(pages) {
     .catch(() => serviceGone());
 }
 
+// Ctrl+L 与页头的「跳到提问框」：聚焦提问框（「问 AI」收起时先展开）
+function focusAsk() {
+  if (isFolded('ask')) { folds.ask = false; saveFolds(); layoutCards(); }
+  if ($('ask').offsetParent) { $('ask').focus(); return true; }
+  return false;
+}
+document.addEventListener('keydown', ev => {
+  if (!ev.ctrlKey || ev.altKey || ev.shiftKey || ev.metaKey || ev.key.toLowerCase() !== 'l') return;
+  if (focusAsk()) ev.preventDefault();
+});
+$('skipAsk').addEventListener('click', ev => { ev.preventDefault(); focusAsk(); });
+// 切回本页（多个对话标签之间切换也算）时刷新一次概览与收录标记
+function kbRevisit() {
+  if (!alive || !state) return;
+  refreshKb();
+  if (isFolded('find')) return;
+  if (kbTab === 'files') refreshFind();
+  else if (kbTab === 'topics') quietKbList();
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) kbRevisit(); });
+
 // 「复制网址」：服务给出的固定网址，取不到时按本页地址拼出
 let pageUrl = location.origin + '/?t=' + encodeURIComponent(TOKEN);
 $('copyUrl').addEventListener('click', () => copyText(pageUrl, $('copyUrl'), 'urlStatus', '网址'));
@@ -3428,46 +4789,60 @@ api('/api/state').then(s => {
   $('pickDataDir').hidden = !s.picker;
   showDataDir(s.data);
   applyState(s);
+  // 引导：打开页面时知识库为空、没点过「先不建库」才显示
+  guideOn = !s.guide_skip && kbOn() && kbEmpty(s.memory_stats);
+  // 默认标签：空库时「概览」；有内容后用上次打开的标签（读不到时「概览」）；升级后第一次打开用「文件」并提示一次
+  const upgraded = !s.layout_notice && !EMBED && !!(s.memory_notice || s.folders.length);
+  selectKbTab(upgraded ? 'files' : kbEmpty(s.memory_stats) ? 'overview' : savedKbTab() || 'overview', false, upgraded);
   renderFolders();
   renderChat();
   loadSkills(false);
-  if (!s.folders.length) {
-    togglePanel($('manageFolders'), $('folderPanel'), true);
-    $('folder').scrollIntoView({block: 'center'});
-    $('folder').focus();
-  }
   const miss = [];
   if (!s.doc2kb) miss.push('缺少同目录的 doc2kb_core.py，读不了 docx、xlsx、pptx、doc、xls、ppt、pdf，请重新解压完整的工具目录');
   else if (!s.pdftotext) miss.push('本机没有 pdftotext，读不了 pdf；需要时请安装 poppler-utils');
   if (miss.length) { $('banner').textContent = miss.join('；') + '。'; $('banner').hidden = false; }
   const notes = [], seen = {};
-  if (s.memory && !s.memory_notice && !EMBED) {
-    notes.push('知识库已默认打开：提问时选过的文件和核对通过的结论会记在本机，之后提问时自动参考；可在「知识库设置」里查看、关闭或清空。');
+  if (upgraded) notes.push('界面有变化：「找文件」已改到「知识库」卡片的「文件」标签，用法不变。');
+  if (!s.layout_notice && !EMBED) seen.layout_notice = true;
+  // 显示引导时不另提示「知识库已默认打开」，免得同一件事说两遍
+  let memNote = false;
+  if (s.memory && !s.memory_notice && !EMBED && guideOn) seen.memory_notice = true;
+  else if (s.memory && !s.memory_notice && !EMBED) {
+    notes.push('知识库已默认打开：提问时选过的文件和核对通过的结论会记在本机，之后提问时自动参考；可在「知识库设置」里关闭或清空。');
     seen.memory_notice = true;
+    memNote = true;
   }
-  if (s.data.ok && !s.data.custom && !s.data_notice && !EMBED) {
-    notes.push('知识库与设置保存在家目录；家目录可能被清理时，可在设置的「通用」里改「保存位置」。');
+  let dataLink = false;
+  if (s.data.notice && !EMBED) {
+    notes.push(s.data.notice);
+    seen.data_notice = true;
+  }
+  if (s.data.previous && !EMBED) {
+    notes.push('现在的知识库是空的，上一版里的知识库有 ' + fmtNum(s.data.previous.files) + ' 个文件，可以在「保存位置」里「从上一版取回」。');
+    dataLink = true;
+  } else if (s.data.ok && s.data.home && !s.data_notice && !EMBED) {
+    notes.push('知识库与设置保存在家目录；家目录可能被清理时，可在「知识库设置」的「保存位置」里改存到安装目录。');
     seen.data_notice = true;
   }
   // 保存位置不可用：页头下方常驻醒目提示（没有模型时问 AI 区的状态行不显示）
   if (!s.data.ok && !EMBED) {
     const b = $('dataBanner');
-    b.textContent = '保存位置不可用：' + s.data.path + '（' + s.data.error + '）。挂载或修复后重启本工具，或在设置的「通用」里重新选择；本次不收录也不参考知识库，设置改动不保存。';
-    const go = btn('通用设置', 'link', () => openSettings('general', go));
-    go.setAttribute('aria-label', '打开设置的「通用」标签');
+    b.textContent = '保存位置不可用：' + s.data.path + '（' + s.data.error + '）。挂载或修复后重启本工具，或在「知识库设置」的「保存位置」里重新选择；本次不收录也不参考知识库，设置改动不保存。';
+    const go = btn('保存位置设置', 'link', () => openDataSettings(), '打开知识库设置里的「保存位置」');
+    go.setAttribute('aria-label', '打开知识库设置里的「保存位置」');
     b.appendChild(go);
     b.hidden = false;
   }
   if (notes.length) {
     say('askStatus', notes.join(''), 'info');
-    if (seen.memory_notice) {
-      const go = btn('知识库设置', 'link', () => openMemory(false));
+    if (memNote) {
+      const go = btn('知识库设置', 'link', () => openKbSettings(), '打开知识库设置');
       go.setAttribute('aria-label', '打开知识库设置');
       $('askStatus').appendChild(go);
     }
-    if (seen.data_notice) {
-      const go = btn('通用设置', 'link', () => openSettings('general', go));
-      go.setAttribute('aria-label', '打开设置的「通用」标签');
+    if (seen.data_notice || dataLink) {
+      const go = btn('保存位置设置', 'link', () => openDataSettings(), '打开知识库设置里的「保存位置」');
+      go.setAttribute('aria-label', '打开知识库设置里的「保存位置」');
       $('askStatus').appendChild(go);
     }
   }
